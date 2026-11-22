@@ -38,3 +38,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y mosquitto mosquitto-clients shellcheck
       - name: tools tests
         run: tools/test.sh
+      - name: scripts tests
+        run: |
+          (cd scripts && python3 -m unittest -q fixture_test)
+          scripts/make_fixture_test.sh
+          shellcheck -S warning scripts/make-fixture.sh scripts/make_fixture_test.sh

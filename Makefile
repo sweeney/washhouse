@@ -11,6 +11,9 @@ test:
 
 test-tools:
 	tools/test.sh
+	cd scripts && python3 -m unittest -q fixture_test
+	scripts/make_fixture_test.sh
+	shellcheck -S warning scripts/make-fixture.sh scripts/make_fixture_test.sh
 
 lint:
 	go vet ./...
