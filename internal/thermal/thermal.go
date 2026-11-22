@@ -21,6 +21,10 @@
 //     shows none, and reheats look the same. Over a whole reheat or night
 //     the two energies change alike. When the set of usable probes changes
 //     the energy steps for no physical reason, so the window starts again.
+//     After a draw, power is unknown until PowerSettle has passed (the
+//     inlet plume settling and the probes' lag, 12 min from the 50 L
+//     shower); then the window starts again from there, so power is known
+//     again PowerMinSpan later (17–18 min after the draw's end).
 //   - state: unknown while the tank's input is stale (no sweep for
 //     StaleAfter) or too thin (fewer than MinProbes usable probes), or
 //     before its power has first been judged; else drawing while a metered
@@ -45,6 +49,9 @@
 //     both off, the channel that switched off within SourceHold (HW first),
 //     since the coil's heat keeps reaching the probes for a while (17
 //     minutes after CH_OFF on 8 Nov); else null. HW unknown is never ch.
+//     A channel going unknown is a break, not a switch-off: it ends any
+//     hold, so a dropped boiler sensor doesn't keep the source for
+//     SourceHold.
 //   - loss fit: UA = loss / (T_mean − T_room), loss = −dE/dt, both from the
 //     power's energy, sampled at each sweep while the tank has been cooling
 //     for UAQuiet, its power window is clear of draws, the room reading is
@@ -61,6 +68,26 @@
 //     with the loop running its loss fits 18 W/K × (T − 14 °C), so against
 //     the boiler room (23–28 °C overnight) it reads 33–39 W/K, about twice
 //     PLAN.md's 15–19 W/K. That is the loop's signature, not a fault.
+//     The offset's direction says why: a pumpless loop's flow rises with
+//     temperature, so its loss is superlinear in T, and a line through
+//     superlinear points would put the reference above the room. It comes
+//     out about 10 °C below, which points to a cold sink (pipework through
+//     colder parts of the house), not to the thermosiphon's curve. Two
+//     cautions: the boiler room isn't an independent ambient (the tanks and
+//     boiler heat it, so a fit against it partly regresses the tank on
+//     itself), and over one night T and the house fall together, so the
+//     14 °C intercept is an extrapolation across a narrow range, weakly
+//     pinned.
+//   - the right tank's P4 (upper, role return) sits on the return fitting
+//     and reads the return water while the loop runs: T4 − mean(T3,T5) is
+//     about −5.6 K then, against about +2.5 K with the loop stopped. Kept in
+//     the energy, it lowers meanC by a few K while the loop runs, inflating
+//     the loop-running UA by roughly 10% (power, a slope, is barely moved),
+//     and steps the energy when the loop changes state. With the return
+//     valve closed the right tank should read about 6 W/K against the
+//     boiler room (as on the airlocked nights), with the left (3.6–4.7 W/K)
+//     as the control; the difference, about 2 W/K, is the stopped loop's
+//     stubs and fitting.
 //   - sweeps with an unsynced clock, or no later than the tank's last, are
 //     skipped. A metered draw is known only once the meter consumer decides
 //     it (seconds after its first litre); sweeps before that were judged
@@ -111,9 +138,13 @@ type Config struct {
 	// ends (60 s).
 	DrawSettle time.Duration
 	// PowerSettle: after a metered draw ends, the bulk probes keep falling
-	// as the cold water drawn reaches them (catch-up, not heat lost), so
-	// power is unknown, and heating isn't judged, until the power window
-	// starts this long after the draw's end (12 min); at least DrawSettle.
+	// for a while. No more cold water arrives once the flow stops; what
+	// they see is the inlet plume settling, and their own lag. That is not
+	// heat lost, so power is unknown, and heating isn't judged, until the
+	// power window starts this long after the draw's end (12 min, an
+	// empirical figure); at least DrawSettle. Once a sweep is past it, the
+	// samples from inside it are dropped, so power returns after about
+	// PowerSettle + PowerMinSpan.
 	PowerSettle time.Duration
 	// SourceHold: with both channels off, heating is still the source of
 	// the channel that switched off up to this long ago (30 min).
@@ -302,8 +333,14 @@ type channel struct {
 	offAt time.Time
 }
 
+// set takes the channel's state as of at. Only on → off is a switch-off;
+// unknown is a break (the boiler sensor dropped, so it may have switched
+// on, or stayed on, unseen), and ends any hold.
 func (c *channel) set(at time.Time, sw boiler.Switch) {
-	if c.sw == boiler.On && sw != boiler.On {
+	switch {
+	case sw == boiler.Unknown:
+		c.wasOn = false
+	case c.sw == boiler.On && sw == boiler.Off:
 		c.wasOn, c.offAt = true, at
 	}
 	c.sw = sw
@@ -420,6 +457,11 @@ func (t *Tracker) Sweep(sw tank.Sweep) ([]Event, error) {
 		tk.samples = append(tk.samples, sample{at: sw.At, kwh: kwh, meanC: meanC})
 	}
 	from := sw.At.Add(-t.cfg.PowerWindow)
+	if settled := t.drawEnd.Add(t.cfg.PowerSettle); t.drawEnded && !t.drawRunning && sw.At.After(settled) && !from.After(settled) {
+		// Past the settle, its samples only hold the window back from
+		// clearing: drop them, as for a probe-set change.
+		from = settled.Add(time.Nanosecond)
+	}
 	i := 0
 	for i < len(tk.samples) && tk.samples[i].at.Before(from) {
 		i++

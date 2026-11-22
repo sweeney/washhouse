@@ -38,8 +38,8 @@ const (
 //     lessons §5), and the meter's draw already ends 60 s after its last
 //     litre.
 //   - PowerSettle 12 min: after the 50 L shower the right tank's bulk
-//     energy kept falling for 10-12 minutes (9.02 -> 8.06 kWh) as the cold
-//     water drawn reached the probes: catch-up, not loss.
+//     energy kept falling for 10-12 minutes (9.02 -> 8.06 kWh) with no flow:
+//     the inlet plume settling and the probes' lag, not loss. Empirical.
 //   - SourceHold 30 min: heat keeps reaching the probes after the programmer
 //     switches off (8 Nov: the right tank gained for about 17 minutes after
 //     CH_OFF; reheat-morning: still gaining 10 minutes after HW_OFF).

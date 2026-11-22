@@ -132,9 +132,10 @@ func TestNoHeatingJudgedFromADrawWindow(t *testing.T) {
 	}
 }
 
-// After a draw, the bulk probes keep falling for about ten minutes as the
-// cold water drawn reaches them (the right tank's energy fell 1 kWh in the
-// 12 minutes after the 50 L shower). That isn't heat lost, so power is
+// After a draw, the bulk probes keep falling for about ten minutes with no
+// flow: the inlet plume settling, and the probes' lag (the right tank's
+// energy fell 1 kWh in the 12 minutes after the 50 L shower). That isn't
+// heat lost, so power is
 // unknown, and heating isn't judged, until the power window starts
 // PowerSettle after the draw's end. During the draw too: its extraction is
 // the draw's energy, reported by the draw attribution, not a tank power.
@@ -167,5 +168,43 @@ func TestPowerUnknownWhileItsWindowHoldsADrawOrItsCatchUp(t *testing.T) {
 	}
 	if st.State != StateCooling {
 		t.Errorf("after the settle: state %s, want cooling", st.State)
+	}
+}
+
+// Once a sweep is past the draw's end + PowerSettle, the samples from inside
+// the settle are dropped, as for a probe-set change, so power returns after
+// about PowerSettle + PowerMinSpan, not PowerSettle + PowerWindow. With the
+// plan config and 30 s sweeps from the draw's end: the first sample kept is
+// at end + 12.5 min, so the first known power is at end + 17.5 min.
+func TestPowerReturnsAfterSettlePlusMinSpan(t *testing.T) {
+	cfg := planConfig()
+	s := newSynth(t)
+	tr := newTracker(t, cfg)
+	_, c := s.ramp(tr, right, t0, 15*time.Minute, 30*time.Second, 50, -0.1)
+	start := t0.Add(15 * time.Minute)
+	tr.MeteredDraw(start, true)
+	_, c = s.ramp(tr, right, start, 5*time.Minute, 30*time.Second, c, -20)
+	end := start.Add(5 * time.Minute)
+	tr.MeteredDraw(end, false)
+	_, c = s.ramp(tr, right, end, cfg.PowerSettle+30*time.Second, 30*time.Second, c, -6)
+	var first time.Time
+	for at := end.Add(cfg.PowerSettle + 30*time.Second); at.Before(end.Add(cfg.PowerSettle + cfg.PowerWindow + time.Minute)); at = at.Add(30 * time.Second) {
+		c -= 0.1 / kwhPerK / 120
+		if _, err := tr.Sweep(s.sweep(right, at, c)); err != nil {
+			t.Fatal(err)
+		}
+		st := mustStatus(t, tr, right)
+		if st.PowerKW == nil {
+			continue
+		}
+		first = at
+		if !near(*st.PowerKW, -0.1, 0.01) || st.State != StateCooling {
+			t.Errorf("first power after the settle %v, state %s; want -0.1 kW, cooling (the catch-up dropped)", *st.PowerKW, st.State)
+		}
+		break
+	}
+	want := cfg.PowerSettle + 30*time.Second + cfg.PowerMinSpan
+	if first.IsZero() || first.Sub(end) != want {
+		t.Fatalf("power first known %v after the draw's end, want %v", first.Sub(end), want)
 	}
 }

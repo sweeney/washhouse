@@ -334,3 +334,47 @@ func TestFixtureQuietNightAlone(t *testing.T) {
 		t.Errorf("right %.2f W/K, want 28–40 (hourly 33–39, with the prior's share)", u.WPerK)
 	}
 }
+
+// shower-layered: after the 50 L shower (last litre 0:17:46.6, draw_ended
+// a minute later) the right tank's power is unknown through PowerSettle,
+// then known again PowerMinSpan later, before the 15 L draw at 0:36:41.9.
+// Before the settle's samples were dropped it stayed unknown for
+// PowerSettle + PowerWindow, past the next draw: the whole 19 minutes.
+func TestFixtureShowerPowerReturnsBeforeTheNextDraw(t *testing.T) {
+	cfg := planConfig()
+	tr := newTracker(t, cfg)
+	r := feed(t, tr, "shower-layered", 0)
+	var shower, next *meter.Draw
+	for i := range r.draws {
+		switch r.draws[i].Litres {
+		case 50:
+			shower = &r.draws[i]
+		case 15:
+			next = &r.draws[i]
+		}
+	}
+	if shower == nil || next == nil {
+		t.Fatalf("draws %+v, want the 50 L shower and the 15 L after it", r.draws)
+	}
+	ended := shower.End.Add(meterConfig().DrawEnd) // when the meter consumer ends it
+	var first *snap
+	for _, s := range r.between(right, ended, next.Start) {
+		if s.power != nil {
+			first = &s
+			break
+		}
+	}
+	if first == nil {
+		t.Fatalf("right power unknown from the shower's end to the next draw at %v", next.Start.Sub(t0))
+	}
+	after := first.at.Sub(ended)
+	t.Logf("right power known at %v, %v after draw_ended (%v after the last litre): %.2f kW, %s",
+		first.at.Sub(t0), after, first.at.Sub(shower.End), *first.power, first.state)
+	if after < cfg.PowerSettle+cfg.PowerMinSpan || after > cfg.PowerSettle+cfg.PowerMinSpan+time.Minute {
+		t.Errorf("known %v after draw_ended, want PowerSettle + PowerMinSpan (%v) plus at most a minute of sweeps",
+			after, cfg.PowerSettle+cfg.PowerMinSpan)
+	}
+	if first.state != StateCooling {
+		t.Errorf("state %s when power returns, want cooling", first.state)
+	}
+}

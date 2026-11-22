@@ -131,3 +131,35 @@ func TestHeatingEndedCarriesTheEpisodeSource(t *testing.T) {
 		t.Fatalf("heating_ended %+v, want source hw", he)
 	}
 }
+
+// A channel going unknown (the boiler sensor dropping) is a break, not a
+// switch-off: the hold is only for a switch-off seen, so the source is null
+// at once, whether HW went on → unknown, or was seen off and then went
+// unknown within the hold (it may have come on again, or CH on, unseen).
+func TestUnknownIsABreakNotASwitchOff(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		steps []boiler.Switch // HW after the heating, CH off throughout
+	}{
+		{"on→unknown", []boiler.Switch{unk}},
+		{"on→off→unknown", []boiler.Switch{off, unk}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tr := newTracker(t, planConfig())
+			heated(t, tr, right, on, off)
+			at := t0.Add(30 * time.Minute)
+			for _, hw := range c.steps {
+				at = at.Add(time.Second)
+				tr.Programmer(at, hw, off)
+			}
+			if st := mustStatus(t, tr, right); st.State != StateHeating || st.Source != SourceNone {
+				t.Fatalf("after HW went unknown: state %s source %q, want heating with no source", st.State, st.Source)
+			}
+			// Seen off again later: no switch-off from on was seen, so no hold.
+			tr.Programmer(at.Add(time.Second), off, off)
+			if st := mustStatus(t, tr, right); st.Source != SourceNone {
+				t.Fatalf("unknown → off: source %q, want none", st.Source)
+			}
+		})
+	}
+}
