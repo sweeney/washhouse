@@ -167,6 +167,17 @@
   ],
   "litres": 28
  },
+ "night-loop-stopped": {
+  "draws": [
+   {
+    "duration_s": 0.0,
+    "litres": 1,
+    "median_flow_l_min": null,
+    "start": "2000-12-31T22:59:12.158Z"
+   }
+  ],
+  "litres": 0
+ },
  "quiet-night": {
   "draws": [],
   "litres": 0

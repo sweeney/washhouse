@@ -54,6 +54,9 @@ const (
 	RoleReturn Role = "return"
 )
 
+// Valid reports whether r is a known role (the empty role is bulk).
+func (r Role) Valid() bool { return r.valid() }
+
 func (r Role) valid() bool {
 	switch r {
 	case "", RoleBulk, RoleInlet, RoleOutlet, RoleReturn:

@@ -60,6 +60,7 @@ meter_audit's segments (a draw ends after a minute with no litre).
 | `reheat-morning` | 80 min | 19 KB | 3 L | An HW + CH reheat from HW_ON to HW_OFF |
 | `ch-only-right-reheat` | 64 min | 8 KB | no meter | CH-only spell heating the right tank (probe-only) |
 | `ch-only-no-heat` | 2 h 3.5 min | 24 KB | 8 L | A CH-only spell that heats neither tank |
+| `night-loop-stopped` | 7 h 15 min | 51 KB | 0 L | A metered night with no draws while air had stopped the right tank's return loop (its loss about 5 W/K, like the left); ends at the morning HW_ON |
 
 ### shower-layered
 
@@ -186,3 +187,12 @@ second hour with `taps-small`:
 | 1:58:15.838 | 2 | 12.6 s | 4.7 L/min |
 
 Expect no heating claimed for either tank.
+
+### night-loop-stopped
+
+The night before the right tank's return loop restarted: air left by a refill
+had stopped its gravity circulation, so the right tank lost about 90 W instead
+of the 350–800 W on loop nights (compare `quiet-night`, the night after the
+loop restarted). No litres; the audit's one 1 L "draw" is the retained litre
+from before the start. Expect no draws, and an online UA fit for the right
+tank near the left's.

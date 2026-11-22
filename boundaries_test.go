@@ -27,6 +27,7 @@ var core = []string{
 	"internal/estimate",
 	"internal/meter",
 	"internal/profile",
+	"internal/tank",
 	"internal/vessel",
 	"internal/wire/boiler",
 	"internal/wire/tanktemp",
