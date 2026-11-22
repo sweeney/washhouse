@@ -227,3 +227,56 @@ func TestNoHeightAnywhereIsRefused(t *testing.T) {
 		t.Error("a probe with no height was placed")
 	}
 }
+
+// BulkKWh is the stored energy seen by the bulk (and return) probes only:
+// the inlet and outlet probes sit on fittings that react to a sub-litre
+// draw, and the heat-sunk outlet reads 3–8 °C low at rest but true during
+// flow, which the full estimate would read as heat gained.
+func TestBulkEnergyLeavesOutTheFittings(t *testing.T) {
+	tk := mustTank(t, rightTank())
+	rest, err := tk.Sweep(state(f(20), f(45), f(60), f(52), f(50)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	flowing, err := tk.Sweep(state(f(20), f(45), f(60), f(52), f(62))) // a tap runs: the outlet reads true
+	if err != nil {
+		t.Fatal(err)
+	}
+	dipped, err := tk.Sweep(state(f(14), f(45), f(60), f(52), f(62))) // and the inlet fitting dips
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *dipped.BulkKWh != *rest.BulkKWh {
+		t.Errorf("bulk energy moved with the inlet: %v → %v", *rest.BulkKWh, *dipped.BulkKWh)
+	}
+	if rest.BulkKWh == nil || flowing.BulkKWh == nil {
+		t.Fatalf("bulk energy unknown: %v %v", rest.BulkKWh, flowing.BulkKWh)
+	}
+	if *rest.BulkKWh != *flowing.BulkKWh {
+		t.Errorf("bulk energy moved with the fittings: %v → %v", *rest.BulkKWh, *flowing.BulkKWh)
+	}
+	if flowing.Estimate.KWh <= rest.Estimate.KWh {
+		t.Errorf("the full estimate should rise with the outlet (that's the artefact): %v → %v", rest.Estimate.KWh, flowing.Estimate.KWh)
+	}
+	want := testEstimator(t).Assess(mustProfile3(t, 45, 60, 52)).KWh
+	if math.Abs(*rest.BulkKWh-want) > 1e-12 {
+		t.Errorf("bulk %v, want %v (profile from P2–P4)", *rest.BulkKWh, want)
+	}
+	// Fewer than two bulk probes: unknown, not zero.
+	sw, err := tk.Sweep(state(f(20), nil, nil, f(52), f(50)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sw.BulkKWh != nil {
+		t.Errorf("one bulk probe gave %v", *sw.BulkKWh)
+	}
+}
+
+func mustProfile3(t *testing.T, p2, p3, p4 float64) *profile.Profile {
+	t.Helper()
+	p, err := profile.New([]profile.Probe{{HeightMM: 400, TempC: f(p2)}, {HeightMM: 825, TempC: f(p3)}, {HeightMM: 945, TempC: f(p4)}}, profile.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}

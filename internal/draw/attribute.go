@@ -232,8 +232,8 @@ func Attribute(cfg Config, d meter.Draw, w Window) Attribution {
 	if !missing && !haveAll {
 		reasons.add(ReasonTankMissing)
 	}
-	for _, ta := range a.Tanks {
-		if ta.SettledLostKWh != nil && -*ta.SettledLostKWh > cfg.GainKWh {
+	for k, ta := range a.Tanks {
+		if g := gained(sels[k], ta); g != nil && *g > cfg.GainKWh {
 			reasons.add(ReasonGained)
 		}
 	}
@@ -299,6 +299,20 @@ func hwOn(hw []Programmer, from, to time.Time) bool {
 
 // windowStart is the earliest before sweep, windowEnd the latest balance
 // sweep (or share sweep): the span a reheat would mask.
+// gained is the heat a tank gained from its before sweep to its balance
+// sweep. It compares the bulk probes' energy when both sweeps carry it: the
+// full estimate "gains" when the heat-sunk outlet probe reads true during a
+// tap. Without it, the full estimate's loss is used.
+func gained(s selection, ta TankAttribution) *float64 {
+	if s.before != nil && s.bal != nil && s.before.BulkKWh != nil && s.bal.BulkKWh != nil {
+		return ptr(*s.bal.BulkKWh - *s.before.BulkKWh)
+	}
+	if ta.SettledLostKWh != nil {
+		return ptr(-*ta.SettledLostKWh)
+	}
+	return nil
+}
+
 func windowStart(sels []selection) time.Time {
 	var t time.Time
 	for _, s := range sels {

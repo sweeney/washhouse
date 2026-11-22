@@ -169,6 +169,11 @@ func TestFixturesAttributeEveryDraw(t *testing.T) {
 				t.Errorf("%s: attribution %d is draw %s %v L, want %s %v L", name, i, a.Draw.ID, a.Draw.Litres, draws[i].ID, draws[i].Litres)
 			}
 			t.Logf("%-15s %s", name, describe(t0, a))
+			// Only a reheat makes a tank gain over a draw: the heat-sunk
+			// outlet reading true during a tap must not (bulk energy).
+			if slices.Contains(a.Reasons, ReasonGained) && !slices.Contains(a.Reasons, ReasonHWOn) {
+				t.Errorf("%s: %s gained heat with HW off: %v", name, a.Draw.ID, a.Reasons)
+			}
 		}
 	}
 }

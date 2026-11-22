@@ -84,6 +84,12 @@ type Sweep struct {
 	ProbesTotal int
 	Profile     *profile.Profile
 	Estimate    estimate.Tank
+	// BulkKWh is the stored energy from the bulk and return probes only,
+	// leaving out the inlet and outlet: they sit on fittings that move with
+	// a sub-litre draw, and the heat-sunk outlet reads low at rest but true
+	// during flow, which the full estimate reads as heat gained. Use it to
+	// compare energy across a draw. nil with fewer than two such probes.
+	BulkKWh *float64
 }
 
 // Inlet is the cold-inlet probe's reading, or nil.
@@ -157,5 +163,13 @@ func (t *Tank) Sweep(st tanktemp.State) (Sweep, error) {
 	}
 	sw.Profile = prof
 	sw.Estimate = t.est.Assess(prof)
+	bulk, err := profile.New(pp, profile.Options{TrustSuspect: t.c.TrustSuspect,
+		Exclude: []profile.Role{profile.RoleInlet, profile.RoleOutlet}})
+	if err == nil {
+		k := t.est.Assess(bulk).KWh
+		sw.BulkKWh = &k
+	} else if !errors.Is(err, profile.ErrTooFewProbes) {
+		return Sweep{}, fmt.Errorf("tank: %s: %w", st.DeviceID, err)
+	}
 	return sw, nil
 }

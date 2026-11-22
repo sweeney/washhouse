@@ -273,13 +273,13 @@ Moving statehouse, greenhouse and countinghouse onto 3 and 4 is a follow-up, not
    - Port vessel, profile and estimate, with **parity tests against `avail.py --geometry` and its per-sweep output.**
 2. **Attribution, thermal, cross-check.** Assertions from the metered fixtures:
    - every draw's litres equal the meter's, and its kind is right (shower, bath, tap);
-   - the right tank's share is about 0.75;
+   - the right tank's share is about 0.75 on unmasked draws of 10 L or more (measured 0.73–0.76); during a reheat it differs (the 87 L bath split 0.57 left / 0.43 right), and under about 10 L shares scatter 0–1, so they are indicative only;
    - the heat balance is within 10% on the layered shower, and flagged unreliable on the reheat bath, the small draws and the draw straight after the shower;
    - creep raises `continuous_flow` and makes no draw;
    - no draws on the quiet night;
    - the right P4 gap is corrected by strat;
    - CH-only heating is attributed to the right tank when it happens (8 Nov), and no heating is claimed when it doesn't (20–22 Nov);
-   - the online UA fit follows the right tank's loss from about 5 to 15–19 W/K;
+   - the online UA fit follows the right tank's loss from about 5 W/K (loop stopped) to its loop-running value. **Measured against the boiler room, that is about 30–39 W/K, not 15–19:** the loop sheds its heat into the house's pipework, not the room. Hour by hour the loss fits 18 W/K × (T − 14.4 °C), the old slope with a reference about 10 °C below the boiler room; the 15–19 was measured against the colder hall. The fit stays against the room for now; fitting the reference temperature too (loss = UA·(T − T_ref)) is a later option;
    - system `low_hot_water` stays false overnight while the right tank alone is below 45 °C.
 3. **Wire contract.** `docs/WIRE.md`, the `wire/washhouse` goldens, and a review with the statehouse and tanktemp sessions.
 4. **Common extractions 1–4.**

@@ -451,3 +451,35 @@ func TestBalanceNeverNegative(t *testing.T) {
 	}
 	reasonsOf(t, a, ReasonGained)
 }
+
+// The gain rule compares the bulk probes' energy when the sweeps carry it:
+// the full estimate "gains" when the heat-sunk outlet reads true during a
+// tap (taps-small: the right tank's full energy rose 0.26 kWh on a 4 L tap
+// with HW off), the bulk energy doesn't.
+func TestTankGainUsesBulkEnergy(t *testing.T) {
+	cfg := testConfig()
+	cfg.GainKWh = 0.25
+	withBulk := func(w Window, before, bal float64) Window {
+		for id, ss := range w.Sweeps {
+			for k := range ss {
+				b := before
+				if k == len(ss)-1 {
+					b = bal
+				}
+				ss[k].BulkKWh = f(b)
+			}
+			w.Sweeps[id] = ss
+		}
+		return w
+	}
+	// The full estimate gains 0.375 on the left; the bulk energy doesn't.
+	a := Attribute(cfg, shower(), withBulk(showerWindow(11, 10.4, 11.375, 10.7, 8.9, 8.1), 9, 8.9))
+	if a.MaskedByReheat {
+		t.Errorf("an outlet artefact masked the draw: %v", a.Reasons)
+	}
+	// A real gain shows in the bulk energy too.
+	a = Attribute(cfg, shower(), withBulk(showerWindow(11, 10.4, 11.375, 10.7, 8.9, 8.1), 9, 9.375))
+	if !a.MaskedByReheat {
+		t.Errorf("a bulk gain of 0.375 kWh wasn't masked")
+	}
+}
