@@ -27,8 +27,8 @@ Domain knowledge comes from the tanktemp session's briefing (2026-11-13, with it
   - P5 (1215 mm) is on the hot outlet. It is heat-sunk, so it under-reads at rest; its peak during a draw is the true top temperature.
   - **Right P4** is on the secondary return. It reads 5–9 °C low, and the left P4 is a normal probe.
 - **Left and right tanks behave differently.**
-  - Right tank loss was about 15–19 W/K (a gravity secondary loop), against 3–4 W/K for the left. **It isn't constant**: from 19 Nov (after an engineer's visit) it fell to about 5 W/K, then came back during two large draws on 21 Nov. The cause is open with the owner. So UA is fitted online per tank and never a constant.
-  - The right tank used to heat on CH-only calls (about 3 kW). Not seen since 19 Nov: every CH-only spell since has put about 0 kW in. So the heat source is inferred from observed gain, never assumed from CH.
+  - Right tank loss was about 15–19 W/K (a gravity secondary loop), against 3–4 W/K for the left. **It isn't constant**: air after a refill on 19 Nov stopped the loop (about 5 W/K), and a large draw on 21 Nov purged it (back to 15–19 W/K). The owner plans to close the new return valve for a few days in late Nov. So UA is fitted online per tank, and must re-converge within a night or two of a step change.
+  - The right tank used to heat on CH-only calls (+0.7 to +6.4 kW) because its coil valve was dead; it was replaced on 19 Nov, and CH-only spells since put about 0 kW in. So the heat source is inferred from observed gain, never assumed from CH.
 - **HW/CH are only the programmer.** They tell us nothing about the stats or valves.
 - **Draws:**
   - Small draws are nearly invisible to a heat balance (now superseded: volumes come from the meter).

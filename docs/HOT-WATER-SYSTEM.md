@@ -93,13 +93,19 @@ details in any public repo; the owner is strict about PII in committed files.
 
 ## 3. The secondary return, and why the right tank loses heat 3–4× faster (history: 5–19 Nov)
 
-> **Update (Nov 2026, measured, cause open):** from about midday on 19 Nov
-> the right tank's overnight loss fell from 580–810 W to about 90 W
+> **Update (Nov 2026, measured; cause owner said):** the explanation below
+> is confirmed. On 19 Nov the hot-water side was drained for an engineer's
+> visit and an on/off valve was fitted on the secondary return next to the
+> right cylinder (left open). Air left after the refill stopped the gravity
+> loop: the right tank's overnight loss fell from 580–810 W to about 90 W
 > (≈5 W/K, like the left), and its probe-4 offset went from −5.6 to about
-> +2.5 °C. On 21 Nov, during two large draws (72 L and 87 L by the meter), it
-> reverted: 369 W and −5.5 °C that night. So the return loop explanation below
-> looks right, but **the loop can stop and start**. Nothing in this section
-> should be taken as a fixed constant: washhouse fits UA per tank online.
+> +2.5 °C. On 21 Nov a large draw from the loop's high point purged the air
+> and the loop restarted: 369 W and −5.5 °C that night. The loss came back
+> with a new primary valve in place (§4), which rules out gravity flow
+> through a stuck-open primary: **the secondary return is the cause.** The
+> owner plans to close the return valve for a few days in late November to
+> measure the difference. So the loss is not a constant: washhouse fits UA
+> per tank online.
 
 **Measured, every night since 2026-11-05:**
 - **Left tank standing loss: about 100–160 W**, roughly **3.2–4 W/K** against
@@ -144,11 +150,12 @@ right probe 4 at face value; see the stratification correction in §6.
 
 ## 4. The right tank is heated by central heating alone (history: before 19 Nov)
 
-> **Update (Nov 2026, measured):** not seen since an engineer's visit on
-> 19 Nov. Every CH-only spell from 19 to 22 Nov put about 0 kW into the right
-> tank, including spells after its loss came back (§3). What the engineer did
-> is still to be confirmed. washhouse must not assume CH heats either tank; it
-> infers the heat source from observed gain.
+> **Update (Nov 2026, measured; cause owner said):** the right tank's coil
+> valve was dead, and the engineer replaced it on 19 Nov. Before, CH-only
+> spells heated the right tank at +0.7 to +6.4 kW; five CH-only spells from
+> 19 to 22 Nov put about 0 kW in. So the inferred "valve open on CH calls"
+> below was right, and is now fixed. washhouse must not assume CH heats
+> either tank; it infers the heat source from observed gain.
 
 - **Observed at least five times:** with **HW OFF and CH ON**, the right
   tank's coil zone heats and the left stays flat. For example:
@@ -379,10 +386,12 @@ right probe 4 at face value; see the stratification correction in §6.
 ---
 
 ## 9. Open questions
-- _Update:_ an engineer visited on 19 Nov. What they changed, and so why §3's
-  loss and §4's CH heating stopped, is still being confirmed with the owner.
-- What starts and stops the right tank's return loop? (§3: off 19–21 Nov,
-  back after two large draws.)
+- ~~The right tank's valve on CH calls (§4)~~ dead valve, replaced 19 Nov.
+- ~~Gravity loop or open primary (§3)~~ the secondary return, confirmed when
+  air stopped it 19–21 Nov.
+- How much does closing the return valve save, and how much longer does the
+  hot tap take to run hot at the loop's far end? (Planned late Nov, timed
+  with the meter's litres.)
 - Is the right tank really an STI 210?
 - Inner diameter and insulation thickness (the vessel model's main guess).
 - ~~Flow rates per outlet~~ measured by the meter (§6).
