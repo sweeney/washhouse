@@ -6,9 +6,16 @@ import (
 	"testing"
 )
 
+// sti210 is avail.py's vessel for the Ariston Classico HE STI 210 (550 mm
+// outside, 1498 mm tall, 200 L), with its ASSUMED inner diameter, dome depth
+// and z0. Test data only: washhouse takes the geometry from its config.
+func sti210() Params {
+	return Params{CapacityL: 200, InnerDiameterMM: 460, DomeDepthMM: 60, Z0MM: 150, SliceMM: 1}
+}
+
 func TestSTI210Validates(t *testing.T) {
-	if err := STI210().Validate(); err != nil {
-		t.Fatalf("STI210().Validate() = %v", err)
+	if err := sti210().Validate(); err != nil {
+		t.Fatalf("sti210().Validate() = %v", err)
 	}
 }
 
@@ -30,7 +37,7 @@ func TestValidateRefusesBadParams(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			p := STI210()
+			p := sti210()
 			c.mod(&p)
 			err := p.Validate()
 			if err == nil {
@@ -49,7 +56,7 @@ func TestValidateRefusesBadParams(t *testing.T) {
 // The figures avail.py --geometry prints for the STI 210, to its precision.
 // Exact parity with avail.py is asserted in internal/estimate's parity test.
 func TestSTI210Summary(t *testing.T) {
-	v, err := New(STI210())
+	v, err := New(sti210())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +77,7 @@ func TestSTI210Summary(t *testing.T) {
 }
 
 func TestSlicesCoverTheWaterAtSliceSteps(t *testing.T) {
-	v, err := New(STI210())
+	v, err := New(sti210())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +110,7 @@ func TestSlicesCoverTheWaterAtSliceSteps(t *testing.T) {
 }
 
 func TestCoarserSlicesHoldTheSameWater(t *testing.T) {
-	p := STI210()
+	p := sti210()
 	p.SliceMM = 5
 	v, err := New(p)
 	if err != nil {
@@ -119,7 +126,7 @@ func TestCoarserSlicesHoldTheSameWater(t *testing.T) {
 }
 
 func TestLitresBetween(t *testing.T) {
-	v, err := New(STI210())
+	v, err := New(sti210())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,12 +140,41 @@ func TestLitresBetween(t *testing.T) {
 }
 
 func TestSlicesIsACopy(t *testing.T) {
-	v, err := New(STI210())
+	v, err := New(sti210())
 	if err != nil {
 		t.Fatal(err)
 	}
 	v.Slices()[0].Litres = 99
 	if v.Slices()[0].Litres == 99 {
 		t.Error("Slices() exposes the vessel's own slice")
+	}
+}
+
+// A dome depth that is a whole number of slices up to floating-point error
+// (42 / 0.7 = 60.00000000000001) is valid; a real remainder is still refused.
+func TestDomeDepthToleratesFloatSlicing(t *testing.T) {
+	p := sti210()
+	p.DomeDepthMM, p.SliceMM = 42, 0.7
+	if err := p.Validate(); err != nil {
+		t.Errorf("42 mm in 0.7 mm slices: %v", err)
+	}
+	p.DomeDepthMM = 60.1
+	p.SliceMM = 1
+	if err := p.Validate(); err == nil {
+		t.Error("60.1 mm in 1 mm slices was accepted")
+	}
+}
+
+// 66 / 1.1 is 59.99999999999999: the dome is still integrated over 60
+// slices, not 59 (which would drop its widest slice). Checked against the
+// spherical cap's exact volume, πh²(3R−h)/3.
+func TestDomeIntegratesEveryWholeSlice(t *testing.T) {
+	p := sti210()
+	p.DomeDepthMM, p.SliceMM = 66, 1.1
+	g := p.geometry()
+	h := p.DomeDepthMM
+	exact := math.Pi * h * h * (3*g.rSph - h) / 3 / 1e6
+	if d := math.Abs(g.domeL-exact) / exact; d > 1e-3 {
+		t.Errorf("dome %.4f L, exact cap %.4f L (%.2f%% off)", g.domeL, exact, 100*d)
 	}
 }

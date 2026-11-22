@@ -87,7 +87,7 @@ These come from reviewing and smoke-testing tanktemp's meter work, and from abou
    - showers 4–6.4 L/min, at 34–51 L;
    - baths 12–31 L/min, at 72–87 L.
 
-   Kind follows from flow and size: a bath runs at 10 L/min or more; a shower is 20 L or more over 3 min or longer; anything else is a tap. A draw ends after a minute with no litre, so litres less than 60 s apart are one draw (a real bath paused 40.7 s mid-fill). Litres are counted from `count`, never from changes in `last_pulse_at` (tanktemp can print one closing 1 ms apart in two messages).
+   Kind follows from flow and size: a bath runs at 10 L/min or more and is 20 L or more; a shower is 20 L or more over 3 min or longer at 3 L/min or more; anything else is a tap. **Open:** a slow steady run (1.2–2 L/min, litres under a minute apart, so a draw, not creep) is a long "tap" today; it may be a tap left dribbling or circulation through the meter, and could fold into `continuous_flow` once real data shows one. A draw ends after a minute with no litre, so litres less than 60 s apart are one draw (a real bath paused 40.7 s mid-fill). Litres are counted from `count`, never from changes in `last_pulse_at` (tanktemp can print one closing 1 ms apart in two messages).
 3. **Creep is a separate signal.** `last_closed_ms` tells real flow from creep: real flow holds the reed closed for 1–4 s, creep for minutes. On 21 Nov, lone litres came about every 14 min, closed for 2–23 min each, at about 0.07 L/min (about 100 L/day if left). Two such litres within 45 min raise `continuous_flow_started` / `_ended`. That is never a draw and never occupancy. Cause unknown: a tap not fully closed, or circulation through the meter.
 4. **Two tanks need a system view.**
    - The right tank supplies about 75% of every draw: 2.26 of 2.95 kWh in a 50 L shower. Its P1 reacts within 4 s against the left's 24 s, and its P2 falls 20 °C or more.
@@ -193,7 +193,7 @@ The pure core (no OS, network or MQTT, enforced by a `boundaries_test.go` as in 
 - Publisher timestamps are sanitised as statehouse's `timeutil` does: unparseable, more than 30 days old or more than 24 h ahead is undated.
 - Behaviour comes from config.swee.net:
   - **`devices_home`**: the cylinders and probes. Add a `cylinder` block (capacity_l 200, height_mm 1498, diameter_mm 550); `common/devices` v0.2.0 already decodes it.
-  - **A new `washhouse` namespace**: inner diameter, dome depth, z0, T_cold, T_min, T_mix, per-tank probe roles by position, draw thresholds, prior UA per tank, reheat priors, and topics.
+  - **A new `washhouse` namespace**: inner diameter, dome depth, z0, T_cold, T_min, T_mix, the drawable band (cold inlet to hot outlet: 281–1237 mm on the STI 210, a GUESS that the outlet has no dip pipe; about 40 L outside it), per-tank probe roles by position, whether to trust suspect 85 °C readings (default no), draw thresholds, prior UA per tank, reheat priors, and topics. No geometry is built into the code: the STI 210 values exist only as test data.
   - The user makes the admin writes; I supply the JSON.
 
 **Probe heights** come from tanktemp's own payload (`height_mm`), with the config as fallback.

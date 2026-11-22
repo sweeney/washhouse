@@ -20,6 +20,12 @@
 //     first to see a draw; it is kept as it is.
 //   - RoleBulk is an ordinary tank probe. The empty role means RoleBulk.
 //
+// A suspect reading (tanktemp's 85c_unverified: exactly 85 °C, which is
+// also the DS18B20's power-on value) is unknown unless Options.TrustSuspect.
+// WIRE.md calls it probably real, but no cylinder here gets near 85 °C, and
+// strat would spread a false 85 up the whole tank (a suspect bottom 85 over
+// 40, 60, 60, 60 doubles the stored energy). avail.py had no such rule.
+//
 // Options.Exclude is the opt-in extra: probes with an excluded role are
 // dropped as if unknown (useful for the raw profile, which strat does not
 // correct). A probe with no reading (TempC nil) is always skipped.
@@ -62,13 +68,15 @@ type Probe struct {
 	HeightMM float64
 	TempC    *float64
 	Role     Role
+	Suspect  bool // tanktemp marked the reading suspect (85c_unverified)
 }
 
 // Options choose the profile variant. The zero value is avail.py's default:
 // strat on, no role excluded.
 type Options struct {
-	Raw     bool   // skip the strat running max
-	Exclude []Role // drop probes with these roles (opt-in)
+	Raw          bool   // skip the strat running max
+	Exclude      []Role // drop probes with these roles (opt-in)
+	TrustSuspect bool   // keep suspect readings (by default they are unknown)
 }
 
 // Point is one point of the effective profile, after skipping and strat.
@@ -108,7 +116,7 @@ func New(probes []Probe, o Options) (*Profile, error) {
 		if !p.Role.valid() {
 			return nil, fmt.Errorf("profile: probe %d has unknown role %q", i+1, p.Role)
 		}
-		if p.TempC == nil {
+		if p.TempC == nil || (p.Suspect && !o.TrustSuspect) {
 			continue
 		}
 		if !finite(*p.TempC) {

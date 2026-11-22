@@ -71,6 +71,13 @@ type result struct {
 	Top   float64 `json:"top"`
 }
 
+// testVessel is avail.py's vessel, from parity.json: the geometry is test
+// data, never built into washhouse.
+func testVessel(t *testing.T) *vessel.Vessel {
+	t.Helper()
+	return parityVessel(t, loadParity(t))
+}
+
 func loadParity(t *testing.T) parity {
 	t.Helper()
 	b, err := os.ReadFile("testdata/parity.json")
@@ -104,9 +111,6 @@ func parityVessel(t *testing.T, p parity) *vessel.Vessel {
 		DomeDepthMM:     p.Params.DomeDepthMM,
 		Z0MM:            p.Params.Z0MM,
 		SliceMM:         p.Params.SliceMM,
-	}
-	if vp != vessel.STI210() {
-		t.Errorf("vessel.STI210() = %+v, avail.py uses %+v", vessel.STI210(), vp)
 	}
 	v, err := vessel.New(vp)
 	if err != nil {
@@ -174,6 +178,8 @@ func TestAssessParity(t *testing.T) {
 	e, err := New(v, Config{
 		ColdC: p.Params.TColdC, MinC: p.Params.TMinC, MixC: p.Params.TMixC,
 		KWhPerLitreK: p.Params.KWhPerLitreK, LowFactor: 0.85,
+		// avail.py counts the whole vessel as drawable.
+		DrawFromMM: 0, DrawToMM: v.Summary().TopMM + 1,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -7,9 +7,10 @@
 // It is a port of the vessel model in tanktemp's avail.py and keeps that
 // script's arithmetic (midpoint-rule slices, the same order of operations)
 // so the two agree to rounding; internal/estimate's parity test checks it.
-// Every number is a parameter: STI210 holds the defaults for the owner's
-// Ariston Classico HE STI 210, most of which are guesses (see
-// docs/HOT-WATER-SYSTEM.md §6).
+// Every number is a parameter, and none is built in: the cylinder's
+// geometry comes from washhouse's config (most of it guessed, see
+// docs/HOT-WATER-SYSTEM.md §6). Tests take avail.py's values from
+// internal/estimate/testdata/parity.json.
 package vessel
 
 import (
@@ -26,19 +27,6 @@ type Params struct {
 	DomeDepthMM     float64 // depth of each spherical-cap dome (top and bottom)
 	Z0MM            float64 // height of the inside of the bottom dome's apex
 	SliceMM         float64 // thickness of each integration slice
-}
-
-// STI210 returns the parameters avail.py uses for the Ariston Classico HE
-// STI 210 (550 mm outside, 1498 mm tall, 200 L). The inner diameter, dome
-// depth and z0 are ASSUMED; avail.py slices at 1 mm.
-func STI210() Params {
-	return Params{
-		CapacityL:       200,
-		InnerDiameterMM: 460,
-		DomeDepthMM:     60,
-		Z0MM:            150,
-		SliceMM:         1,
-	}
 }
 
 func finitePositive(name string, x float64) error {
@@ -68,7 +56,7 @@ func (p Params) Validate() error {
 	// avail.py integrates each dome over int(depth) whole 1 mm slices; a
 	// depth that isn't a whole number of slices would silently lose the
 	// remainder, so it is refused rather than guessed at.
-	if n := p.DomeDepthMM / p.SliceMM; n != math.Trunc(n) {
+	if _, ok := p.domeSlices(); !ok {
 		return fmt.Errorf("vessel: dome depth %v mm must be a whole number of %v mm slices", p.DomeDepthMM, p.SliceMM)
 	}
 	if g := p.geometry(); g.straightMM <= 0 {
@@ -106,6 +94,16 @@ type geometry struct {
 	a, rSph, domeL, cylAreaMM2, straightMM, zCyl0, zCyl1, zTop float64
 }
 
+// domeSlices is how many whole slices a dome's depth makes, and whether it
+// is a whole number: up to floating-point error (42 / 0.7 is
+// 60.00000000000001, 66 / 1.1 is 59.99999999999999), so it rounds rather
+// than truncating, which would drop the dome's widest slice.
+func (p Params) domeSlices() (int, bool) {
+	q := p.DomeDepthMM / p.SliceMM
+	n := math.Round(q)
+	return int(n), math.Abs(q-n) <= 1e-9*math.Max(1, n)
+}
+
 // capArea is the section area (mm²) at depth y into a dome, 0 at its apex.
 // float64() stops the compiler fusing the multiply-add (it may on arm64),
 // which keeps the result bit-for-bit with avail.py.
@@ -117,8 +115,8 @@ func (p Params) geometry() geometry {
 	var g geometry
 	g.a = p.InnerDiameterMM / 2
 	g.rSph = (g.a*g.a + p.DomeDepthMM*p.DomeDepthMM) / (2 * p.DomeDepthMM)
-	n := int(p.DomeDepthMM / p.SliceMM)
-	for i := 0; i < n; i++ {
+	n, _ := p.domeSlices()
+	for i := range n {
 		y := (float64(i) + 0.5) * p.SliceMM
 		g.domeL += float64(capArea(g.rSph, y) * p.SliceMM)
 	}

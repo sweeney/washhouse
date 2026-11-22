@@ -151,3 +151,22 @@ func TestExcludeRolesIsOptIn(t *testing.T) {
 		t.Error("unknown role in Exclude accepted")
 	}
 }
+
+// A suspect reading (tanktemp's 85c_unverified: exactly 85 °C, the DS18B20's
+// power-on value) is unknown unless the caller trusts suspects. Strat would
+// otherwise spread a suspect 85 at the bottom up the whole tank.
+func TestSuspectReadingIsUnknownByDefault(t *testing.T) {
+	hts := []float64{265, 400, 825, 945, 1215}
+	ps := probes(hts, temp(85), temp(40), temp(60), temp(60), temp(60))
+	ps[0].Suspect = true
+	unknown := probes(hts, nil, temp(40), temp(60), temp(60), temp(60))
+	got, want := mustNew(t, ps, Options{}), mustNew(t, unknown, Options{})
+	for _, z := range []float64{150, 265, 400, 600, 1412} {
+		if a, b := got.At(z), want.At(z); a != b {
+			t.Errorf("At(%v) = %v with the suspect probe, %v with it unknown", z, a, b)
+		}
+	}
+	if trusted := mustNew(t, ps, Options{TrustSuspect: true}); trusted.At(265) != 85 {
+		t.Errorf("TrustSuspect: At(265) = %v, want the 85 kept", trusted.At(265))
+	}
+}

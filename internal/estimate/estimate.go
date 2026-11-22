@@ -8,6 +8,20 @@
 // with the cold water entering below. Real draws mix the thermocline, so
 // UsableL40Low applies a configured factor (about 0.85) to UsableL40.
 //
+// Only water between DrawFromMM and DrawToMM is drawable: plug flow can't
+// push out water below the cold inlet, and water above the hot outlet only
+// if the outlet has an internal dip pipe, which nobody has confirmed (a
+// GUESS; on the STI 210 that's 281 and 1237 mm, about 40 L outside the band).
+// avail.py counted the whole vessel; its parity test sets the band to it.
+//
+// ColdC is configured, and 10 °C matches the inlet probes' minimum during
+// long draws in Nov 2026, but mains water cools through winter. The plan is
+// to measure it: probe 1's minimum during a long metered draw.
+//
+// kWh here comes from the strat profile over the vessel's slices (avail.py).
+// tanktemp's own kWh reports take the top layer from probe 4 instead of the
+// heat-sunk probe 5, so the two differ by a few tenths of a kWh.
+//
 // TODO(phase 2): TopC is the profile's value at the top of the water. The
 // plan is for it to use the outlet probe's last draw peak, decayed; that
 // enters through the outlet probe's reading when the profile is built (see
@@ -30,6 +44,8 @@ type Config struct {
 	MixC         float64 // delivered temperature hot water is mixed down to
 	KWhPerLitreK float64 // heat capacity of water, kWh per litre per kelvin (4.186/3600)
 	LowFactor    float64 // UsableL40Low = UsableL40 × LowFactor, in (0, 1]
+	DrawFromMM   float64 // drawable water starts here (the cold inlet)
+	DrawToMM     float64 // and ends here (the hot outlet, unless it has a dip pipe)
 }
 
 // Validate reports the problems with c, or nil.
@@ -41,6 +57,7 @@ func (c Config) Validate() error {
 	}{
 		{"cold", c.ColdC}, {"min", c.MinC}, {"mix", c.MixC},
 		{"kwh per litre per K", c.KWhPerLitreK}, {"low factor", c.LowFactor},
+		{"draw from", c.DrawFromMM}, {"draw to", c.DrawToMM},
 	} {
 		if math.IsNaN(f.v) || math.IsInf(f.v, 0) {
 			errs = append(errs, fmt.Errorf("estimate: %s must be finite, got %v", f.name, f.v))
@@ -55,6 +72,9 @@ func (c Config) Validate() error {
 	if c.MinC < c.MixC {
 		errs = append(errs, fmt.Errorf("estimate: min %v °C must be at least mix %v °C (cooler water can't make mixed water)", c.MinC, c.MixC))
 	}
+	if c.DrawFromMM < 0 || !(c.DrawToMM > c.DrawFromMM) {
+		errs = append(errs, fmt.Errorf("estimate: drawable band %v–%v mm must start at or above 0 and end above its start", c.DrawFromMM, c.DrawToMM))
+	}
 	if !(c.KWhPerLitreK > 0) {
 		errs = append(errs, fmt.Errorf("estimate: kwh per litre per K must be above 0, got %v", c.KWhPerLitreK))
 	}
@@ -68,7 +88,7 @@ func (c Config) Validate() error {
 type Tank struct {
 	KWh          float64 // energy stored above ColdC (negative if the water is colder)
 	HotL         float64 // litres at or above MinC
-	UsableL40    float64 // litres of MixC water the HotL make with ColdC water (plug flow)
+	UsableL40    float64 // litres of MixC water the drawable HotL make with ColdC water (plug flow)
 	UsableL40Low float64 // UsableL40 × LowFactor
 	MeanC        float64 // volume-weighted mean temperature (over the nominal capacity)
 	TopC         float64 // the profile at the top of the water
@@ -105,7 +125,9 @@ func (e *Estimator) Assess(p *profile.Profile) Tank {
 		kwh += float64(float64(s.Litres*(t-c.ColdC)) * c.KWhPerLitreK)
 		if t >= c.MinC {
 			hotL += s.Litres
-			mix += float64(s.Litres*(t-c.ColdC)) / (c.MixC - c.ColdC)
+			if c.DrawFromMM <= s.HeightMM && s.HeightMM < c.DrawToMM {
+				mix += float64(s.Litres*(t-c.ColdC)) / (c.MixC - c.ColdC)
+			}
 		}
 	})
 	return Tank{

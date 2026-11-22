@@ -6,22 +6,19 @@ import (
 	"testing"
 
 	"github.com/sweeney/washhouse/internal/profile"
-	"github.com/sweeney/washhouse/internal/vessel"
 )
 
 // testConfig is avail.py's: mains 10 °C, usable from 40 °C, mixed to 40 °C,
 // 4.186 kJ/(L·K), and 85 % of plug-flow mix40 as the low estimate.
 func testConfig() Config {
-	return Config{ColdC: 10, MinC: 40, MixC: 40, KWhPerLitreK: 4.186 / 3600, LowFactor: 0.85}
+	// The whole vessel is drawable, as in avail.py.
+	return Config{ColdC: 10, MinC: 40, MixC: 40, KWhPerLitreK: 4.186 / 3600, LowFactor: 0.85,
+		DrawFromMM: 0, DrawToMM: 2000}
 }
 
 func mustEstimator(t *testing.T, c Config) *Estimator {
 	t.Helper()
-	v, err := vessel.New(vessel.STI210())
-	if err != nil {
-		t.Fatal(err)
-	}
-	e, err := New(v, c)
+	e, err := New(testVessel(t), c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +81,7 @@ func TestOnlyWaterAtOrAboveTMinCounts(t *testing.T) {
 	e := mustEstimator(t, testConfig())
 	got := e.Assess(prof(t, true, 10, 10, 60, 60, 60))
 	// Between 400 and 825 mm the profile crosses 40 °C at 400 + 425*30/50 = 655 mm.
-	v, _ := vessel.New(vessel.STI210())
+	v := testVessel(t)
 	want := v.LitresBetween(655, 2000)
 	near(t, "HotL", got.HotL, want, 0.02) // within one 1 mm slice
 	if got.UsableL40 <= got.HotL {
@@ -122,7 +119,7 @@ func TestConfigValidate(t *testing.T) {
 		{"zero low factor", func(c *Config) { c.LowFactor = 0 }, "low factor"},
 		{"low factor above 1", func(c *Config) { c.LowFactor = 1.01 }, "low factor"},
 	}
-	v, _ := vessel.New(vessel.STI210())
+	v := testVessel(t)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c := testConfig()
@@ -138,5 +135,41 @@ func TestConfigValidate(t *testing.T) {
 	}
 	if _, err := New(nil, testConfig()); err == nil {
 		t.Error("New accepted a nil vessel")
+	}
+}
+
+// Plug flow can push out only the water between the cold inlet and the hot
+// outlet: below the inlet is never displaced, and above the outlet only if
+// it has a dip pipe (unconfirmed). Usable litres count that band; stored
+// energy and hot litres are still the whole tank.
+func TestOnlyTheDrawableBandIsUsable(t *testing.T) {
+	c := testConfig()
+	whole := mustEstimator(t, c).Assess(prof(t, true, 60, 60, 60, 60, 60))
+	c.DrawFromMM, c.DrawToMM = 281, 1237
+	got := mustEstimator(t, c).Assess(prof(t, true, 60, 60, 60, 60, 60))
+	band := testVessel(t).LitresBetween(281, 1237)
+	near(t, "UsableL40", got.UsableL40, band*(60-10)/(40-10), 1e-9)
+	near(t, "UsableL40Low", got.UsableL40Low, band*(60-10)/(40-10)*0.85, 1e-9)
+	near(t, "HotL", got.HotL, whole.HotL, 0)
+	near(t, "KWh", got.KWh, whole.KWh, 0)
+	if d := whole.UsableL40 - got.UsableL40; d < 60 || d > 80 {
+		// about 40 L of 60 °C water outside the band, ×50/30 as 40 °C litres
+		t.Errorf("band removes %.1f usable litres, want about 70", d)
+	}
+}
+
+func TestDrawableBandValidates(t *testing.T) {
+	for name, mod := range map[string]func(*Config){
+		"from above to": func(c *Config) { c.DrawFromMM, c.DrawToMM = 1237, 281 },
+		"empty":         func(c *Config) { c.DrawFromMM, c.DrawToMM = 500, 500 },
+		"negative from": func(c *Config) { c.DrawFromMM = -1 },
+		"NaN to":        func(c *Config) { c.DrawToMM = math.NaN() },
+		"infinite to":   func(c *Config) { c.DrawToMM = math.Inf(1) },
+	} {
+		c := testConfig()
+		mod(&c)
+		if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "draw") {
+			t.Errorf("%s: Validate() = %v, want a drawable-band error", name, err)
+		}
 	}
 }
