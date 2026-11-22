@@ -24,10 +24,12 @@ const module = "github.com/sweeney/washhouse"
 // core lists the packages that must stay pure. A listed package that doesn't
 // exist fails the test, so the list can't silently go stale.
 var core = []string{
+	"internal/draw",
 	"internal/estimate",
 	"internal/meter",
 	"internal/profile",
 	"internal/tank",
+	"internal/thermal",
 	"internal/vessel",
 	"internal/wire/boiler",
 	"internal/wire/tanktemp",
