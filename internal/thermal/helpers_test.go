@@ -37,6 +37,9 @@ const (
 //   - DrawSettle 60 s: probe 1 sees a draw 1–43 s after its litres (PLAN.md
 //     lessons §5), and the meter's draw already ends 60 s after its last
 //     litre.
+//   - PowerSettle 12 min: after the 50 L shower the right tank's bulk
+//     energy kept falling for 10-12 minutes (9.02 -> 8.06 kWh) as the cold
+//     water drawn reached the probes: catch-up, not loss.
 //   - SourceHold 30 min: heat keeps reaching the probes after the programmer
 //     switches off (8 Nov: the right tank gained for about 17 minutes after
 //     CH_OFF; reheat-morning: still gaining 10 minutes after HW_OFF).
@@ -62,6 +65,7 @@ func planConfig() Config {
 		HeatingOnKW:     0.5,
 		HeatingOffKW:    0.3,
 		DrawSettle:      60 * time.Second,
+		PowerSettle:     12 * time.Minute,
 		SourceHold:      30 * time.Minute,
 		UATau:           24 * time.Hour,
 		UAQuiet:         60 * time.Minute,

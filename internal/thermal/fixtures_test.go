@@ -228,10 +228,12 @@ func TestFixtureCHOnlyNoHeat(t *testing.T) {
 	// After the 4 L tap at 1:19 the right tank's bulk energy recovers (its
 	// upper probe, on the return fitting, re-warms from 49 to 52 °C) at up
 	// to 0.8 kW, while the power window still holds the draw. That is why
-	// heating is judged only from a window clear of draws; this fixture
-	// keeps that rule honest.
-	if p := peak(r.snaps[right]); p < planConfig().HeatingOnKW {
-		t.Errorf("right peak %.2f kW: the post-draw recovery no longer tests the clear-window rule", p)
+	// heating is judged only from a window clear of draws and their
+	// catch-up, and why power is unknown there: no published power reaches
+	// the heating threshold (TestNoHeatingJudgedFromADrawWindow pins the
+	// rule synthetically).
+	if p := peak(r.snaps[right]); p >= planConfig().HeatingOnKW {
+		t.Errorf("right published peak %.2f kW: post-draw recovery published as power", p)
 	}
 }
 

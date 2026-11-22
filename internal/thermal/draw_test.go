@@ -19,14 +19,15 @@ func TestDrawingWhileMeteredAndSettling(t *testing.T) {
 	if len(sc) != 2 || sc[0].State != StateDrawing || sc[1].State != StateDrawing || !sc[0].At.Equal(start) {
 		t.Fatalf("draw start: %+v", ev)
 	}
-	// The draw takes heat out fast; the power says so.
+	// The draw takes heat out fast: that is the draw's energy (draw
+	// attribution), so the tank's power is unknown meanwhile.
 	ev, _ = s.ramp(tr, left, start, 5*time.Minute, 10*time.Second, tl, -20)
 	_, _ = s.ramp(tr, right, start, 5*time.Minute, 10*time.Second, tr2, -20)
 	if len(ev) != 0 {
 		t.Fatalf("events during the draw: %+v", ev)
 	}
 	st := mustStatus(t, tr, left)
-	if st.State != StateDrawing || st.Source != SourceNone || st.PowerKW == nil || *st.PowerKW > -5 {
+	if st.State != StateDrawing || st.Source != SourceNone || st.PowerKW != nil {
 		t.Fatalf("during the draw: %+v", st)
 	}
 	end := start.Add(5 * time.Minute)
@@ -123,9 +124,48 @@ func TestNoHeatingJudgedFromADrawWindow(t *testing.T) {
 	if hs := ofType(ev, EventHeatingStarted); len(hs) != 0 {
 		t.Fatalf("heating judged from a window with the draw in it: %+v", hs)
 	}
-	// Once the window is clear of the draw, a real gain is heating.
-	ev, _ = s.ramp(tr, left, end.Add(30*time.Second+cfg.PowerWindow), 5*time.Minute, 10*time.Second, c+2/kwhPerK*cfg.PowerWindow.Hours(), 2)
+	// Once the window is clear of the draw and its catch-up (PowerSettle),
+	// a real gain is heating.
+	ev, _ = s.ramp(tr, left, end.Add(30*time.Second+cfg.PowerWindow), cfg.PowerSettle+5*time.Minute, 10*time.Second, c+2/kwhPerK*cfg.PowerWindow.Hours(), 2)
 	if hs := ofType(ev, EventHeatingStarted); len(hs) != 1 {
 		t.Fatalf("no heating once clear: %+v", ev)
+	}
+}
+
+// After a draw, the bulk probes keep falling for about ten minutes as the
+// cold water drawn reaches them (the right tank's energy fell 1 kWh in the
+// 12 minutes after the 50 L shower). That isn't heat lost, so power is
+// unknown, and heating isn't judged, until the power window starts
+// PowerSettle after the draw's end. During the draw too: its extraction is
+// the draw's energy, reported by the draw attribution, not a tank power.
+func TestPowerUnknownWhileItsWindowHoldsADrawOrItsCatchUp(t *testing.T) {
+	cfg := planConfig()
+	s := newSynth(t)
+	tr := newTracker(t, cfg)
+	_, c := s.ramp(tr, right, t0, 15*time.Minute, 30*time.Second, 50, -0.1)
+	if st := mustStatus(t, tr, right); st.PowerKW == nil {
+		t.Fatal("no power before the draw")
+	}
+	start := t0.Add(15 * time.Minute)
+	tr.MeteredDraw(start, true)
+	_, c = s.ramp(tr, right, start, 5*time.Minute, 30*time.Second, c, -20)
+	if st := mustStatus(t, tr, right); st.PowerKW != nil {
+		t.Errorf("power %v during the draw, want unknown", *st.PowerKW)
+	}
+	end := start.Add(5 * time.Minute)
+	tr.MeteredDraw(end, false)
+	// The catch-up: still falling fast after the meter stopped.
+	_, c = s.ramp(tr, right, end, cfg.PowerSettle, 30*time.Second, c, -6)
+	if st := mustStatus(t, tr, right); st.PowerKW != nil || st.State == StateCooling && st.PowerKW != nil {
+		t.Errorf("power %v inside PowerSettle, want unknown", *st.PowerKW)
+	}
+	// A full window after PowerSettle: known again, and the real loss.
+	s.ramp(tr, right, end.Add(cfg.PowerSettle), cfg.PowerWindow+time.Minute, 30*time.Second, c, -0.1)
+	st := mustStatus(t, tr, right)
+	if st.PowerKW == nil || *st.PowerKW < -0.3 || *st.PowerKW > 0 {
+		t.Errorf("after the settle: power %v, want about -0.1 kW", st.PowerKW)
+	}
+	if st.State != StateCooling {
+		t.Errorf("after the settle: state %s, want cooling", st.State)
 	}
 }

@@ -110,6 +110,11 @@ type Config struct {
 	// DrawSettle: a tank is drawing for this long after a metered draw
 	// ends (60 s).
 	DrawSettle time.Duration
+	// PowerSettle: after a metered draw ends, the bulk probes keep falling
+	// as the cold water drawn reaches them (catch-up, not heat lost), so
+	// power is unknown, and heating isn't judged, until the power window
+	// starts this long after the draw's end (12 min); at least DrawSettle.
+	PowerSettle time.Duration
 	// SourceHold: with both channels off, heating is still the source of
 	// the channel that switched off up to this long ago (30 min).
 	SourceHold time.Duration
@@ -134,13 +139,16 @@ func (c Config) Validate() error {
 		v    time.Duration
 	}{
 		{"power window", c.PowerWindow}, {"power min span", c.PowerMinSpan},
-		{"stale after", c.StaleAfter}, {"draw settle", c.DrawSettle},
+		{"stale after", c.StaleAfter}, {"draw settle", c.DrawSettle}, {"power settle", c.PowerSettle},
 		{"source hold", c.SourceHold}, {"UA tau", c.UATau}, {"UA quiet", c.UAQuiet},
 		{"ambient stale", c.AmbientStale},
 	} {
 		if d.v <= 0 {
 			errs = append(errs, fmt.Errorf("thermal: %s must be above 0, got %v", d.name, d.v))
 		}
+	}
+	if c.PowerSettle < c.DrawSettle {
+		errs = append(errs, fmt.Errorf("thermal: power settle %v must be at least the draw settle %v", c.PowerSettle, c.DrawSettle))
 	}
 	if c.PowerMinSpan > c.PowerWindow {
 		errs = append(errs, fmt.Errorf("thermal: power min span %v must be within the power window %v", c.PowerMinSpan, c.PowerWindow))
@@ -280,9 +288,10 @@ func (t *Tracker) drawing(at time.Time) bool {
 	return t.drawRunning || (t.drawEnded && at.Sub(t.drawEnd) <= t.cfg.DrawSettle)
 }
 
-// clear says whether a power window starting at from holds no drawing.
+// clear says whether a power window starting at from holds no drawing,
+// nor the probes' catch-up after one (PowerSettle).
 func (t *Tracker) clear(from time.Time) bool {
-	return !t.drawRunning && (!t.drawEnded || from.Sub(t.drawEnd) > t.cfg.DrawSettle)
+	return !t.drawRunning && (!t.drawEnded || from.Sub(t.drawEnd) > t.cfg.PowerSettle)
 }
 
 // channel is one programmer channel: its state, and when it last switched
@@ -558,8 +567,8 @@ func (t *Tracker) source(at time.Time) Source {
 
 // powerAt is tk's power as known at at: unknown once the tank is stale.
 func (t *Tracker) powerAt(tk *tankTrack, at time.Time) *float64 {
-	if tk.power == nil || t.stale(tk, at) {
-		return nil
+	if tk.power == nil || t.stale(tk, at) || !t.clear(tk.powerFrom) {
+		return nil // a window holding a draw or its catch-up measures the draw
 	}
 	p := *tk.power
 	return &p
