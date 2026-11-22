@@ -126,15 +126,17 @@ func eventText(e engine.Event) string {
 			d.LitresSoFar, num(d.FlowLPerMin, 1), d.Kind)
 	case e.Ended != nil:
 		d := e.Ended
+		return fmt.Sprintf("%s id=%s started=%s ended=%s litres=%.0f flow=%s kind=%s seq=%d-%d",
+			e.Type, d.DrawID, ts(d.StartedAt), ts(d.EndedAt), d.Litres, num(d.FlowLPerMin, 1), d.Kind, d.From.Seq, d.To.Seq)
+	case e.Balanced != nil:
+		d := e.Balanced
 		shares := make([]string, len(d.Tanks))
 		for i, t := range d.Tanks {
 			shares[i] = t.DeviceID + ":" + num(t.Share, 2)
 		}
-		return fmt.Sprintf("%s id=%s started=%s ended=%s litres=%.0f flow=%s kind=%s shares=%s outlet=%s inlet_drop=%s"+
-			" energy=%s hb=%s reliable=%v reasons=%s masked=%v seq=%d-%d",
-			e.Type, d.DrawID, ts(d.StartedAt), ts(d.EndedAt), d.Litres, num(d.FlowLPerMin, 1), d.Kind,
-			strings.Join(shares, ","), num(d.OutletPeakC, 1), num(d.InletDropC, 1), num(d.EnergyKWh, 2),
-			num(d.HeatBalanceL, 1), d.HeatBalanceReliable, reasons(d.Reasons), d.MaskedByReheat, d.From.Seq, d.To.Seq)
+		return fmt.Sprintf("%s id=%s ended=%s shares=%s outlet=%s inlet_drop=%s energy=%s hb=%s reliable=%v reasons=%s masked=%v",
+			e.Type, d.DrawID, ts(d.EndedAt), strings.Join(shares, ","), num(d.OutletPeakC, 1), num(d.InletDropC, 1),
+			num(d.EnergyKWh, 2), num(d.HeatBalanceL, 1), d.HeatBalanceReliable, reasons(d.Reasons), d.MaskedByReheat)
 	case e.Flow != nil:
 		f := e.Flow
 		return fmt.Sprintf("%s since=%s last=%s litres=%.0f flow=%.2f", e.Type, ts(f.Since), ts(f.Last), f.Litres, f.FlowLPerMin)
@@ -198,12 +200,13 @@ func jt(t *time.Time) *string {
 }
 
 type eventOut struct {
-	Type  string        `json:"type"`
-	At    string        `json:"at"`
-	Draw  *activeOut    `json:"draw,omitempty"`
-	Ended *endedOut     `json:"draw_ended,omitempty"`
-	Flow  *flowOut      `json:"flow,omitempty"`
-	Tank  *tankEventOut `json:"tank,omitempty"`
+	Type     string        `json:"type"`
+	At       string        `json:"at"`
+	Draw     *activeOut    `json:"draw,omitempty"`
+	Ended    *endedOut     `json:"draw_ended,omitempty"`
+	Balanced *balancedOut  `json:"draw_balanced,omitempty"`
+	Flow     *flowOut      `json:"flow,omitempty"`
+	Tank     *tankEventOut `json:"tank,omitempty"`
 }
 
 type activeOut struct {
@@ -220,15 +223,26 @@ type refOut struct {
 	Seq           uint64 `json:"seq"`
 }
 
+// endedOut is draw_ended: the meter's draw. The balance fields are
+// absent (draw_balanced carries them), not null.
 type endedOut struct {
+	DrawID      string `json:"draw_id"`
+	StartedAt   string `json:"started_at"`
+	EndedAt     string `json:"ended_at"`
+	DurationS   *jnum  `json:"duration_s"`
+	Litres      *jnum  `json:"litres"`
+	VolumeKind  string `json:"volume_kind"`
+	FlowLPerMin *jnum  `json:"flow_l_min"`
+	Kind        string `json:"kind"`
+	MeterFrom   refOut `json:"meter_from"`
+	MeterTo     refOut `json:"meter_to"`
+}
+
+// balancedOut is draw_balanced: the attribution, with draw_ended's draw_id
+// and an identical ended_at.
+type balancedOut struct {
 	DrawID              string     `json:"draw_id"`
-	StartedAt           string     `json:"started_at"`
 	EndedAt             string     `json:"ended_at"`
-	DurationS           *jnum      `json:"duration_s"`
-	Litres              *jnum      `json:"litres"`
-	VolumeKind          string     `json:"volume_kind"`
-	FlowLPerMin         *jnum      `json:"flow_l_min"`
-	Kind                string     `json:"kind"`
 	Tanks               []shareOut `json:"tanks"`
 	OutletPeakC         *jnum      `json:"outlet_peak_c"`
 	InletDropC          *jnum      `json:"inlet_drop_c"`
@@ -237,8 +251,6 @@ type endedOut struct {
 	HeatBalanceReliable bool       `json:"heat_balance_reliable"`
 	Reasons             []string   `json:"reasons"`
 	MaskedByReheat      bool       `json:"masked_by_reheat"`
-	MeterFrom           refOut     `json:"meter_from"`
-	MeterTo             refOut     `json:"meter_to"`
 }
 
 type shareOut struct {
@@ -294,11 +306,15 @@ func flowJSON(f *engine.Flow) *flowOut {
 func eventJSON(e engine.Event) eventOut {
 	out := eventOut{Type: string(e.Type), At: ts(e.At), Draw: activeJSON(e.Draw), Flow: flowJSON(e.Flow)}
 	if d := e.Ended; d != nil {
-		x := &endedOut{DrawID: d.DrawID, StartedAt: ts(d.StartedAt), EndedAt: ts(d.EndedAt), DurationS: jv(d.DurationS),
+		out.Ended = &endedOut{DrawID: d.DrawID, StartedAt: ts(d.StartedAt), EndedAt: ts(d.EndedAt), DurationS: jv(d.DurationS),
 			Litres: jv(d.Litres), VolumeKind: d.VolumeKind, FlowLPerMin: jn(d.FlowLPerMin), Kind: string(d.Kind),
+			MeterFrom: ref(d.From), MeterTo: ref(d.To)}
+	}
+	if d := e.Balanced; d != nil {
+		x := &balancedOut{DrawID: d.DrawID, EndedAt: ts(d.EndedAt),
 			OutletPeakC: jn(d.OutletPeakC), InletDropC: jn(d.InletDropC), EnergyKWh: jn(d.EnergyKWh),
 			HeatBalanceL: jn(d.HeatBalanceL), HeatBalanceReliable: d.HeatBalanceReliable, Reasons: []string{},
-			MaskedByReheat: d.MaskedByReheat, MeterFrom: ref(d.From), MeterTo: ref(d.To)}
+			MaskedByReheat: d.MaskedByReheat}
 		for _, t := range d.Tanks {
 			x.Tanks = append(x.Tanks, shareOut{DeviceID: t.DeviceID, Share: jn(t.Share), Litres: jn(t.Litres),
 				OutletPeakC: jn(t.OutletPeakC), InletDropC: jn(t.InletDropC)})
@@ -306,7 +322,7 @@ func eventJSON(e engine.Event) eventOut {
 		for _, r := range d.Reasons {
 			x.Reasons = append(x.Reasons, string(r))
 		}
-		out.Ended = x
+		out.Balanced = x
 	}
 	if t := e.Tank; t != nil {
 		out.Tank = &tankEventOut{DeviceID: t.DeviceID, State: string(t.State), Prev: string(t.Prev),

@@ -148,6 +148,9 @@ func systemFrom(b []byte) (System, error) {
 		StartTime *string `json:"start_time"`
 		Reason    string  `json:"reason"`
 		Source    string  `json:"source"`
+		Config    *struct {
+			HeartbeatMS *int64 `json:"heartbeat_ms"`
+		} `json:"config"`
 	}
 	if err := json.Unmarshal(raw, &w); err != nil {
 		return System{}, err
@@ -185,5 +188,8 @@ func systemFrom(b []byte) (System, error) {
 		s.StartTime = &t
 	}
 	s.Event, s.Ready, s.UptimeS, s.Reason, s.Source = w.Event, w.Ready, w.UptimeS, w.Reason, w.Source
+	if w.Config != nil {
+		s.HeartbeatMS = w.Config.HeartbeatMS
+	}
 	return s, nil
 }

@@ -20,16 +20,17 @@ type Config struct {
 	// KWhPerLitreK: water's heat capacity, c (4.186/3600 kWh per L·K).
 	KWhPerLitreK float64
 	// ShareSettle: the share sweep is each tank's first sweep at or after
-	// the last litre + ShareSettle (60 s). Shares, outlet peaks and inlet
-	// drops come from it. Long enough for the probes' 1–43 s lag; short
-	// enough that heat moving between the tanks after the draw (the left
-	// recovering while the right keeps falling) hasn't skewed the split.
+	// the last litre + ShareSettle (60 s): long enough for the probes' 1–43
+	// s lag. Outlet peaks and inlet drops come from it, the draw's end is
+	// given once every tank has it (StageEnded), and the shares fall back
+	// to it when the balance sweep is cut short (shares_early).
 	ShareSettle time.Duration
 	// BalanceSettle: the balance sweep is each tank's first sweep at or
 	// after the last litre + BalanceSettle (8 min), at least ShareSettle.
-	// The energy used and the heat-balance volume come from it: the right
-	// tank's lower probe keeps falling for minutes after a big draw, so
-	// the total heat lost reads short until then.
+	// The shares, the energy used and the heat-balance volume come from
+	// it: the right tank's lower probe keeps falling for minutes after a
+	// big draw, so the heat lost reads short (and the split wrong) until
+	// then.
 	BalanceSettle time.Duration
 	// MaxSweepGap: a tank whose before sweep is older than this before the
 	// first litre, or whose share or balance sweep comes more than this
@@ -44,14 +45,21 @@ type Config struct {
 	// draw (before sweep to balance sweep) gained heat, so a reheat masked
 	// the draw (0.05 kWh, about a litre's worth; 0 means any rise).
 	GainKWh float64
-	// ThermoclineC, GapLowMM and GapHighMM: at the before sweep, a tank
-	// whose probe at GapLowMM reads below ThermoclineC while its probe at
-	// GapHighMM reads at or above it has its cold layer between the two
-	// probes, where the profile can't see it move (T_min 40 °C, P2 400 mm,
-	// P3 825 mm: a gap of about 57 L).
+	// ThermoclineC and Gaps: at the before sweep, a tank whose Low probe
+	// reads below ThermoclineC while its High probe reads at or above it
+	// has its cold layer between the two, where the profile can't see it
+	// move (T_min 40 °C; lower, 400 mm, to middle, 825 mm: a gap of about
+	// 71 L in the 460 mm bore). Every pair in Gaps is checked.
 	ThermoclineC float64
-	GapLowMM     float64
-	GapHighMM    float64
+	Gaps         []Gap
+}
+
+// Gap names two probes by position (tanktemp's sensor positions, such as
+// "lower" and "middle"), Low below High. Positions, not heights: a height
+// re-measured by a millimetre must not silently stop the check. The engine
+// checks that every tank has both positions.
+type Gap struct {
+	Low, High string
 }
 
 // Validate reports the problems with c, or nil.
@@ -99,8 +107,18 @@ func (c Config) Validate() error {
 	if finite("ThermoclineC", c.ThermoclineC) && !(c.ThermoclineC > c.ColdC) {
 		errs = append(errs, fmt.Errorf("ThermoclineC %v: must be above ColdC %v", c.ThermoclineC, c.ColdC))
 	}
-	if finite("GapLowMM", c.GapLowMM) && finite("GapHighMM", c.GapHighMM) && !(c.GapLowMM > 0 && c.GapHighMM > c.GapLowMM) {
-		errs = append(errs, fmt.Errorf("GapLowMM %v, GapHighMM %v: must be > 0 with GapHighMM above GapLowMM", c.GapLowMM, c.GapHighMM))
+	if len(c.Gaps) == 0 {
+		errs = append(errs, errors.New("no Gaps set: at least one pair of gap probes is needed"))
+	}
+	seenGap := map[Gap]bool{}
+	for _, g := range c.Gaps {
+		if g.Low == "" || g.High == "" || g.Low == g.High {
+			errs = append(errs, fmt.Errorf("the pair %q–%q in Gaps must name two different probe positions", g.Low, g.High))
+		}
+		if seenGap[g] {
+			errs = append(errs, fmt.Errorf("the pair %q–%q listed twice in Gaps", g.Low, g.High))
+		}
+		seenGap[g] = true
 	}
 	if len(errs) > 0 {
 		return fmt.Errorf("draw config: %w", errors.Join(errs...))

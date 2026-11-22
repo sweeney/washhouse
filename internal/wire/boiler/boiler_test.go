@@ -88,7 +88,7 @@ func TestDecodeSystemHeartbeat(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := System{Shape: ShapeStatus, Event: SystemHeartbeat, Timestamp: ts("2001-01-01T12:15:00Z"),
-		HW: On, CH: Off, Ready: bp(true), UptimeS: i64(900), StartTime: tp("2001-01-01T12:00:00Z")}
+		HW: On, CH: Off, Ready: bp(true), UptimeS: i64(900), StartTime: tp("2001-01-01T12:00:00Z"), HeartbeatMS: i64(900000)}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %+v\nwant %+v", got, want)
 	}
@@ -176,5 +176,40 @@ func TestSwitchString(t *testing.T) {
 	var zero Switch
 	if zero != Unknown {
 		t.Error("zero Switch is not Unknown")
+	}
+}
+
+// A heartbeat without its config block (the fixtures keep only the state
+// fields) has no interval; one that isn't an integer is an error.
+func TestDecodeSystemHeartbeatInterval(t *testing.T) {
+	got, err := DecodeSystem([]byte(`{"status":{"event":"HEARTBEAT","ch":"OFF","hw":"OFF","ready":true,"timestamp":"2001-01-01T12:15:00Z"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.HeartbeatMS != nil {
+		t.Errorf("heartbeat_ms %v without a config block, want nil", *got.HeartbeatMS)
+	}
+	if _, err := DecodeSystem([]byte(strings.Replace(heartbeat, `"heartbeat_ms":900000`, `"heartbeat_ms":"15m"`, 1))); err == nil {
+		t.Error("heartbeat_ms as a string: no error")
+	}
+}
+
+// ReadyHeartbeat is the one rule for whether a system message says what HW
+// and CH are: a HEARTBEAT with ready true.
+func TestReadyHeartbeat(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		s    System
+		want bool
+	}{
+		{"ready heartbeat", System{Shape: ShapeStatus, Event: SystemHeartbeat, Ready: bp(true)}, true},
+		{"not ready", System{Shape: ShapeStatus, Event: SystemHeartbeat, Ready: bp(false)}, false},
+		{"no ready", System{Shape: ShapeStatus, Event: SystemHeartbeat}, false},
+		{"startup", System{Shape: ShapeStatus, Event: SystemStartup, Ready: bp(true)}, false},
+		{"reconnected", System{Shape: ShapeSystem, Event: SystemReconnected}, false},
+	} {
+		if got := tc.s.ReadyHeartbeat(); got != tc.want {
+			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

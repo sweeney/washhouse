@@ -15,7 +15,6 @@ import (
 	"github.com/sweeney/washhouse/internal/replay"
 	"github.com/sweeney/washhouse/internal/tank"
 	"github.com/sweeney/washhouse/internal/vessel"
-	"github.com/sweeney/washhouse/internal/wire/boiler"
 )
 
 // The recorded fixtures (testdata/fixtures, real data shifted to a fake
@@ -91,7 +90,7 @@ func replayFixture(t *testing.T, name string, cfg Config) ([]Attribution, []mete
 	if err != nil {
 		t.Fatal(err)
 	}
-	var out []Attribution
+	var rs []Result
 	var draws []meter.Draw
 	var last time.Time
 	for _, m := range msgs {
@@ -101,18 +100,19 @@ func replayFixture(t *testing.T, name string, cfg Config) ([]Attribution, []mete
 			if err != nil {
 				t.Fatal(err)
 			}
-			out = append(out, at.Sweep(s)...)
+			rs = append(rs, at.Sweep(s)...)
 			last = s.At
 		case m.Meter != nil:
 			for _, e := range mc.Feed(*m.Meter) {
 				if e.Type == meter.EventDrawEnded {
 					draws = append(draws, *e.Draw)
 				}
-				out = append(out, at.Meter(e)...)
+				rs = append(rs, at.Meter(e)...)
 			}
 		case m.BoilerEvent != nil:
 			at.HW(m.BoilerEvent.Timestamp, m.BoilerEvent.HW)
-		case m.BoilerSystem != nil && m.BoilerSystem.IsHeartbeat() && m.BoilerSystem.HW != boiler.Unknown:
+		case m.BoilerSystem != nil && m.BoilerSystem.ReadyHeartbeat():
+			// the engine's rule (boiler.System.ReadyHeartbeat)
 			at.HW(m.BoilerSystem.Timestamp, m.BoilerSystem.HW)
 		}
 	}
@@ -120,9 +120,23 @@ func replayFixture(t *testing.T, name string, cfg Config) ([]Attribution, []mete
 		if e.Type == meter.EventDrawEnded {
 			draws = append(draws, *e.Draw)
 		}
-		out = append(out, at.Meter(e)...)
+		rs = append(rs, at.Meter(e)...)
 	}
-	out = append(out, at.Tick(last.Add(time.Hour))...)
+	rs = append(rs, at.Tick(last.Add(time.Hour))...)
+	// Every draw is ended, then balanced, once each.
+	seen := map[string]Stage{}
+	var out []Attribution
+	for _, r := range rs {
+		id := r.Draw.ID
+		if r.Stage == StageBalanced {
+			id = r.Attribution.Draw.ID
+			out = append(out, r.Attribution)
+		}
+		if r.Stage != seen[id]+1 {
+			t.Fatalf("%s: draw %s stage %d after %d", name, id, r.Stage, seen[id])
+		}
+		seen[id] = r.Stage
+	}
 	if len(out) != len(draws) {
 		t.Fatalf("%s: %d attributions for %d draws", name, len(out), len(draws))
 	}
@@ -139,7 +153,7 @@ func describe(t0 time.Time, a Attribution) string {
 	}
 	for _, x := range a.Tanks {
 		side := x.DeviceID[strings.LastIndex(x.DeviceID, "_")+1:]
-		fmt.Fprintf(&b, " | %s share %s lost %s/%s peak %s drop %s", side[:1], fm(x.Share, "%.2f"), fm(x.LostKWh, "%.2f"), fm(x.SettledLostKWh, "%.2f"), fm(x.OutletPeakC, "%.1f"), fm(x.InletDropC, "%.1f"))
+		fmt.Fprintf(&b, " | %s share %s lost %s/%s peak %s drop %s", side[:1], fm(x.Share, "%.2f"), fm(x.EarlyLostKWh, "%.2f"), fm(x.SettledLostKWh, "%.2f"), fm(x.OutletPeakC, "%.1f"), fm(x.InletDropC, "%.1f"))
 	}
 	fmt.Fprintf(&b, " | out %s E %s reliable %v %v", fm(a.OutletC, "%.1f"), fm(a.EnergyKWh, "%.2f"), a.Reliable, a.Reasons)
 	return b.String()
@@ -190,7 +204,9 @@ func drawOf(t *testing.T, as []Attribution, litres float64) Attribution {
 }
 
 // The 50 L shower from a layered tank: the heat balance is within 10% and
-// reliable, and the right tank supplied most of it. The 15 L draw after it
+// reliable, and the right tank supplied most of it: 0.89 from the balance
+// sweep (tanktemp's review of PR #2 found the same, from the bulk energy at
+// +60 s; the +60 s full estimate read 0.76 on a picture 26% short). The 15 L draw after it
 // is unreliable: its cold layer sat in the gap between P2 and P3.
 func TestFixtureShowerLayered(t *testing.T) {
 	as, _ := replayFixture(t, "shower-layered", testConfig())
@@ -198,8 +214,8 @@ func TestFixtureShowerLayered(t *testing.T) {
 	if sh.HeatBalanceL == nil || *sh.HeatBalanceL < 45 || *sh.HeatBalanceL > 55 || !sh.Reliable {
 		t.Errorf("shower: heat balance %s L reliable %v %v, want 45–55 L and reliable", fm(sh.HeatBalanceL, "%.1f"), sh.Reliable, sh.Reasons)
 	}
-	if r := tankOf(t, sh, right); r.Share == nil || *r.Share < 0.65 || *r.Share > 0.85 {
-		t.Errorf("shower: right share %s, want 0.65–0.85", fm(r.Share, "%.2f"))
+	if r := tankOf(t, sh, right); r.Share == nil || *r.Share < 0.85 || *r.Share > 0.93 {
+		t.Errorf("shower: right share %s, want 0.85–0.93", fm(r.Share, "%.3f"))
 	}
 	after := drawOf(t, as, 15)
 	if after.Reliable || !slices.Contains(after.Reasons, ReasonThermocline) || !slices.Contains(after.Reasons, ReasonSmall) {
@@ -236,17 +252,18 @@ func TestFixtureTapsSmall(t *testing.T) {
 }
 
 // Every attribution in every fixture: shares in [0, 1] summing to 1 where
-// known, and a reliable balance only on a draw of MinReliableLitres or
-// more with HW off. The right tank's shares on multi-litre draws are
-// logged as a distribution.
+// known, unknown when masked (a reheat, or HW unknown), and a reliable
+// balance only on a draw of MinReliableLitres or more with HW off. The
+// right tank's shares on multi-litre draws are logged as a distribution.
 //
-// The band: on draws of 10 L or more with HW off the right tank's share
-// is 0.65–0.85 (the three in the fixtures read 0.73–0.76, against the
-// 0.77 of the first calibration). Below 10 L the split scatters from 0 to
-// 1: the inlet probe's transient dip and the heat-sunk outlet probe
-// warming to its true reading are as large as the draw. During an HW
-// reheat it follows whichever coil is heating (the 87 L bath read 0.43),
-// so masked draws are left out of the band.
+// The band: on unmasked draws of 10 L or more, from the balance sweep, the
+// right tank's share is 0.85–0.95 (the 50 L shower 0.89, the 12 L evening
+// tap 0.90). A draw whose cold layer sat in a gap (thermocline_gap) is left
+// out: the profile can't see that layer move, so its losses, and the split,
+// are wrong (the 15 L straight after the shower reads 1.00). Below 10 L the
+// split scatters from 0 to 1: the inlet probe's transient dip and the
+// heat-sunk outlet probe warming to its true reading are as large as the
+// draw.
 func TestFixtureShareDistribution(t *testing.T) {
 	cfg := testConfig()
 	var shares []float64
@@ -270,19 +287,27 @@ func TestFixtureShareDistribution(t *testing.T) {
 			if known > 0 && (known != len(a.Tanks) || sum < 1-1e-9 || sum > 1+1e-9) {
 				t.Errorf("%s %v L: %d of %d shares known, summing to %v", name, a.Draw.Litres, known, len(a.Tanks), sum)
 			}
+			masked := a.MaskedByReheat || slices.Contains(a.Reasons, ReasonHWUnknown)
+			if masked && known != 0 {
+				t.Errorf("%s %v L: masked (%v) with shares", name, a.Draw.Litres, a.Reasons)
+			}
 			r := tankOf(t, a, right)
 			if a.Draw.Litres >= 2 && r.Share != nil {
 				shares = append(shares, *r.Share)
 			}
-			if a.Draw.Litres >= 10 && !slices.Contains(a.Reasons, ReasonHWOn) {
-				if r.Share == nil || *r.Share < 0.65 || *r.Share > 0.85 {
-					t.Errorf("%s %v L: right share %s, want 0.65–0.85", name, a.Draw.Litres, fm(r.Share, "%.2f"))
+			if a.Draw.Litres >= 10 && !masked {
+				t.Logf("%s %v L: right share %s %v", name, a.Draw.Litres, fm(r.Share, "%.3f"), a.Reasons)
+				if slices.Contains(a.Reasons, ReasonThermocline) {
+					continue
+				}
+				if r.Share == nil || *r.Share < 0.85 || *r.Share > 0.95 {
+					t.Errorf("%s %v L: right share %s, want 0.85–0.95", name, a.Draw.Litres, fm(r.Share, "%.3f"))
 				}
 				banded++
 			}
 		}
 	}
-	if banded < 3 {
+	if banded < 2 {
 		t.Errorf("only %d draws in the share band", banded)
 	}
 	sort.Float64s(shares)

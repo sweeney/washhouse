@@ -12,7 +12,8 @@
 //
 // After the last recording, if a draw is still running or waiting for its
 // attribution, event time is moved on far enough for it to end, so every
-// draw gets its draw_ended. The last state line is printed before that.
+// draw gets its draw_ended and its draw_balanced. The last state line is
+// printed before that.
 //
 // It is the tuning and test tool PLAN.md describes, not the service: it
 // reads files and writes to stdout.

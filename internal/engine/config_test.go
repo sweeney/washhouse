@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sweeney/washhouse/internal/draw"
+	"github.com/sweeney/washhouse/internal/tank"
 	"github.com/sweeney/washhouse/internal/thermal"
 )
 
@@ -43,6 +45,21 @@ func TestConfigRefuses(t *testing.T) {
 		{"low hot water NaN", func(c *Config) { c.LowHotWaterL = math.NaN() }, "LowHotWaterL"},
 		{"low hot water inf", func(c *Config) { c.LowHotWaterL = math.Inf(1) }, "LowHotWaterL"},
 		{"recent draws", func(c *Config) { c.RecentDraws = 0 }, "RecentDraws"},
+		{"split length", func(c *Config) { c.OutletSplit = []float64{1} }, "OutletSplit"},
+		{"split negative", func(c *Config) { c.OutletSplit = []float64{1.2, -0.2} }, "OutletSplit"},
+		{"split NaN", func(c *Config) { c.OutletSplit = []float64{math.NaN(), 1} }, "OutletSplit"},
+		{"split sum", func(c *Config) { c.OutletSplit = []float64{0.2, 0.7} }, "OutletSplit"},
+		{"margin negative", func(c *Config) { c.LowHotWaterMarginL = -1 }, "LowHotWaterMarginL"},
+		{"margin inf", func(c *Config) { c.LowHotWaterMarginL = math.Inf(1) }, "LowHotWaterMarginL"},
+		{"heartbeat zero", func(c *Config) { c.BoilerHeartbeat = 0 }, "BoilerHeartbeat"},
+		{"missed heartbeats one", func(c *Config) { c.BoilerMissedHeartbeats = 1 }, "BoilerMissedHeartbeats"},
+		{"missed heartbeats NaN", func(c *Config) { c.BoilerMissedHeartbeats = math.NaN() }, "BoilerMissedHeartbeats"},
+		{"gap position missing", func(c *Config) { c.Draw.Gaps = []draw.Gap{{Low: "lower", High: "attic"}} }, "attic"},
+		{"gap position missing on one tank", func(c *Config) {
+			c.Tanks[1].Probes = append([]tank.ProbeConfig(nil), c.Tanks[1].Probes...)
+			c.Tanks[1].Probes[1].Position = "low"
+		}, "lower"},
+		{"gap upside down", func(c *Config) { c.Draw.Gaps = []draw.Gap{{Low: "middle", High: "lower"}} }, "below"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := planConfig()

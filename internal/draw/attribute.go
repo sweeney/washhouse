@@ -14,12 +14,17 @@ type Reason string
 // Reasons, in the order Attribute reports them.
 const (
 	// ReasonTankMissing: a tank had no usable before, share or balance
-	// sweep, so the split and the total are unknown.
+	// sweep, so the split (or, without a balance sweep, the total) is
+	// unknown.
 	ReasonTankMissing Reason = "tank_missing"
 	// ReasonHWOn: the programmer's HW was on at some point in the window
 	// (the cold inlet sits inside the coil zone, so a reheat warms the
 	// water a draw brings in).
 	ReasonHWOn Reason = "hw_on"
+	// ReasonHWUnknown: the programmer's HW was unknown at some moment of
+	// the window (including no HW input at all), so a reheat can't be ruled
+	// out. It counts as masking: the shares are left unknown.
+	ReasonHWUnknown Reason = "hw_unknown"
 	// ReasonGained: a tank's stored energy rose across the draw.
 	ReasonGained Reason = "tank_gained"
 	// ReasonSmall: fewer metered litres than MinReliableLitres.
@@ -33,6 +38,11 @@ const (
 	// ReasonInterrupted: the next draw began before the balance sweep, so
 	// the balance was cut short at the last sweep before it.
 	ReasonInterrupted Reason = "interrupted"
+	// ReasonSharesEarly: some tank had no uninterrupted balance sweep, so
+	// the shares come from the share sweep's losses, which read the split
+	// before the probes have settled (on the 50 L shower, 0.76 right against
+	// 0.89 settled).
+	ReasonSharesEarly Reason = "shares_early"
 	// ReasonNoLoss: the tanks lost no heat, so there is no split and no
 	// volume.
 	ReasonNoLoss Reason = "no_loss"
@@ -63,14 +73,16 @@ type Window struct {
 type TankAttribution struct {
 	DeviceID string
 	// Share is the tank's fraction of the metered litres, and Litres that
-	// fraction of them. Unknown if any tank is missing, or no tank lost
-	// heat.
+	// fraction of them. Unknown if any tank is missing, no tank lost heat,
+	// or the draw is masked (a reheat, or HW unknown).
 	Share  *float64
 	Litres *float64
-	// LostKWh is the stored energy lost from the before sweep to the share
-	// sweep (it can be negative: the tank gained); SettledLostKWh, to the
-	// balance sweep.
+	// The stored energy lost from the before sweep (it can be negative:
+	// the tank gained): EarlyLostKWh to the share sweep, SettledLostKWh to
+	// the balance sweep, and LostKWh the one the shares used (the balance
+	// sweep's, or the share sweep's with ReasonSharesEarly).
 	LostKWh        *float64
+	EarlyLostKWh   *float64
 	SettledLostKWh *float64
 	// OutletPeakC is the outlet probe's highest reading from the first
 	// litre to the share sweep: the true top temperature (at rest the
@@ -104,12 +116,15 @@ type Attribution struct {
 	// never negative, when the tanks gained heat overall.
 	HeatBalanceL *float64
 	// Reliable is true when Reasons is empty.
-	Reliable       bool
-	Reasons        []Reason
-	MaskedByReheat bool // ReasonHWOn or ReasonGained
+	Reliable bool
+	Reasons  []Reason
+	// MaskedByReheat: ReasonHWOn or ReasonGained, a reheat seen. The
+	// shares are also unknown with ReasonHWUnknown, a reheat not ruled out.
+	MaskedByReheat bool
 }
 
-// Attribute attributes draw d (ended) over cfg's tanks from w. It is pure.
+// Attribute attributes draw d (ended) over cfg's tanks from w (the package
+// doc says which sweep gives what, and why). It is pure.
 // cfg must validate.
 //
 // Each tank's sweeps are chosen so:
@@ -170,7 +185,7 @@ func Attribute(cfg Config, d meter.Draw, w Window) Attribution {
 			thermocline(cfg, s.before, &reasons)
 		}
 		if s.before != nil && s.share != nil {
-			ta.LostKWh = ptr(s.before.Estimate.KWh - s.share.Estimate.KWh)
+			ta.EarlyLostKWh = ptr(s.before.Estimate.KWh - s.share.Estimate.KWh)
 			ta.OutletPeakC = outletPeak(ss, d.Start, s.share.At)
 			ta.InletDropC = inletDrop(ss, s.before, s.share.At)
 			if ta.OutletPeakC != nil {
@@ -193,8 +208,28 @@ func Attribute(cfg Config, d meter.Draw, w Window) Attribution {
 		reasons.add(ReasonTankMissing)
 	}
 
+	// The shares' losses: to the balance sweep when every tank has one and
+	// the next draw didn't cut it; else to the share sweep (shares_early).
+	settled := !missing && !reasons[ReasonInterrupted]
+	for _, ta := range a.Tanks {
+		if ta.SettledLostKWh == nil {
+			settled = false
+		}
+	}
+	for k := range a.Tanks {
+		if settled {
+			a.Tanks[k].LostKWh = a.Tanks[k].SettledLostKWh
+		} else {
+			a.Tanks[k].LostKWh = a.Tanks[k].EarlyLostKWh
+		}
+	}
+	if !missing && !settled {
+		reasons.add(ReasonSharesEarly)
+	}
+
 	// Shares: each tank's litres are its heat lost over what a litre from
 	// its own outlet carries; a tank that gained supplied none measurable.
+	var shares []float64
 	if !missing {
 		litres := make([]float64, len(a.Tanks))
 		sum := 0.0
@@ -207,11 +242,10 @@ func Attribute(cfg Config, d meter.Draw, w Window) Attribution {
 		}
 		if sum > 0 {
 			out := 0.0
+			shares = make([]float64, len(a.Tanks))
 			for k := range a.Tanks {
-				sh := litres[k] / sum
-				a.Tanks[k].Share = ptr(sh)
-				a.Tanks[k].Litres = ptr(sh * d.Litres)
-				out += sh * *a.Tanks[k].PeakUsedC
+				shares[k] = litres[k] / sum
+				out += shares[k] * *a.Tanks[k].PeakUsedC
 			}
 			a.OutletC = ptr(out)
 		} else {
@@ -237,15 +271,22 @@ func Attribute(cfg Config, d meter.Draw, w Window) Attribution {
 			reasons.add(ReasonGained)
 		}
 	}
-	if hwOn(w.HW, windowStart(sels), windowEnd(sels)) {
-		reasons.add(ReasonHWOn)
+	if on, unknown := hwIn(w.HW, windowStart(sels), windowEnd(sels)); on || unknown {
+		if on {
+			reasons.add(ReasonHWOn)
+		}
+		if unknown {
+			reasons.add(ReasonHWUnknown)
+		}
 	}
 	if d.Litres < cfg.MinReliableLitres {
 		reasons.add(ReasonSmall)
 	}
 	if haveAll {
 		a.EnergyKWh = ptr(total)
-		if a.OutletC != nil && *a.OutletC > cfg.ColdC {
+		if total <= 0 {
+			a.HeatBalanceL = ptr(0)
+		} else if a.OutletC != nil && *a.OutletC > cfg.ColdC {
 			a.HeatBalanceL = ptr(max(0, total/(cfg.KWhPerLitreK*(*a.OutletC-cfg.ColdC))))
 		}
 	}
@@ -253,36 +294,53 @@ func Attribute(cfg Config, d meter.Draw, w Window) Attribution {
 	a.Reasons = reasons.list()
 	a.Reliable = len(a.Reasons) == 0
 	a.MaskedByReheat = reasons[ReasonHWOn] || reasons[ReasonGained]
+	// A reheat (or HW unknown, which can't rule one out) heats whichever
+	// tank its coil is in, so the split would measure the coil, not the
+	// pipework: the shares are left unknown. The outlet and the balance
+	// still use the computed split, and are unreliable.
+	if shares != nil && !a.MaskedByReheat && !reasons[ReasonHWUnknown] {
+		for k := range a.Tanks {
+			a.Tanks[k].Share = ptr(shares[k])
+			a.Tanks[k].Litres = ptr(shares[k] * d.Litres)
+		}
+	}
 	return a
 }
 
-// thermocline flags a before sweep whose cold layer sits between the gap
-// probes: the low one below ThermoclineC, the high one at or above it.
+// thermocline flags a before sweep whose cold layer sits between a pair
+// of gap probes: the low one below ThermoclineC, the high one at or above
+// it.
 func thermocline(cfg Config, s *tank.Sweep, r *reasonSet) {
-	lo, hi := readingAt(s, cfg.GapLowMM), readingAt(s, cfg.GapHighMM)
-	switch {
-	case lo == nil || hi == nil:
-		r.add(ReasonGapUnread)
-	case *lo < cfg.ThermoclineC && *hi >= cfg.ThermoclineC:
-		r.add(ReasonThermocline)
+	for _, g := range cfg.Gaps {
+		lo, hi := readingAt(s, g.Low), readingAt(s, g.High)
+		switch {
+		case lo == nil || hi == nil:
+			r.add(ReasonGapUnread)
+		case *lo < cfg.ThermoclineC && *hi >= cfg.ThermoclineC:
+			r.add(ReasonThermocline)
+		}
 	}
 }
 
-// readingAt is the usable reading of the probe at heightMM, or nil.
-func readingAt(s *tank.Sweep, heightMM float64) *float64 {
+// readingAt is the usable reading of the probe at position, or nil.
+func readingAt(s *tank.Sweep, position string) *float64 {
 	for _, p := range s.Probes {
-		if p.HeightMM == heightMM && p.TempC != nil && !p.Suspect {
+		if p.Position == position && p.TempC != nil && !p.Suspect {
 			return p.TempC
 		}
 	}
 	return nil
 }
 
-// hwOn says whether HW was on at any moment of [from, to]: on as of from, or
-// switched on after it and by to. Unknown is not on.
-func hwOn(hw []Programmer, from, to time.Time) bool {
+// hwIn says whether HW was on, and whether it was unknown, at any moment
+// of [from, to]. Before the first state it is unknown. With no window (a
+// tank missing its sweeps) neither is judged.
+func hwIn(hw []Programmer, from, to time.Time) (on, unknown bool) {
 	if from.IsZero() || to.IsZero() {
-		return false
+		return false, false
+	}
+	if len(hw) == 0 || hw[0].At.After(from) {
+		unknown = true
 	}
 	for i, p := range hw {
 		if p.At.After(to) {
@@ -290,15 +348,18 @@ func hwOn(hw []Programmer, from, to time.Time) bool {
 		}
 		// p is in force somewhere in [from, to] unless the next change
 		// comes at or before from.
-		if (i == len(hw)-1 || hw[i+1].At.After(from)) && p.HW == boiler.On {
-			return true
+		if i == len(hw)-1 || hw[i+1].At.After(from) {
+			switch p.HW {
+			case boiler.On:
+				on = true
+			case boiler.Unknown:
+				unknown = true
+			}
 		}
 	}
-	return false
+	return on, unknown
 }
 
-// windowStart is the earliest before sweep, windowEnd the latest balance
-// sweep (or share sweep): the span a reheat would mask.
 // gained is the heat a tank gained from its before sweep to its balance
 // sweep. It compares the bulk probes' energy when both sweeps carry it: the
 // full estimate "gains" when the heat-sunk outlet probe reads true during a
@@ -313,6 +374,8 @@ func gained(s selection, ta TankAttribution) *float64 {
 	return nil
 }
 
+// windowStart is the earliest before sweep, windowEnd the latest balance
+// sweep (or share sweep): the span a reheat would mask.
 func windowStart(sels []selection) time.Time {
 	var t time.Time
 	for _, s := range sels {
@@ -350,7 +413,7 @@ func (r *reasonSet) add(x Reason) {
 	(*r)[x] = true
 }
 
-var reasonOrder = []Reason{ReasonTankMissing, ReasonHWOn, ReasonGained, ReasonSmall, ReasonThermocline, ReasonGapUnread, ReasonInterrupted, ReasonNoLoss}
+var reasonOrder = []Reason{ReasonTankMissing, ReasonHWOn, ReasonHWUnknown, ReasonGained, ReasonSmall, ReasonThermocline, ReasonGapUnread, ReasonInterrupted, ReasonSharesEarly, ReasonNoLoss}
 
 func (r reasonSet) list() []Reason {
 	var out []Reason

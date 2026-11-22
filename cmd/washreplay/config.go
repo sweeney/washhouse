@@ -26,19 +26,23 @@ import (
 // must be written as one, and a duration is a Go duration string ("60s").
 // Values shared by several packages are given once: cold_c and the heat
 // capacity (estimate and draw), and the tanks (their probes, the loss
-// fit's priors, and the order every list uses).
+// fit's priors, their share of the merged outlet, and the order every list
+// uses).
 type fileConfig struct {
-	AmbientTopic string       `json:"ambient_topic"`
-	LowHotWaterL float64      `json:"low_hot_water_l"`
-	RecentDraws  int          `json:"recent_draws"`
-	ColdC        float64      `json:"cold_c"`
-	KWhPerLitreK float64      `json:"heat_capacity_kwh_per_litre_k"`
-	Vessel       vesselFile   `json:"vessel"`
-	Estimate     estimateFile `json:"estimate"`
-	Tanks        []tankFile   `json:"tanks"`
-	Meter        meterFile    `json:"meter"`
-	Thermal      thermalFile  `json:"thermal"`
-	Draw         drawFile     `json:"draw"`
+	AmbientTopic           string       `json:"ambient_topic"`
+	LowHotWaterL           float64      `json:"low_hot_water_l"`
+	LowHotWaterMarginL     float64      `json:"low_hot_water_margin_l"`
+	BoilerHeartbeat        duration     `json:"boiler_heartbeat"`
+	BoilerMissedHeartbeats float64      `json:"boiler_missed_heartbeats"`
+	RecentDraws            int          `json:"recent_draws"`
+	ColdC                  float64      `json:"cold_c"`
+	KWhPerLitreK           float64      `json:"heat_capacity_kwh_per_litre_k"`
+	Vessel                 vesselFile   `json:"vessel"`
+	Estimate               estimateFile `json:"estimate"`
+	Tanks                  []tankFile   `json:"tanks"`
+	Meter                  meterFile    `json:"meter"`
+	Thermal                thermalFile  `json:"thermal"`
+	Draw                   drawFile     `json:"draw"`
 }
 
 type vesselFile struct {
@@ -62,6 +66,7 @@ type tankFile struct {
 	TrustSuspect bool        `json:"trust_suspect"`
 	PriorUAWPerK float64     `json:"prior_ua_w_per_k"`
 	PriorHours   float64     `json:"prior_hours"`
+	OutletSplit  float64     `json:"outlet_split"`
 	Probes       []probeFile `json:"probes"`
 }
 
@@ -104,14 +109,19 @@ type thermalFile struct {
 }
 
 type drawFile struct {
-	ShareSettle       duration `json:"share_settle"`
-	BalanceSettle     duration `json:"balance_settle"`
-	MaxSweepGap       duration `json:"max_sweep_gap"`
-	MinReliableLitres float64  `json:"min_reliable_litres"`
-	GainKWh           float64  `json:"gain_kwh"`
-	ThermoclineC      float64  `json:"thermocline_c"`
-	GapLowMM          float64  `json:"gap_low_mm"`
-	GapHighMM         float64  `json:"gap_high_mm"`
+	ShareSettle       duration  `json:"share_settle"`
+	BalanceSettle     duration  `json:"balance_settle"`
+	MaxSweepGap       duration  `json:"max_sweep_gap"`
+	MinReliableLitres float64   `json:"min_reliable_litres"`
+	GainKWh           float64   `json:"gain_kwh"`
+	ThermoclineC      float64   `json:"thermocline_c"`
+	Gaps              []gapFile `json:"gaps"`
+}
+
+// gapFile is a thermocline gap: two probe positions, low below high.
+type gapFile struct {
+	Low  string `json:"low"`
+	High string `json:"high"`
 }
 
 // duration is a time.Duration written as a Go duration string.
@@ -335,11 +345,15 @@ func (fc fileConfig) engine() (engine.Config, error) {
 			MinReliableLitres: fc.Draw.MinReliableLitres,
 			GainKWh:           fc.Draw.GainKWh,
 			ThermoclineC:      fc.Draw.ThermoclineC,
-			GapLowMM:          fc.Draw.GapLowMM,
-			GapHighMM:         fc.Draw.GapHighMM,
 		},
-		LowHotWaterL: fc.LowHotWaterL,
-		RecentDraws:  fc.RecentDraws,
+		LowHotWaterL:           fc.LowHotWaterL,
+		LowHotWaterMarginL:     fc.LowHotWaterMarginL,
+		BoilerHeartbeat:        time.Duration(fc.BoilerHeartbeat),
+		BoilerMissedHeartbeats: fc.BoilerMissedHeartbeats,
+		RecentDraws:            fc.RecentDraws,
+	}
+	for _, g := range fc.Draw.Gaps {
+		c.Draw.Gaps = append(c.Draw.Gaps, draw.Gap{Low: g.Low, High: g.High})
 	}
 	for _, r := range fc.Thermal.PowerExclude {
 		c.Thermal.PowerExclude = append(c.Thermal.PowerExclude, profile.Role(r))
@@ -352,6 +366,7 @@ func (fc fileConfig) engine() (engine.Config, error) {
 		c.Tanks = append(c.Tanks, tc)
 		c.Thermal.Tanks = append(c.Thermal.Tanks, thermal.TankConfig{DeviceID: t.DeviceID, PriorUAWPerK: t.PriorUAWPerK, PriorHours: t.PriorHours})
 		c.Draw.Tanks = append(c.Draw.Tanks, t.DeviceID)
+		c.OutletSplit = append(c.OutletSplit, t.OutletSplit)
 	}
 	return c, c.Validate()
 }

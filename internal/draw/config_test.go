@@ -20,8 +20,7 @@ func testConfig() Config {
 		MinReliableLitres: 20,
 		GainKWh:           0.05,
 		ThermoclineC:      40,
-		GapLowMM:          400,
-		GapHighMM:         825,
+		Gaps:              []Gap{{Low: "lower", High: "middle"}},
 	}
 }
 
@@ -49,8 +48,10 @@ func TestConfigRefuses(t *testing.T) {
 		{"gain negative", func(c *Config) { c.GainKWh = -0.1 }, "GainKWh"},
 		{"gain inf", func(c *Config) { c.GainKWh = math.Inf(1) }, "GainKWh"},
 		{"thermocline at cold", func(c *Config) { c.ThermoclineC = 10 }, "ThermoclineC"},
-		{"gap inverted", func(c *Config) { c.GapLowMM, c.GapHighMM = 825, 400 }, "Gap"},
-		{"gap zero", func(c *Config) { c.GapLowMM = 0 }, "Gap"},
+		{"no gaps", func(c *Config) { c.Gaps = nil }, "Gaps"},
+		{"gap position empty", func(c *Config) { c.Gaps = []Gap{{Low: "", High: "middle"}} }, "Gaps"},
+		{"gap one probe", func(c *Config) { c.Gaps = []Gap{{Low: "lower", High: "lower"}} }, "Gaps"},
+		{"gap twice", func(c *Config) { c.Gaps = append(c.Gaps, c.Gaps[0]) }, "twice"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := testConfig()

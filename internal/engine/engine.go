@@ -2,12 +2,14 @@ package engine
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
 	"github.com/sweeney/washhouse/internal/draw"
 	"github.com/sweeney/washhouse/internal/estimate"
 	"github.com/sweeney/washhouse/internal/meter"
+	"github.com/sweeney/washhouse/internal/profile"
 	"github.com/sweeney/washhouse/internal/tank"
 	"github.com/sweeney/washhouse/internal/thermal"
 	"github.com/sweeney/washhouse/internal/vessel"
@@ -20,13 +22,25 @@ import (
 type Engine struct {
 	cfg     Config
 	now     time.Time // event time: the latest any input carried
+	started time.Time // the first non-programmer input's time: silence is judged from no earlier
 	tanks   map[string]*tankSlot
 	order   []string
 	meter   *meter.Consumer
 	thermal *thermal.Tracker
 	attr    *draw.Attributor
+	est     *estimate.Estimator
 
-	hw, ch boiler.Switch
+	// The programmer: its switches, the time of the last input applied
+	// (a heartbeat, an event or a last will), the heartbeat interval, and
+	// whether silence has already made the switches unknown.
+	hw, ch     boiler.Switch
+	boilerSeen bool
+	boilerAt   time.Time
+	interval   time.Duration
+	silent     bool
+
+	held []meter.Draw // ended by the meter, draw_ended not yet given
+	low  *bool        // low_hot_water's held value; nil before it was judged
 
 	ambOK bool
 	ambAt time.Time
@@ -39,7 +53,7 @@ type Engine struct {
 
 	tanktemp TanktempStatus
 
-	recent []DrawEnded // a ring of the last RecentDraws, oldest first
+	recent []DrawRecord // a ring of the last RecentDraws, oldest first
 }
 
 // tankSlot is one cylinder's model and its latest sweep.
@@ -63,7 +77,7 @@ func New(cfg Config) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	e := &Engine{cfg: cfg, tanks: map[string]*tankSlot{}}
+	e := &Engine{cfg: cfg, tanks: map[string]*tankSlot{}, est: est, interval: cfg.BoilerHeartbeat}
 	for _, tc := range cfg.Tanks {
 		m, err := tank.New(tc, est)
 		if err != nil {
@@ -86,6 +100,15 @@ func New(cfg Config) (*Engine, error) {
 
 // see moves event time forward to t.
 func (e *Engine) see(t time.Time) {
+	if e.started.IsZero() {
+		e.started = t
+	}
+	e.advance(t)
+}
+
+// advance moves event time on without starting the silence grace: a
+// programmer input's own time is old when it is a retained replay.
+func (e *Engine) advance(t time.Time) {
 	if t.After(e.now) {
 		e.now = t
 	}
@@ -108,7 +131,7 @@ func (e *Engine) TankState(st tanktemp.State) ([]Event, error) {
 		return nil, fmt.Errorf("engine: state from %q, which isn't configured", st.DeviceID)
 	}
 	if !st.ClockSynced || (slot.seen && !st.Timestamp.After(slot.last.At)) {
-		return nil, nil
+		return e.done(nil), nil
 	}
 	e.see(st.Timestamp)
 	// A draw that ended before this sweep is known before it is judged.
@@ -119,16 +142,24 @@ func (e *Engine) TankState(st tanktemp.State) ([]Event, error) {
 		slot.ok = false
 		slot.last = tank.Sweep{DeviceID: st.DeviceID, At: st.Timestamp, ClockSynced: st.ClockSynced,
 			ProbesTotal: len(st.Sensors), ProbesOK: usable(st, e.trust(st.DeviceID))}
-		return sorted(ev), err
+		return e.done(ev), err
 	}
 	slot.ok, slot.last = true, sw
 	tev, err := e.thermal.Sweep(sw)
 	if err != nil {
-		return sorted(ev), err // can't happen: the tanks are the same, by Validate
+		return e.done(ev), err // can't happen: the tanks are the same, by Validate
 	}
 	ev = e.thermalEvents(ev, tev)
 	ev = e.attributions(ev, e.attr.Sweep(sw))
-	return sorted(ev), nil
+	return e.done(ev), nil
+}
+
+// done finishes an input: the programmer's silence and low_hot_water are
+// judged at the new event time, and the events are sorted.
+func (e *Engine) done(ev []Event) []Event {
+	ev = e.boilerSilence(ev)
+	e.judgeLow()
+	return sorted(ev)
 }
 
 // usable counts the readings in st the model could use.
@@ -163,7 +194,7 @@ func (e *Engine) Meter(m tanktemp.Meter) []Event {
 		}
 	}
 	out := e.meterEvents(nil, ev)
-	return sorted(e.attributions(out, e.attr.Tick(e.now)))
+	return e.done(e.attributions(out, e.attr.Tick(e.now)))
 }
 
 // meterEvents passes the meter consumer's events on: draws to the tracker
@@ -179,6 +210,7 @@ func (e *Engine) meterEvents(out []Event, ev []meter.Event) []Event {
 			}
 			out = e.attributions(out, e.attr.Meter(x))
 		case meter.EventDrawEnded:
+			e.held = append(e.held, *x.Draw)
 			out = e.thermalEvents(out, e.thermal.MeteredDraw(x.At, false))
 			out = e.attributions(out, e.attr.Meter(x))
 		case meter.EventContinuousFlowStarted, meter.EventContinuousFlowEnded:
@@ -213,28 +245,47 @@ func sourceOf(s thermal.Source) *thermal.Source {
 	return &s
 }
 
-// attributions turns completed attributions into draw_ended, at the event
-// time that completed them, and keeps them in the ring.
-func (e *Engine) attributions(out []Event, as []draw.Attribution) []Event {
-	for _, a := range as {
-		d := endedOf(a)
-		if len(e.recent) == e.cfg.RecentDraws {
-			e.recent = append(e.recent[:0], e.recent[1:]...)
+// attributions turns the attributor's results into draw_ended and
+// draw_balanced, at the event time that completed them, and keeps them in
+// the ring. draw_ended releases the draw the state held as active.
+func (e *Engine) attributions(out []Event, rs []draw.Result) []Event {
+	for _, r := range rs {
+		switch r.Stage {
+		case draw.StageEnded:
+			d := endedOf(r.Draw)
+			e.held = slices.DeleteFunc(e.held, func(h meter.Draw) bool { return h.ID == d.DrawID })
+			if len(e.recent) == e.cfg.RecentDraws {
+				e.recent = append(e.recent[:0], e.recent[1:]...)
+			}
+			e.recent = append(e.recent, DrawRecord{DrawEnded: d})
+			out = append(out, Event{Type: EventDrawEnded, At: e.now, Ended: &d})
+		case draw.StageBalanced:
+			b := balancedOf(r.Attribution)
+			for i := range e.recent {
+				if e.recent[i].DrawID == b.DrawID {
+					x := b
+					e.recent[i].Balanced = &x
+				}
+			}
+			out = append(out, Event{Type: EventDrawBalanced, At: e.now, Balanced: &b})
 		}
-		e.recent = append(e.recent, d)
-		out = append(out, Event{Type: EventDrawEnded, At: e.now, Ended: &d})
 	}
 	return out
 }
 
-func endedOf(a draw.Attribution) DrawEnded {
-	d := a.Draw
-	out := DrawEnded{
+func endedOf(d meter.Draw) DrawEnded {
+	return DrawEnded{
 		DrawID: d.ID, StartedAt: d.Start, EndedAt: d.End, DurationS: d.Duration.Seconds(),
-		Litres: d.Litres, VolumeKind: "metered", FlowLPerMin: d.FlowLPerMin, Kind: d.Kind,
+		Litres: d.Litres, VolumeKind: "metered", FlowLPerMin: d.FlowLPerMin, Kind: d.Kind, From: d.From, To: d.To,
+	}
+}
+
+func balancedOf(a draw.Attribution) DrawBalanced {
+	out := DrawBalanced{
+		DrawID: a.Draw.ID, EndedAt: a.Draw.End,
 		OutletPeakC: a.OutletC, InletDropC: a.InletDropC, EnergyKWh: a.EnergyKWh,
 		HeatBalanceL: a.HeatBalanceL, HeatBalanceReliable: a.Reliable, Reasons: a.Reasons,
-		MaskedByReheat: a.MaskedByReheat, From: d.From, To: d.To,
+		MaskedByReheat: a.MaskedByReheat,
 	}
 	for _, t := range a.Tanks {
 		out.Tanks = append(out.Tanks, TankShare{DeviceID: t.DeviceID, Share: t.Share, Litres: t.Litres,
@@ -253,54 +304,103 @@ func (e *Engine) Status(s tanktemp.Status) {
 		st.At = &at
 		v := s.Version
 		st.Version = &v
-		e.see(at)
+		e.advance(at) // a retained status can be old, as a programmer input
 	}
 	e.tanktemp = st
+	e.done(nil)
 }
 
-// BoilerEvent takes a programmer switch event: it always applies.
+// BoilerEvent takes a programmer switch event. It applies unless it is
+// older than the last programmer input applied.
 func (e *Engine) BoilerEvent(b boiler.Event) []Event {
-	return sorted(e.programmer(b.Timestamp, b.HW, b.CH))
+	return e.done(e.programmer(b.Timestamp, b.HW, b.CH))
 }
 
-// BoilerSystem takes a boiler-sensor system message. Only a HEARTBEAT with
-// ready true says what HW and CH are; anything else (RECONNECTED, the last
-// will, STARTUP, a heartbeat before the GPIO baseline) changes nothing.
+// BoilerSystem takes a boiler-sensor system message. A HEARTBEAT with
+// ready true says what HW and CH are (boiler.System.ReadyHeartbeat), and
+// sets the heartbeat interval if it carries one. A SHUTDOWN (the last
+// will, or a clean shutdown) makes both unknown. Either applies only if it
+// is no older than the last programmer input applied: a last will is dated
+// when boiler-sensor connected, so a retained one from before the latest
+// heartbeat changes nothing. Anything else (RECONNECTED, STARTUP, a
+// heartbeat before the GPIO baseline) changes nothing.
 func (e *Engine) BoilerSystem(s boiler.System) []Event {
-	if !s.IsHeartbeat() || s.Ready == nil || !*s.Ready {
-		return nil
+	switch {
+	case s.ReadyHeartbeat():
+		if s.HeartbeatMS != nil && *s.HeartbeatMS > 0 && !e.older(s.Timestamp) {
+			e.interval = time.Duration(*s.HeartbeatMS) * time.Millisecond
+		}
+		return e.done(e.programmer(s.Timestamp, s.HW, s.CH))
+	case s.Event == boiler.SystemShutdown:
+		return e.done(e.programmer(s.Timestamp, boiler.Unknown, boiler.Unknown))
 	}
-	return sorted(e.programmer(s.Timestamp, s.HW, s.CH))
+	return e.done(nil)
 }
+
+// older says whether at is before the last programmer input applied.
+func (e *Engine) older(at time.Time) bool { return e.boilerSeen && at.Before(e.boilerAt) }
 
 func (e *Engine) programmer(at time.Time, hw, ch boiler.Switch) []Event {
-	e.see(at)
+	if e.older(at) {
+		return nil
+	}
+	e.advance(at)
+	e.boilerSeen, e.boilerAt, e.silent = true, at, false
+	return e.setProgrammer(at, hw, ch)
+}
+
+func (e *Engine) setProgrammer(at time.Time, hw, ch boiler.Switch) []Event {
 	e.hw, e.ch = hw, ch
 	e.attr.HW(at, hw)
 	return e.thermalEvents(nil, e.thermal.Programmer(at, hw, ch))
+}
+
+// boilerSilence makes HW and CH unknown once event time is more than
+// BoilerMissedHeartbeats intervals past the last programmer input (or past
+// the engine's first event time, if later), dated at that limit.
+func (e *Engine) boilerSilence(out []Event) []Event {
+	if !e.boilerSeen || e.silent {
+		return out
+	}
+	// Retained messages replay old programmer inputs at startup, so the
+	// clock runs from the later of the last input and the first other
+	// input's time (tank sweeps, the room, the meter carry current times).
+	from := e.boilerAt
+	if e.started.After(from) {
+		from = e.started
+	}
+	limit := from.Add(time.Duration(float64(e.interval) * e.cfg.BoilerMissedHeartbeats))
+	if !e.now.After(limit) {
+		return out
+	}
+	e.silent = true
+	if e.hw == boiler.Unknown && e.ch == boiler.Unknown {
+		return out
+	}
+	return append(out, e.setProgrammer(limit, boiler.Unknown, boiler.Unknown)...)
 }
 
 // Ambient takes a boiler-room temperature read at at. One older than the
 // latest is ignored.
 func (e *Engine) Ambient(at time.Time, tempC float64) []Event {
 	if e.ambOK && at.Before(e.ambAt) {
-		return nil
+		return e.done(nil)
 	}
 	e.see(at)
 	e.ambOK, e.ambAt, e.ambC = true, at, tempC
 	e.thermal.Ambient(at, tempC)
-	return nil
+	return e.done(nil)
 }
 
 // Tick moves event time to t (never back) with no input, and returns what
 // that ends: draws, continuous flows, attributions waiting on sweeps, a
 // tank going stale.
 func (e *Engine) Tick(t time.Time) []Event {
-	e.see(t)
+	e.advance(t) // time passing isn't an input: it doesn't start the grace
 	ev := e.meterEvents(nil, e.meter.Tick(e.now))
 	ev = e.attributions(ev, e.attr.Tick(e.now))
 	ev = e.thermalEvents(ev, e.thermal.Tick(e.now))
-	return sorted(ev)
+	return e.done(ev)
 }
 
 // Settle is how long after the last input a Tick must come for every draw
@@ -313,29 +413,21 @@ func (e *Engine) Settle() time.Duration {
 // Pending says whether a draw is running or waiting for its attribution.
 func (e *Engine) Pending() bool {
 	_, running := e.meter.Draw()
-	return running || e.attr.Pending() > 0
+	return running || len(e.held) > 0 || e.attr.Pending() > 0
 }
 
 // State reports the system as of the latest input.
 func (e *Engine) State() State {
 	s := State{At: e.now, Tanktemp: e.tanktemp}
-	total := [3]float64{}
-	all := len(e.order) > 0
 	for _, id := range e.order {
-		ts := e.tankState(id)
-		if ts.StoredKWh == nil {
-			all = false
-		} else {
-			total[0] += *ts.StoredKWh
-			total[1] += *ts.UsableL40
-			total[2] += *ts.UsableL40Low
-		}
-		s.Tanks = append(s.Tanks, ts)
+		s.Tanks = append(s.Tanks, e.tankState(id))
 	}
-	if all {
-		s.StoredKWh, s.UsableL40, s.UsableL40Low = &total[0], &total[1], &total[2]
-		low := total[2] < e.cfg.LowHotWaterL
-		s.LowHotWater = &low
+	if sys, ok := e.system(); ok {
+		s.StoredKWh, s.UsableL40, s.UsableL40Low = &sys.storedKWh, &sys.usableL40, &sys.usableL40Low
+		if e.low != nil { // judged at the end of every input
+			low := *e.low
+			s.LowHotWater = &low
+		}
 	}
 	s.Boiler = Boiler{HW: switchOf(e.hw), CH: switchOf(e.ch)}
 	if e.ambOK && e.now.Sub(e.ambAt) <= e.cfg.Thermal.AmbientStale {
@@ -344,6 +436,8 @@ func (e *Engine) State() State {
 	}
 	if d, ok := e.meter.Draw(); ok {
 		s.ActiveDraw = activeOf(d)
+	} else if len(e.held) > 0 {
+		s.ActiveDraw = activeOf(e.held[0])
 	}
 	if e.meterSeen {
 		at, n, since, l := e.meterAt, e.meterCount, e.countingSince, e.meter.Health().Litres
@@ -354,6 +448,60 @@ func (e *Engine) State() State {
 		}
 	}
 	return s
+}
+
+// systemTotals is the system's stored energy and usable litres.
+type systemTotals struct {
+	storedKWh, usableL40, usableL40Low float64
+}
+
+// system is the totals, if every tank's estimate is known: the stored
+// energy summed, the usable litres through the merged outlet.
+func (e *Engine) system() (systemTotals, bool) {
+	var out systemTotals
+	if len(e.order) == 0 {
+		return out, false
+	}
+	ps := make([]*profile.Profile, len(e.order))
+	for k, id := range e.order {
+		slot := e.tanks[id]
+		if !e.estimated(slot) {
+			return out, false
+		}
+		out.storedKWh += slot.last.Estimate.KWh
+		ps[k] = slot.last.Profile
+	}
+	m, err := e.est.Merged(ps, e.cfg.OutletSplit)
+	if err != nil {
+		return out, false // can't happen: the split is validated
+	}
+	out.usableL40, out.usableL40Low = m.UsableL40, m.UsableL40Low
+	return out, true
+}
+
+// estimated says whether slot's latest sweep was estimated and isn't stale.
+func (e *Engine) estimated(slot *tankSlot) bool {
+	return slot.seen && slot.ok && e.now.Sub(slot.last.At) <= e.cfg.Thermal.StaleAfter
+}
+
+// judgeLow updates low_hot_water's held value from the system's
+// usable_l40_low, with hysteresis; while that is unknown the value is held.
+func (e *Engine) judgeLow() {
+	sys, ok := e.system()
+	if !ok {
+		return
+	}
+	u := sys.usableL40Low
+	var low bool
+	switch {
+	case e.low == nil:
+		low = u < e.cfg.LowHotWaterL
+	case *e.low:
+		low = !(u > e.cfg.LowHotWaterL+e.cfg.LowHotWaterMarginL)
+	default:
+		low = u < e.cfg.LowHotWaterL
+	}
+	e.low = &low
 }
 
 func (e *Engine) tankState(id string) TankState {
@@ -370,7 +518,7 @@ func (e *Engine) tankState(id string) TankState {
 	sw := slot.last
 	at, okN, total := sw.At, sw.ProbesOK, sw.ProbesTotal
 	ts.At, ts.ProbesOK, ts.ProbesTotal = &at, &okN, &total
-	if !slot.ok || e.now.Sub(sw.At) > e.cfg.Thermal.StaleAfter {
+	if !e.estimated(slot) {
 		return ts
 	}
 	x := sw.Estimate
@@ -392,9 +540,16 @@ func switchOf(s boiler.Switch) *bool {
 }
 
 // Recent returns the ended draws kept (the last RecentDraws), oldest
-// first. The slice is the caller's.
-func (e *Engine) Recent() []DrawEnded {
-	return append([]DrawEnded(nil), e.recent...)
+// first, each with its balance once given. The slice is the caller's.
+func (e *Engine) Recent() []DrawRecord {
+	out := append([]DrawRecord(nil), e.recent...)
+	for i := range out {
+		if b := out[i].Balanced; b != nil {
+			x := *b
+			out[i].Balanced = &x
+		}
+	}
+	return out
 }
 
 // LastSweep returns tank id's latest estimated sweep, with its probes and

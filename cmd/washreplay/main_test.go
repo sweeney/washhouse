@@ -68,7 +68,7 @@ func diff(want, got string) string {
 func TestGoldenText(t *testing.T) {
 	got := runOK(t, "-config", examplePath, "-state-every", "10m", fixture)
 	golden(t, "shower-layered.txt", got)
-	for _, want := range []string{" draw_started ", " draw_ended ", "kind=shower", " state "} {
+	for _, want := range []string{" draw_started ", " draw_ended ", " draw_balanced ", "kind=shower", " state "} {
 		if !strings.Contains(got, want) {
 			t.Errorf("no %q in the output", want)
 		}
@@ -81,6 +81,7 @@ func TestGoldenJSON(t *testing.T) {
 	sc := bufio.NewScanner(strings.NewReader(got))
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
 	types := map[string]int{}
+	endedAt := map[string]string{}
 	for sc.Scan() {
 		var m map[string]any
 		if err := json.Unmarshal(sc.Bytes(), &m); err != nil {
@@ -88,13 +89,29 @@ func TestGoldenJSON(t *testing.T) {
 		}
 		ty, _ := m["type"].(string)
 		types[ty]++
+		switch ty {
+		case "draw_ended":
+			d := m["draw_ended"].(map[string]any)
+			for _, k := range []string{"tanks", "outlet_peak_c", "heat_balance_l", "heat_balance_reliable", "reasons", "masked_by_reheat"} {
+				if _, ok := d[k]; ok {
+					t.Errorf("draw_ended carries %q: the balance fields must be absent", k)
+				}
+			}
+			endedAt[d["draw_id"].(string)] = d["ended_at"].(string)
+		case "draw_balanced":
+			d := m["draw_balanced"].(map[string]any)
+			id := d["draw_id"].(string)
+			if ea, ok := endedAt[id]; !ok || ea != d["ended_at"] {
+				t.Errorf("draw_balanced %s ended_at %v, draw_ended's %q (%v)", id, d["ended_at"], ea, ok)
+			}
+		}
 		if _, ok := m["at"].(string); !ok {
 			t.Errorf("line without an at: %s", sc.Text())
 		}
 	}
 	// The 6 L, the 50 L shower and the 15 L; the lone litre at 0:34 is creep.
-	if types["draw_ended"] != 3 || types["state"] == 0 {
-		t.Errorf("types %v, want 3 draw_ended and some states", types)
+	if types["draw_ended"] != 3 || types["draw_balanced"] != 3 || types["state"] == 0 {
+		t.Errorf("types %v, want 3 draw_ended, 3 draw_balanced and some states", types)
 	}
 }
 

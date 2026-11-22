@@ -3,32 +3,37 @@
 2001-01-01T00:01:22.208Z tank_state_changed tank=hot_water_cylinder_left unknown->drawing source=- power=-
 2001-01-01T00:01:22.208Z tank_state_changed tank=hot_water_cylinder_right unknown->drawing source=- power=-
 2001-01-01T00:02:23.648Z draw_updated id=20001231T235443Z-15 started=2001-01-01T00:01:22.208Z litres=6 flow=4.9 kind=tap
+2001-01-01T00:03:33.000Z draw_ended id=20001231T235443Z-15 started=2001-01-01T00:01:22.208Z ended=2001-01-01T00:02:23.648Z litres=6 flow=4.9 kind=tap seq=15-29
 2001-01-01T00:04:33.000Z tank_state_changed tank=hot_water_cylinder_left drawing->unknown source=- power=-
 2001-01-01T00:04:33.000Z tank_state_changed tank=hot_water_cylinder_right drawing->unknown source=- power=-
-2001-01-01T00:10:04.000Z state stored=21.89 usable_l40=509.1 usable_l40_low=432.7 low_hot_water=off hw=off ch=off ambient=25.7 draw=- meter=6 creep=false | hot_water_cylinder_left unknown src=- kwh=11.13 mean=57.9 top=63.6 usable=258.8 power=- ua=4.0 | hot_water_cylinder_right unknown src=- kwh=10.76 mean=56.3 top=61.1 usable=250.3 power=- ua=17.0
+2001-01-01T00:10:04.000Z state stored=21.89 usable_l40=287.4 usable_l40_low=244.3 low_hot_water=off hw=off ch=off ambient=25.7 draw=- meter=6 creep=false | hot_water_cylinder_left unknown src=- kwh=11.13 mean=57.9 top=63.6 usable=258.8 power=- ua=4.0 | hot_water_cylinder_right unknown src=- kwh=10.76 mean=56.3 top=61.1 usable=250.3 power=- ua=17.0
 2001-01-01T00:10:10.308Z draw_started id=20001231T235443Z-76 started=2001-01-01T00:10:10.308Z litres=1 flow=- kind=tap
 2001-01-01T00:10:10.308Z tank_state_changed tank=hot_water_cylinder_left unknown->drawing source=- power=-
 2001-01-01T00:10:10.308Z tank_state_changed tank=hot_water_cylinder_right unknown->drawing source=- power=-
-2001-01-01T00:10:17.000Z draw_ended id=20001231T235443Z-15 started=2001-01-01T00:01:22.208Z ended=2001-01-01T00:02:23.648Z litres=6 flow=4.9 kind=tap shares=hot_water_cylinder_left:0.42,hot_water_cylinder_right:0.58 outlet=63.1 inlet_drop=14.2 energy=0.45 hb=7.2 reliable=false reasons=small,interrupted masked=false seq=15-29
+2001-01-01T00:10:17.000Z draw_balanced id=20001231T235443Z-15 ended=2001-01-01T00:02:23.648Z shares=hot_water_cylinder_left:0.42,hot_water_cylinder_right:0.58 outlet=63.1 inlet_drop=14.2 energy=0.45 hb=7.2 reliable=false reasons=small,interrupted,shares_early masked=false
 2001-01-01T00:11:14.158Z draw_updated id=20001231T235443Z-76 started=2001-01-01T00:10:10.308Z litres=9 flow=8.2 kind=tap
 2001-01-01T00:12:22.958Z draw_updated id=20001231T235443Z-76 started=2001-01-01T00:10:10.308Z litres=16 flow=6.2 kind=tap
 2001-01-01T00:13:29.988Z draw_updated id=20001231T235443Z-76 started=2001-01-01T00:10:10.308Z litres=23 flow=6.3 kind=shower
 2001-01-01T00:14:36.669Z draw_updated id=20001231T235443Z-76 started=2001-01-01T00:10:10.308Z litres=30 flow=6.3 kind=shower
 2001-01-01T00:15:43.128Z draw_updated id=20001231T235443Z-76 started=2001-01-01T00:10:10.308Z litres=37 flow=6.3 kind=shower
 2001-01-01T00:16:49.478Z draw_updated id=20001231T235443Z-76 started=2001-01-01T00:10:10.308Z litres=44 flow=6.3 kind=shower
+2001-01-01T00:18:54.000Z draw_ended id=20001231T235443Z-76 started=2001-01-01T00:10:10.308Z ended=2001-01-01T00:17:46.608Z litres=50 flow=6.3 kind=shower seq=76-220
 2001-01-01T00:19:54.000Z tank_state_changed tank=hot_water_cylinder_left drawing->unknown source=- power=-
 2001-01-01T00:19:54.000Z tank_state_changed tank=hot_water_cylinder_right drawing->unknown source=- power=-
-2001-01-01T00:20:04.000Z state stored=19.43 usable_l40=429.2 usable_l40_low=364.8 low_hot_water=off hw=off ch=off ambient=25.7 draw=- meter=56 creep=false | hot_water_cylinder_left unknown src=- kwh=10.65 mean=55.8 top=63.3 usable=246.5 power=- ua=4.0 | hot_water_cylinder_right unknown src=- kwh=8.78 mean=47.7 top=60.9 usable=182.8 power=- ua=17.0
-2001-01-01T00:25:54.000Z draw_ended id=20001231T235443Z-76 started=2001-01-01T00:10:10.308Z ended=2001-01-01T00:17:46.608Z litres=50 flow=6.3 kind=shower shares=hot_water_cylinder_left:0.24,hot_water_cylinder_right:0.76 outlet=62.8 inlet_drop=24.5 energy=2.92 hb=47.7 reliable=true reasons=- masked=false seq=76-220
-2001-01-01T00:30:03.000Z state stored=18.87 usable_l40=409.0 usable_l40_low=347.6 low_hot_water=off hw=off ch=off ambient=25.6 draw=- meter=56 creep=false | hot_water_cylinder_left unknown src=- kwh=10.81 mean=56.5 top=63.2 usable=249.1 power=- ua=4.0 | hot_water_cylinder_right unknown src=- kwh=8.06 mean=44.7 top=60.2 usable=159.9 power=- ua=17.0
+2001-01-01T00:20:04.000Z state stored=19.43 usable_l40=216.7 usable_l40_low=184.2 low_hot_water=off hw=off ch=off ambient=25.7 draw=- meter=56 creep=false | hot_water_cylinder_left unknown src=- kwh=10.65 mean=55.8 top=63.3 usable=246.5 power=- ua=4.0 | hot_water_cylinder_right unknown src=- kwh=8.78 mean=47.7 top=60.9 usable=182.8 power=- ua=17.0
+2001-01-01T00:25:54.000Z draw_balanced id=20001231T235443Z-76 ended=2001-01-01T00:17:46.608Z shares=hot_water_cylinder_left:0.11,hot_water_cylinder_right:0.89 outlet=62.3 inlet_drop=24.5 energy=2.92 hb=48.0 reliable=true reasons=- masked=false
+2001-01-01T00:30:03.000Z state stored=18.87 usable_l40=188.1 usable_l40_low=159.9 low_hot_water=off hw=off ch=off ambient=25.6 draw=- meter=56 creep=false | hot_water_cylinder_left unknown src=- kwh=10.81 mean=56.5 top=63.2 usable=249.1 power=- ua=4.0 | hot_water_cylinder_right unknown src=- kwh=8.06 mean=44.7 top=60.2 usable=159.9 power=- ua=17.0
+2001-01-01T00:36:02.000Z tank_state_changed tank=hot_water_cylinder_left unknown->cooling source=- power=-0.24
+2001-01-01T00:36:02.000Z tank_state_changed tank=hot_water_cylinder_right unknown->cooling source=- power=-1.33
 2001-01-01T00:36:41.928Z draw_started id=20001231T235443Z-323 started=2001-01-01T00:36:41.928Z litres=1 flow=- kind=tap
-2001-01-01T00:36:41.928Z tank_state_changed tank=hot_water_cylinder_left unknown->drawing source=- power=-
-2001-01-01T00:36:41.928Z tank_state_changed tank=hot_water_cylinder_right unknown->drawing source=- power=-
+2001-01-01T00:36:41.928Z tank_state_changed tank=hot_water_cylinder_left cooling->drawing source=- power=-
+2001-01-01T00:36:41.928Z tank_state_changed tank=hot_water_cylinder_right cooling->drawing source=- power=-
 2001-01-01T00:37:45.438Z draw_updated id=20001231T235443Z-323 started=2001-01-01T00:36:41.928Z litres=8 flow=6.1 kind=tap
 2001-01-01T00:38:53.848Z draw_updated id=20001231T235443Z-323 started=2001-01-01T00:36:41.928Z litres=15 flow=6.1 kind=tap
-2001-01-01T00:40:02.000Z state stored=18.43 usable_l40=399.9 usable_l40_low=339.9 low_hot_water=off hw=off ch=off ambient=25.6 draw=- meter=72 creep=false | hot_water_cylinder_left drawing src=- kwh=10.58 mean=55.5 top=63.9 usable=243.8 power=- ua=4.0 | hot_water_cylinder_right drawing src=- kwh=7.85 mean=43.8 top=60.9 usable=156.1 power=- ua=17.0
-2001-01-01T00:41:02.000Z tank_state_changed tank=hot_water_cylinder_left drawing->unknown source=- power=-
-2001-01-01T00:41:02.000Z tank_state_changed tank=hot_water_cylinder_right drawing->unknown source=- power=-
-2001-01-01T00:46:56.000Z draw_ended id=20001231T235443Z-323 started=2001-01-01T00:36:41.928Z ended=2001-01-01T00:38:53.848Z litres=15 flow=6.1 kind=tap shares=hot_water_cylinder_left:0.25,hot_water_cylinder_right:0.75 outlet=62.2 inlet_drop=5.1 energy=0.27 hb=4.4 reliable=false reasons=small,thermocline_gap masked=false seq=323-365
-2001-01-01T00:50:16.000Z state stored=18.29 usable_l40=392.9 usable_l40_low=334.0 low_hot_water=off hw=off ch=off ambient=25.6 draw=- meter=72 creep=false | hot_water_cylinder_left unknown src=- kwh=10.71 mean=56.1 top=62.9 usable=245.9 power=- ua=4.0 | hot_water_cylinder_right unknown src=- kwh=7.57 mean=42.6 top=59.1 usable=147.0 power=- ua=17.0
-2001-01-01T00:54:45.000Z state stored=18.22 usable_l40=390.6 usable_l40_low=332.0 low_hot_water=off hw=off ch=off ambient=25.6 draw=- meter=72 creep=false | hot_water_cylinder_left unknown src=- kwh=10.66 mean=55.8 top=62.8 usable=244.5 power=- ua=4.0 | hot_water_cylinder_right unknown src=- kwh=7.56 mean=42.5 top=58.9 usable=146.0 power=- ua=17.0
+2001-01-01T00:40:02.000Z state stored=18.43 usable_l40=184.2 usable_l40_low=156.6 low_hot_water=off hw=off ch=off ambient=25.6 draw=20001231T235443Z-323:15L meter=72 creep=false | hot_water_cylinder_left drawing src=- kwh=10.58 mean=55.5 top=63.9 usable=243.8 power=- ua=4.0 | hot_water_cylinder_right drawing src=- kwh=7.85 mean=43.8 top=60.9 usable=156.1 power=- ua=17.0
+2001-01-01T00:40:02.000Z draw_ended id=20001231T235443Z-323 started=2001-01-01T00:36:41.928Z ended=2001-01-01T00:38:53.848Z litres=15 flow=6.1 kind=tap seq=323-365
+2001-01-01T00:41:02.000Z tank_state_changed tank=hot_water_cylinder_left drawing->cooling source=- power=-
+2001-01-01T00:41:02.000Z tank_state_changed tank=hot_water_cylinder_right drawing->cooling source=- power=-
+2001-01-01T00:46:56.000Z draw_balanced id=20001231T235443Z-323 ended=2001-01-01T00:38:53.848Z shares=hot_water_cylinder_left:0.00,hot_water_cylinder_right:1.00 outlet=61.4 inlet_drop=5.1 energy=0.27 hb=4.5 reliable=false reasons=small,thermocline_gap masked=false
+2001-01-01T00:50:16.000Z state stored=18.29 usable_l40=173.9 usable_l40_low=147.8 low_hot_water=off hw=off ch=off ambient=25.6 draw=- meter=72 creep=false | hot_water_cylinder_left cooling src=- kwh=10.71 mean=56.1 top=62.9 usable=245.9 power=- ua=4.0 | hot_water_cylinder_right cooling src=- kwh=7.57 mean=42.6 top=59.1 usable=147.0 power=- ua=17.0
+2001-01-01T00:54:45.000Z state stored=18.22 usable_l40=172.6 usable_l40_low=146.7 low_hot_water=off hw=off ch=off ambient=25.6 draw=- meter=72 creep=false | hot_water_cylinder_left cooling src=- kwh=10.66 mean=55.8 top=62.8 usable=244.5 power=- ua=4.0 | hot_water_cylinder_right cooling src=- kwh=7.56 mean=42.5 top=58.9 usable=146.0 power=- ua=17.0

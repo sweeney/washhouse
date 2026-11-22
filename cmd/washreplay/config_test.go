@@ -48,9 +48,13 @@ func planConfig() engine.Config {
 			Tanks: []thermal.TankConfig{{DeviceID: left, PriorUAWPerK: 4, PriorHours: 1}, {DeviceID: right, PriorUAWPerK: 17, PriorHours: 1}}},
 		Draw: draw.Config{Tanks: []string{left, right}, ColdC: 10, KWhPerLitreK: 4.186 / 3600, ShareSettle: 60 * time.Second,
 			BalanceSettle: 8 * time.Minute, MaxSweepGap: 2 * time.Minute, MinReliableLitres: 20, GainKWh: 0.05,
-			ThermoclineC: 40, GapLowMM: 400, GapHighMM: 825},
-		LowHotWaterL: 60,
-		RecentDraws:  50,
+			ThermoclineC: 40, Gaps: []draw.Gap{{Low: "lower", High: "middle"}}},
+		OutletSplit:            []float64{0.11, 0.89},
+		LowHotWaterL:           60,
+		LowHotWaterMarginL:     10,
+		BoilerHeartbeat:        15 * time.Minute,
+		BoilerMissedHeartbeats: 2.5,
+		RecentDraws:            50,
 	}
 }
 
@@ -100,6 +104,16 @@ func TestConfigIsStrict(t *testing.T) {
 		{"invalid value", `"low_factor": 0.85,`, `"low_factor": 1.5,`, "low factor"},
 		{"no tanks", ex[strings.Index(ex, `"tanks": [`):strings.Index(ex, `"meter": {`)], `"tanks": [], `, "no tanks"},
 		{"trailing data", "}\n", "} {}\n", "after"},
+		{"missing margin", `"low_hot_water_margin_l": 10,`, ``, "low_hot_water_margin_l"},
+		{"missing heartbeat", `"boiler_heartbeat": "15m",`, ``, "boiler_heartbeat"},
+		{"heartbeat as a number", `"boiler_heartbeat": "15m",`, `"boiler_heartbeat": 900,`, "boiler_heartbeat"},
+		{"missing missed heartbeats", `"boiler_missed_heartbeats": 2.5,`, ``, "boiler_missed_heartbeats"},
+		{"missing outlet split", `"outlet_split": 0.89,`, ``, "outlet_split"},
+		{"split not summing to 1", `"outlet_split": 0.89,`, `"outlet_split": 0.8,`, "OutletSplit"},
+		{"missing gaps", `"gaps": [{"low": "lower", "high": "middle"}]`, `"gaps_x": []`, "gaps"},
+		{"unknown gap key", `{"low": "lower", "high": "middle"}`, `{"low": "lower", "high": "middle", "mm": 1}`, "mm"},
+		{"gap position unknown", `{"low": "lower", "high": "middle"}`, `{"low": "lower", "high": "attic"}`, "attic"},
+		{"old gap key", `"thermocline_c": 40,`, `"thermocline_c": 40, "gap_low_mm": 400,`, "gap_low_mm"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if !strings.Contains(ex, tc.from) {

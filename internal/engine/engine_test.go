@@ -2,11 +2,16 @@ package engine
 
 import (
 	"math"
+	"slices"
 	"sort"
 	"testing"
 	"time"
 
+	"github.com/sweeney/washhouse/internal/draw"
+	"github.com/sweeney/washhouse/internal/estimate"
 	"github.com/sweeney/washhouse/internal/meter"
+	"github.com/sweeney/washhouse/internal/profile"
+	"github.com/sweeney/washhouse/internal/vessel"
 	"github.com/sweeney/washhouse/internal/wire/boiler"
 	"github.com/sweeney/washhouse/internal/wire/tanktemp"
 )
@@ -67,6 +72,131 @@ func TestBoilerTriState(t *testing.T) {
 	check("heartbeat with HW unknown", "nil", "off")
 	if got := e.State().At; !got.Equal(at) {
 		t.Errorf("state at %v, want %v (the last-will's old timestamp must not move time back)", got, at)
+	}
+}
+
+func hb(at time.Time, hw, ch boiler.Switch) boiler.System {
+	return boiler.System{Shape: boiler.ShapeStatus, Event: boiler.SystemHeartbeat, Timestamp: at, HW: hw, CH: ch, Ready: bp(true)}
+}
+
+func lastWill(at time.Time) boiler.System {
+	return boiler.System{Shape: boiler.ShapeSystem, Event: boiler.SystemShutdown, Reason: "MQTT_DISCONNECT", Source: "last_will", Timestamp: at}
+}
+
+// A last will dated after the last applied programmer input makes HW and
+// CH unknown; one dated before it (a retained will from the last connect)
+// is ignored. A heartbeat after the will makes them known again.
+func TestBoilerLastWill(t *testing.T) {
+	e := newEngine(t, planConfig())
+	e.BoilerSystem(hb(t0, boiler.On, boiler.Off))
+	e.BoilerSystem(lastWill(t0.Add(-time.Minute)))
+	if b := e.State().Boiler; boolStr(b.HW) != "on" || boolStr(b.CH) != "off" {
+		t.Fatalf("an older will changed hw %s ch %s", boolStr(b.HW), boolStr(b.CH))
+	}
+	e.BoilerSystem(lastWill(t0.Add(time.Minute)))
+	if b := e.State().Boiler; b.HW != nil || b.CH != nil {
+		t.Fatalf("after a newer will: hw %s ch %s, want unknown", boolStr(b.HW), boolStr(b.CH))
+	}
+	e.BoilerSystem(hb(t0.Add(30*time.Second), boiler.On, boiler.On))
+	if b := e.State().Boiler; b.HW != nil {
+		t.Errorf("a heartbeat older than the will applied: hw %s", boolStr(b.HW))
+	}
+	e.BoilerSystem(hb(t0.Add(2*time.Minute), boiler.Off, boiler.On))
+	if b := e.State().Boiler; boolStr(b.HW) != "off" || boolStr(b.CH) != "on" {
+		t.Errorf("after the next heartbeat: hw %s ch %s, want off on", boolStr(b.HW), boolStr(b.CH))
+	}
+}
+
+// More than BoilerMissedHeartbeats × the heartbeat interval of event time
+// without a heartbeat or event makes HW and CH unknown, judged on Tick and
+// on any input. The interval is the heartbeat's own heartbeat_ms when it
+// carries one, else BoilerHeartbeat.
+func TestBoilerSilence(t *testing.T) {
+	cfg := planConfig()
+	limit := time.Duration(float64(cfg.BoilerHeartbeat) * cfg.BoilerMissedHeartbeats)
+	e := newEngine(t, cfg)
+	e.BoilerSystem(hb(t0, boiler.On, boiler.Off))
+	e.Tick(t0.Add(limit))
+	if b := e.State().Boiler; boolStr(b.HW) != "on" {
+		t.Fatalf("at exactly the limit: hw %s, want still on", boolStr(b.HW))
+	}
+	e.Tick(t0.Add(limit + time.Second))
+	if b := e.State().Boiler; b.HW != nil || b.CH != nil {
+		t.Fatalf("past the limit: hw %s ch %s, want unknown", boolStr(b.HW), boolStr(b.CH))
+	}
+	// on an input, not only on Tick
+	e = newEngine(t, cfg)
+	e.Ambient(t0, 20) // listening from t0 (see TestBoilerSilenceGraceAtStartup)
+	e.BoilerSystem(hb(t0, boiler.On, boiler.Off))
+	e.Ambient(t0.Add(limit+time.Second), 20)
+	if b := e.State().Boiler; b.HW != nil {
+		t.Errorf("past the limit on an input: hw %s, want unknown", boolStr(b.HW))
+	}
+	// an event resets the clock as a heartbeat does
+	e = newEngine(t, cfg)
+	e.BoilerSystem(hb(t0, boiler.On, boiler.Off))
+	e.BoilerEvent(boiler.Event{Timestamp: t0.Add(limit / 2), Event: boiler.EventCHOn, HW: boiler.On, CH: boiler.On})
+	e.Tick(t0.Add(limit + time.Second))
+	if b := e.State().Boiler; boolStr(b.HW) != "on" || boolStr(b.CH) != "on" {
+		t.Errorf("an event inside the limit: hw %s ch %s, want on on", boolStr(b.HW), boolStr(b.CH))
+	}
+	// the heartbeat's own interval
+	e = newEngine(t, cfg)
+	h := hb(t0, boiler.On, boiler.Off)
+	ms := int64(time.Minute / time.Millisecond)
+	h.HeartbeatMS = &ms
+	e.BoilerSystem(h)
+	e.Tick(t0.Add(time.Duration(float64(time.Minute)*cfg.BoilerMissedHeartbeats) + time.Second))
+	if b := e.State().Boiler; b.HW != nil {
+		t.Errorf("past 2.5 × the heartbeat's 1 min: hw %s, want unknown", boolStr(b.HW))
+	}
+}
+
+// The HW going unknown on silence reaches the draw attribution: a draw
+// inside it is hw_unknown, so its shares are unknown.
+func TestBoilerSilenceReachesDraws(t *testing.T) {
+	cfg := planConfig()
+	e := newEngine(t, cfg)
+	e.BoilerSystem(hb(t0, boiler.Off, boiler.Off))
+	m := &meterSim{since: t0.Add(-time.Hour)}
+	e.Meter(m.msg(t0, tanktemp.TriggerSweep, tanktemp.LevelOpen))
+	start := t0.Add(time.Hour)
+	var ev []Event
+	fed := false
+	for at := start.Add(-time.Minute); at.Before(start.Add(15 * time.Minute)); at = at.Add(30 * time.Second) {
+		if !fed && at.After(start) {
+			ev = append(ev, m.draw(e, start, 5, 10*time.Second)...)
+			fed = true
+		}
+		for _, id := range []string{left, right} {
+			x, err := e.TankState(uniform(id, at, 55))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ev = append(ev, x...)
+		}
+	}
+	ev = append(ev, e.Tick(start.Add(time.Hour))...)
+	b := ofType(ev, EventDrawBalanced)
+	if len(b) != 1 || !slices.Contains(b[0].Balanced.Reasons, draw.ReasonHWUnknown) {
+		t.Fatalf("draw_balanced %+v, want one with hw_unknown", b)
+	}
+}
+
+// A programmer input older than the last applied one is ignored: a
+// retained message delivered on a reconnect after a newer heartbeat can't
+// roll HW and CH back.
+func TestBoilerOlderInputIgnored(t *testing.T) {
+	e := newEngine(t, planConfig())
+	e.BoilerSystem(hb(t0, boiler.On, boiler.On))
+	e.BoilerEvent(boiler.Event{Timestamp: t0.Add(-time.Minute), Event: boiler.EventHWOff, HW: boiler.Off, CH: boiler.Off})
+	e.BoilerSystem(hb(t0.Add(-30*time.Second), boiler.Off, boiler.Off))
+	if b := e.State().Boiler; boolStr(b.HW) != "on" || boolStr(b.CH) != "on" {
+		t.Errorf("older inputs applied: hw %s ch %s, want on on", boolStr(b.HW), boolStr(b.CH))
+	}
+	e.BoilerEvent(boiler.Event{Timestamp: t0, Event: boiler.EventHWOff, HW: boiler.Off, CH: boiler.On})
+	if b := e.State().Boiler; boolStr(b.HW) != "off" {
+		t.Errorf("an input at the same time as the last: hw %s, want off", boolStr(b.HW))
 	}
 }
 
@@ -189,44 +319,135 @@ func TestSkippedSweeps(t *testing.T) {
 	}
 }
 
-// low_hot_water is the system's: the summed usable_l40_low against the
-// threshold, below it and not at it, whatever one tank holds alone.
-func TestLowHotWaterBoundary(t *testing.T) {
-	feed := func(cfg Config) State {
-		e := newEngine(t, cfg)
-		// The left tank hot at the top, the right nearly spent.
-		if _, err := e.TankState(sweep(left, t0, f(15), f(20), f(45), f(50), f(55))); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := e.TankState(sweep(right, t0, f(15), f(15), f(20), f(38), f(41))); err != nil {
-			t.Fatal(err)
-		}
-		return e.State()
+// lowFeed is two tanks' sweeps at at: the left hot at the top, the right
+// at right's temperatures.
+func lowFeed(t *testing.T, e *Engine, at time.Time, right5 [5]float64) {
+	t.Helper()
+	if _, err := e.TankState(sweep(left, at, f(15), f(20), f(45), f(50), f(55))); err != nil {
+		t.Fatal(err)
 	}
-	s := feed(planConfig())
-	total := *s.UsableL40Low
-	l, r := *s.Tanks[0].UsableL40Low, *s.Tanks[1].UsableL40Low
-	t.Logf("usable_l40_low: left %.1f L, right %.1f L, total %.1f L", l, r, total)
-	if !(r < l) || r <= 0 {
-		t.Fatalf("fixture: right %.1f L should be the smaller and above 0", r)
+	r := right5
+	if _, err := e.TankState(sweep(right, at, &r[0], &r[1], &r[2], &r[3], &r[4])); err != nil {
+		t.Fatal(err)
+	}
+}
+
+var (
+	rightLow  = [5]float64{15, 15, 20, 38, 41}
+	rightMid  = [5]float64{15, 20, 45, 50, 52}
+	rightHigh = [5]float64{15, 30, 55, 60, 62}
+)
+
+// systemUsable is what the engine reports for the system with the right
+// tank at right5.
+func systemUsable(t *testing.T, right5 [5]float64) float64 {
+	e := newEngine(t, planConfig())
+	lowFeed(t, e, t0, right5)
+	return *e.State().UsableL40Low
+}
+
+// The system's usable litres come from a draw through the merged outlet at
+// OutletSplit (estimate.Merged), not the tanks summed; stored_kwh still
+// sums. With the right tank nearly spent and taking most of the flow, the
+// system has far less than the left tank alone holds.
+func TestSystemUsableThroughTheMergedOutlet(t *testing.T) {
+	cfg := planConfig()
+	e := newEngine(t, cfg)
+	lowFeed(t, e, t0, rightLow)
+	s := e.State()
+	v, err := vessel.New(cfg.Vessel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	est, err := estimate.New(v, cfg.Estimate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ps []*profile.Profile
+	for _, id := range []string{left, right} {
+		sw, _ := e.LastSweep(id)
+		ps = append(ps, sw.Profile)
+	}
+	want, err := est.Merged(ps, cfg.OutletSplit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.UsableL40 == nil || *s.UsableL40 != want.UsableL40 || s.UsableL40Low == nil || *s.UsableL40Low != want.UsableL40Low {
+		t.Errorf("system usable %s / %s, want the merged outlet's %.2f / %.2f", fm(s.UsableL40, "%.2f"), fm(s.UsableL40Low, "%.2f"), want.UsableL40, want.UsableL40Low)
+	}
+	l := *s.Tanks[0].UsableL40
+	if !(*s.UsableL40 < l) {
+		t.Errorf("system usable %.1f L, want less than the left tank alone (%.1f L)", *s.UsableL40, l)
+	}
+	if sum := *s.Tanks[0].StoredKWh + *s.Tanks[1].StoredKWh; s.StoredKWh == nil || *s.StoredKWh != sum {
+		t.Errorf("stored %s, want the tanks summed %.3f", fm(s.StoredKWh, "%.3f"), sum)
+	}
+	t.Logf("left usable_l40 %.1f L, right %.1f L; system %.1f L (first litre %.1f °C)", l, *s.Tanks[1].UsableL40, *s.UsableL40, want.FirstC)
+}
+
+// low_hot_water sets when the system's usable_l40_low falls below
+// LowHotWaterL (not at it), and clears only when it rises above
+// LowHotWaterL + LowHotWaterMarginL (not at it), holding its value in
+// between.
+func TestLowHotWaterHysteresis(t *testing.T) {
+	uLow, uMid, uHigh := systemUsable(t, rightLow), systemUsable(t, rightMid), systemUsable(t, rightHigh)
+	t.Logf("system usable_l40_low: %.2f, %.2f, %.2f L", uLow, uMid, uHigh)
+	if !(uLow < uMid && uMid < uHigh) {
+		t.Fatalf("fixture: %.2f, %.2f, %.2f should rise", uLow, uMid, uHigh)
+	}
+	const eps = 1e-6
+	run := func(l, margin float64, rights ...[5]float64) []string {
+		cfg := planConfig()
+		cfg.LowHotWaterL, cfg.LowHotWaterMarginL = l, margin
+		e := newEngine(t, cfg)
+		var out []string
+		for i, r := range rights {
+			lowFeed(t, e, t0.Add(time.Duration(i)*30*time.Second), r)
+			out = append(out, boolStr(e.State().LowHotWater))
+		}
+		return out
 	}
 	for _, tc := range []struct {
-		name      string
-		threshold float64
-		want      bool
+		name   string
+		l, m   float64
+		rights [][5]float64
+		want   []string
 	}{
-		{"at the total", total, false},
-		{"just above the total", total + 1e-9, true},
-		{"between the tanks", (l + r) / 2, false},
-		{"above the right alone, below the total", r + 1e-9, false},
-		{"zero", 0, false},
+		{"sets just below", uLow + eps, 0, [][5]float64{rightLow}, []string{"on"}},
+		{"not at the threshold", uLow, 0, [][5]float64{rightLow}, []string{"off"}},
+		{"holds inside the margin", uLow + eps, uMid - uLow, [][5]float64{rightLow, rightMid}, []string{"on", "on"}},
+		{"holds at the clear level", uLow + eps, uHigh - uLow - eps, [][5]float64{rightLow, rightHigh}, []string{"on", "on"}},
+		{"clears just above", uLow + eps, uHigh - uLow - 3*eps, [][5]float64{rightLow, rightHigh}, []string{"on", "off"}},
+		{"off stays off inside the margin", uLow - eps, uHigh, [][5]float64{rightMid, rightLow}, []string{"off", "off"}},
+		{"sets again after clearing", uMid + eps, 0, [][5]float64{rightLow, rightHigh, rightLow}, []string{"on", "off", "on"}},
 	} {
-		cfg := planConfig()
-		cfg.LowHotWaterL = tc.threshold
-		got := feed(cfg).LowHotWater
-		if got == nil || *got != tc.want {
-			t.Errorf("%s (%.3f L): low %v, want %v", tc.name, tc.threshold, boolStr(got), tc.want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			if got := run(tc.l, tc.m, tc.rights...); !slices.Equal(got, tc.want) {
+				t.Errorf("low %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// Unknown while a tank's estimate is (stale), and the held value comes
+// back when it is known again: a value inside the margin after the gap
+// keeps what was set before it.
+func TestLowHotWaterUnknownHolds(t *testing.T) {
+	uLow, uMid := systemUsable(t, rightLow), systemUsable(t, rightMid)
+	cfg := planConfig()
+	cfg.LowHotWaterL, cfg.LowHotWaterMarginL = uLow+1e-6, uMid-uLow+1
+	e := newEngine(t, cfg)
+	lowFeed(t, e, t0, rightLow)
+	if got := boolStr(e.State().LowHotWater); got != "on" {
+		t.Fatalf("low %s, want on", got)
+	}
+	e.Tick(t0.Add(cfg.Thermal.StaleAfter + time.Second))
+	if s := e.State(); s.LowHotWater != nil || s.UsableL40Low != nil {
+		t.Fatalf("stale: low %s usable %s, want unknown", boolStr(s.LowHotWater), fm(s.UsableL40Low, "%.1f"))
+	}
+	lowFeed(t, e, t0.Add(cfg.Thermal.StaleAfter+time.Minute), rightMid)
+	if got := boolStr(e.State().LowHotWater); got != "on" {
+		t.Errorf("known again inside the margin: low %s, want the held on", got)
 	}
 }
 
@@ -297,11 +518,17 @@ func (m *meterSim) draw(e *Engine, start time.Time, n int, gap time.Duration) []
 	return ev
 }
 
-// A running draw is in the state with draw_started's id and start; it
-// leaves once the meter ends it; draw_ended follows when the attribution
-// is complete.
-func TestActiveDrawMatchesDrawStarted(t *testing.T) {
-	e := newEngine(t, planConfig())
+// A running draw is in the state with draw_started's id and start. It
+// stays there after the meter ends it (DrawEnd after its last litre) until
+// draw_ended, and leaves in the same input that gives draw_ended: once
+// every tank's share sweep is in, or (here, with no sweeps) the wait for
+// them is over. draw_ended carries the meter's draw and no balance;
+// draw_balanced follows with the attribution, the same draw_id and the
+// same ended_at.
+func TestDrawEndedThenBalanced(t *testing.T) {
+	c := planConfig()
+	e := newEngine(t, c)
+	e.BoilerSystem(hb(t0, boiler.Off, boiler.Off))
 	m := &meterSim{since: t0.Add(-time.Hour)}
 	e.Meter(m.msg(t0, tanktemp.TriggerSweep, tanktemp.LevelOpen)) // the baseline
 	start := t0.Add(time.Minute)
@@ -323,29 +550,72 @@ func TestActiveDrawMatchesDrawStarted(t *testing.T) {
 		t.Errorf("meter %+v", s.Meter)
 	}
 	last := start.Add(40 * time.Second)
-	ev = e.Tick(last.Add(planConfig().Meter.DrawEnd))
-	if e.State().ActiveDraw != nil {
-		t.Error("draw still active after DrawEnd")
-	}
+	ev = e.Tick(last.Add(c.Meter.DrawEnd))
 	if n := len(ofType(ev, EventDrawEnded)); n != 0 {
-		t.Errorf("draw_ended at the meter's end, before the attribution: %d", n)
+		t.Errorf("draw_ended at the meter's end, before the share sweeps' wait: %d", n)
 	}
-	c := planConfig()
-	ev = e.Tick(last.Add(c.Draw.BalanceSettle + c.Draw.MaxSweepGap + time.Second))
+	if a := e.State().ActiveDraw; a == nil || a.DrawID != st[0].Draw.DrawID || a.LitresSoFar != 5 {
+		t.Fatalf("active %+v after the meter's end, want it held until draw_ended", a)
+	}
+	deadline := last.Add(c.Draw.ShareSettle + c.Draw.MaxSweepGap)
+	if ev = e.Tick(deadline); len(ofType(ev, EventDrawEnded)) != 0 || e.State().ActiveDraw == nil {
+		t.Fatalf("draw_ended at the deadline itself")
+	}
+	ev = e.Tick(deadline.Add(time.Second))
 	end := ofType(ev, EventDrawEnded)
-	if len(end) != 1 {
-		t.Fatalf("draw_ended %d after the attribution's wait, want 1", len(end))
+	if len(end) != 1 || e.State().ActiveDraw != nil {
+		t.Fatalf("draw_ended %d, active %+v past the share sweeps' wait, want one and the draw gone", len(end), e.State().ActiveDraw)
 	}
 	d := end[0].Ended
 	if d.DrawID != a.DrawID || !d.StartedAt.Equal(start) || !d.EndedAt.Equal(last) || d.Litres != 5 || d.VolumeKind != "metered" ||
-		d.Kind != meter.KindTap || d.DurationS != 40 || d.From.Seq != 2 || d.To.Seq != 10 || len(d.Tanks) != 2 {
+		d.Kind != meter.KindTap || d.DurationS != 40 || d.From.Seq != 2 || d.To.Seq != 10 || d.FlowLPerMin == nil {
 		t.Errorf("draw_ended %+v", d)
 	}
-	if d.HeatBalanceReliable || len(d.Reasons) == 0 {
-		t.Errorf("no sweeps, yet reliable %v %v", d.HeatBalanceReliable, d.Reasons)
+	if !end[0].At.Equal(deadline.Add(time.Second)) {
+		t.Errorf("draw_ended at %v, want %v", end[0].At, deadline.Add(time.Second))
 	}
-	if !end[0].At.After(last) {
-		t.Errorf("draw_ended at %v, before its last litre", end[0].At)
+	if n := len(ofType(ev, EventDrawBalanced)); n != 0 {
+		t.Errorf("draw_balanced with draw_ended: %d", n)
+	}
+	ev = e.Tick(last.Add(c.Draw.BalanceSettle + c.Draw.MaxSweepGap + time.Second))
+	bal := ofType(ev, EventDrawBalanced)
+	if len(bal) != 1 {
+		t.Fatalf("draw_balanced %d after the attribution's wait, want 1", len(bal))
+	}
+	b := bal[0].Balanced
+	if b.DrawID != d.DrawID || !b.EndedAt.Equal(d.EndedAt) || len(b.Tanks) != 2 {
+		t.Errorf("draw_balanced %+v, want draw %s ended at %v", b, d.DrawID, d.EndedAt)
+	}
+	if b.HeatBalanceReliable || len(b.Reasons) == 0 {
+		t.Errorf("no sweeps, yet reliable %v %v", b.HeatBalanceReliable, b.Reasons)
+	}
+	if e.Pending() {
+		t.Error("still pending")
+	}
+}
+
+// The next draw starting gives the previous draw's draw_ended in the same
+// input, so active_draw moves straight from one to the next.
+func TestNextDrawEndsTheHeldDraw(t *testing.T) {
+	c := planConfig()
+	e := newEngine(t, c)
+	m := &meterSim{since: t0.Add(-time.Hour)}
+	e.Meter(m.msg(t0, tanktemp.TriggerSweep, tanktemp.LevelOpen))
+	start := t0.Add(time.Minute)
+	m.draw(e, start, 3, 10*time.Second)
+	last := start.Add(20 * time.Second)
+	e.Tick(last.Add(c.Meter.DrawEnd + time.Second))
+	held := e.State().ActiveDraw
+	if held == nil {
+		t.Fatal("no held draw")
+	}
+	ev := m.draw(e, last.Add(c.Meter.DrawEnd+20*time.Second), 3, 10*time.Second)
+	end, st := ofType(ev, EventDrawEnded), ofType(ev, EventDrawStarted)
+	if len(end) != 1 || end[0].Ended.DrawID != held.DrawID || len(st) != 1 {
+		t.Fatalf("draw_ended %+v, draw_started %+v: want the held draw ended as the next starts", end, st)
+	}
+	if a := e.State().ActiveDraw; a == nil || a.DrawID != st[0].Draw.DrawID {
+		t.Errorf("active %+v, want the new draw", a)
 	}
 }
 
@@ -371,9 +641,23 @@ func TestRecentIsARing(t *testing.T) {
 	if len(got) != 2 || got[0].DrawID != ids[1] || got[1].DrawID != ids[2] || got[0].Litres != 3 || got[1].Litres != 4 {
 		t.Errorf("recent %+v, want draws %v (3 L, 4 L)", got, ids[1:])
 	}
+	for _, r := range got {
+		if r.Balanced == nil || r.Balanced.DrawID != r.DrawID {
+			t.Errorf("recent %s: balance %+v, want its draw_balanced", r.DrawID, r.Balanced)
+		}
+	}
 	got[0].DrawID = "changed"
-	if e.Recent()[0].DrawID == "changed" {
+	got[0].Balanced.DrawID = "changed"
+	if r := e.Recent()[0]; r.DrawID == "changed" || r.Balanced.DrawID == "changed" {
 		t.Error("Recent shares its buffer with the caller")
+	}
+	// A draw ended but not yet balanced is in Recent without its balance.
+	at = at.Add(time.Hour)
+	m.draw(e, at, 2, 10*time.Second)
+	c := planConfig()
+	e.Tick(at.Add(10*time.Second + c.Draw.ShareSettle + c.Draw.MaxSweepGap + time.Second))
+	if got := e.Recent(); len(got) != 2 || got[1].Litres != 2 || got[1].Balanced != nil {
+		t.Errorf("recent %+v, want the new draw last, unbalanced", got)
 	}
 }
 
@@ -442,5 +726,38 @@ func TestDrawEndReachesTheTanksOnSweeps(t *testing.T) {
 				t.Errorf("+%v after the draw: active %v, tanks %s %s", at.Sub(t0), s.ActiveDraw, s.Tanks[0].State, s.Tanks[1].State)
 			}
 		}
+	}
+}
+
+// A just-started engine hasn't been listening long enough to call the
+// programmer silent: retained messages replay old programmer inputs (the
+// fixture's retained HW event is 59 min older than its retained heartbeat).
+// Silence is judged from the later of the last input and the engine's
+// first event time.
+func TestBoilerSilenceGraceAtStartup(t *testing.T) {
+	cfg := planConfig()
+	limit := time.Duration(float64(cfg.BoilerHeartbeat) * cfg.BoilerMissedHeartbeats)
+	e := newEngine(t, cfg)
+	e.Ambient(t0, 20) // the first input: event time starts here
+	e.BoilerEvent(boiler.Event{Timestamp: t0.Add(-59 * time.Minute), Event: boiler.EventHWOn, HW: boiler.On, CH: boiler.Off})
+	if b := e.State().Boiler; boolStr(b.HW) != "on" {
+		t.Fatalf("a retained event at startup: hw %s, want on", boolStr(b.HW))
+	}
+	e.Tick(t0.Add(limit))
+	if b := e.State().Boiler; boolStr(b.HW) != "on" {
+		t.Fatalf("within the grace: hw %s, want on", boolStr(b.HW))
+	}
+	e.Tick(t0.Add(limit + time.Second))
+	if b := e.State().Boiler; b.HW != nil {
+		t.Errorf("silent for the limit after startup: hw %s, want unknown", boolStr(b.HW))
+	}
+	// The retained event may arrive first (as in the fixtures): a
+	// programmer input's own time is old by nature, so the grace starts at
+	// the first other input.
+	e = newEngine(t, cfg)
+	e.BoilerEvent(boiler.Event{Timestamp: t0.Add(-59 * time.Minute), Event: boiler.EventHWOn, HW: boiler.On, CH: boiler.Off})
+	e.Ambient(t0, 20)
+	if b := e.State().Boiler; boolStr(b.HW) != "on" {
+		t.Errorf("a retained event, then the first sweep: hw %s, want on", boolStr(b.HW))
 	}
 }

@@ -29,6 +29,7 @@ type temps [5]*float64
 func tt(p1, p2, p3, p4, p5 float64) temps { return temps{f(p1), f(p2), f(p3), f(p4), f(p5)} }
 
 var heights = [5]float64{265, 400, 825, 945, 1215}
+var positions = [5]string{"bottom", "lower", "middle", "upper", "top"}
 var roles = [5]profile.Role{profile.RoleInlet, profile.RoleBulk, profile.RoleBulk, profile.RoleBulk, profile.RoleOutlet}
 
 // sw is one tank's sweep with stored energy kwh and the given probes.
@@ -36,7 +37,7 @@ func sw(id string, at time.Time, kwh float64, p temps) tank.Sweep {
 	s := tank.Sweep{DeviceID: id, At: at, ClockSynced: true, ProbesTotal: 5,
 		Estimate: estimate.Tank{KWh: kwh, TopC: 60}}
 	for k := range p {
-		s.Probes = append(s.Probes, tank.Probe{Position: string(rune('1' + k)), Role: roles[k], HeightMM: heights[k], TempC: p[k]})
+		s.Probes = append(s.Probes, tank.Probe{Position: positions[k], Role: roles[k], HeightMM: heights[k], TempC: p[k]})
 		if p[k] != nil {
 			s.ProbesOK++
 		}
@@ -70,7 +71,7 @@ func showerWindow(lb, ls, lbal, rb, rs, rbal float64) Window {
 	return Window{Sweeps: map[string][]tank.Sweep{
 		left:  mk(left, lb, ls, lbal, 65),
 		right: mk(right, rb, rs, rbal, 62),
-	}}
+	}, HW: []Programmer{{t0.Add(-time.Hour), boiler.Off}}}
 }
 
 func tankOf(t *testing.T, a Attribution, id string) TankAttribution {
@@ -96,26 +97,31 @@ func show(p *float64) any {
 const c = 4.186 / 3600
 
 // Each tank's share is its heat lost over what a litre from its own outlet
-// carries, normalised over the tanks. Shares, losses and outlet peaks come
-// from the share sweep; the energy used and the heat balance from the
-// balance sweep.
+// carries, normalised over the tanks. The losses are taken to the balance
+// sweep, the one whose total closes (tanktemp's review of PR #2: at +60 s
+// the picture is 26% short and the split reads 0.76 against 0.89 once
+// settled); the outlet peaks come from the first litre to the share sweep.
+// The share sweep's losses are kept as EarlyLostKWh.
 func TestSharesFromHeatLostOverOwnOutlet(t *testing.T) {
 	cfg := testConfig()
 	// left lost 0.6 kWh by the share sweep, right 1.8; by the balance
 	// sweep 0.4 and 2.6.
 	a := Attribute(cfg, shower(), showerWindow(11, 10.4, 10.6, 10.7, 8.9, 8.1))
-	lL := 0.6 / (c * (65 - 10))
-	rL := 1.8 / (c * (62 - 10))
+	lL := 0.4 / (c * (65 - 10))
+	rL := 2.6 / (c * (62 - 10))
 	wantR := rL / (lL + rL)
 	l, r := tankOf(t, a, left), tankOf(t, a, right)
 	if !near(r.Share, wantR, 1e-9) || !near(l.Share, 1-wantR, 1e-9) {
-		t.Fatalf("shares left %v right %v, want %v / %v", show(l.Share), show(r.Share), 1-wantR, wantR)
+		t.Fatalf("shares left %v right %v, want %v / %v (balance sweep)", show(l.Share), show(r.Share), 1-wantR, wantR)
 	}
 	if !near(r.Litres, 50*wantR, 1e-9) || !near(l.Litres, 50*(1-wantR), 1e-9) {
 		t.Errorf("litres left %v right %v", show(l.Litres), show(r.Litres))
 	}
-	if !near(l.LostKWh, 0.6, 1e-9) || !near(r.LostKWh, 1.8, 1e-9) {
-		t.Errorf("lost left %v right %v, want 0.6 / 1.8 (share sweep)", show(l.LostKWh), show(r.LostKWh))
+	if !near(l.LostKWh, 0.4, 1e-9) || !near(r.LostKWh, 2.6, 1e-9) {
+		t.Errorf("lost left %v right %v, want 0.4 / 2.6 (balance sweep)", show(l.LostKWh), show(r.LostKWh))
+	}
+	if !near(l.EarlyLostKWh, 0.6, 1e-9) || !near(r.EarlyLostKWh, 1.8, 1e-9) {
+		t.Errorf("early lost left %v right %v, want 0.6 / 1.8 (share sweep)", show(l.EarlyLostKWh), show(r.EarlyLostKWh))
 	}
 	if !near(l.SettledLostKWh, 0.4, 1e-9) || !near(r.SettledLostKWh, 2.6, 1e-9) {
 		t.Errorf("settled lost left %v right %v, want 0.4 / 2.6 (balance sweep)", show(l.SettledLostKWh), show(r.SettledLostKWh))
@@ -138,15 +144,81 @@ func TestSharesFromHeatLostOverOwnOutlet(t *testing.T) {
 	}
 }
 
-// With the shares' own losses at the balance sweep, the heat balance is the
-// sum of the tanks' litres: share-weighting the outlet peak makes the two
-// agree.
+// With the shares and the energy from the same sweep, the heat balance is
+// the sum of the tanks' litres: share-weighting the outlet peak makes the
+// two agree.
 func TestHeatBalanceIsSumOfTankLitres(t *testing.T) {
 	cfg := testConfig()
-	a := Attribute(cfg, shower(), showerWindow(11, 10.4, 10.4, 10.7, 8.9, 8.9))
-	sum := 0.6/(c*55) + 1.8/(c*52)
+	a := Attribute(cfg, shower(), showerWindow(11, 10.4, 10.6, 10.7, 8.9, 8.1))
+	sum := 0.4/(c*55) + 2.6/(c*52)
 	if !near(a.HeatBalanceL, sum, 1e-9) {
 		t.Errorf("heat balance %v, want the tanks' litres summed %v", show(a.HeatBalanceL), sum)
+	}
+}
+
+// Without an uninterrupted balance sweep for every tank, the shares fall
+// back to the share sweep's losses, and say so (shares_early).
+func TestSharesEarlyFallback(t *testing.T) {
+	cfg := testConfig()
+	d := shower()
+	wantR := func() float64 {
+		lL, rL := 0.6/(c*55), 1.8/(c*52)
+		return rL / (lL + rL)
+	}()
+	for _, tc := range []struct {
+		name string
+		edit func(w *Window)
+		want []Reason
+	}{
+		{"interrupted", func(w *Window) { w.Cut = d.End.Add(5 * time.Minute) }, []Reason{ReasonInterrupted, ReasonSharesEarly}},
+		{"a balance sweep late", func(w *Window) {
+			w.Sweeps[left][4].At = d.End.Add(cfg.BalanceSettle + cfg.MaxSweepGap + time.Second)
+		}, []Reason{ReasonTankMissing, ReasonSharesEarly}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := bigShower()
+			tc.edit(&w)
+			a := Attribute(cfg, d, w)
+			reasonsOf(t, a, tc.want...)
+			r := tankOf(t, a, right)
+			if !near(r.Share, wantR, 1e-9) || !near(r.LostKWh, 1.8, 1e-9) {
+				t.Errorf("right share %v lost %v, want %v and 1.8 (share sweep)", show(r.Share), show(r.LostKWh), wantR)
+			}
+		})
+	}
+}
+
+// A masked draw's shares are unknown: a reheat heats whichever tank its coil
+// is in, so the split measures the coil, not the pipework. HW unknown masks
+// the shares the same way. The heat balance is still given, unreliable.
+func TestMaskedSharesAreNil(t *testing.T) {
+	cfg := testConfig()
+	for _, tc := range []struct {
+		name string
+		w    func() Window
+		want Reason
+	}{
+		{"hw on", func() Window { w := bigShower(); w.HW = []Programmer{{t0.Add(-time.Hour), boiler.On}}; return w }, ReasonHWOn},
+		{"hw unknown", func() Window { w := bigShower(); w.HW = nil; return w }, ReasonHWUnknown},
+		{"tank gained", func() Window { return showerWindow(11, 10.4, 11.375, 10.7, 8.9, 8.1) }, ReasonGained},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := Attribute(cfg, shower(), tc.w())
+			if !slices.Contains(a.Reasons, tc.want) || a.Reliable {
+				t.Fatalf("reasons %v reliable %v, want %s", a.Reasons, a.Reliable, tc.want)
+			}
+			for _, x := range a.Tanks {
+				if x.Share != nil || x.Litres != nil {
+					t.Errorf("%s share %v litres %v, want nil", x.DeviceID, show(x.Share), show(x.Litres))
+				}
+				if x.LostKWh == nil || x.OutletPeakC == nil {
+					t.Errorf("%s lost %v peak %v: the measurements should stay", x.DeviceID, show(x.LostKWh), show(x.OutletPeakC))
+				}
+			}
+			if a.HeatBalanceL == nil || a.EnergyKWh == nil {
+				t.Errorf("heat balance %v energy %v, want them given", show(a.HeatBalanceL), show(a.EnergyKWh))
+			}
+		})
 	}
 }
 
@@ -162,17 +234,18 @@ func TestSharesSumToOneAndOrderFollowsConfig(t *testing.T) {
 	}
 }
 
-// A tank that gained heat by the share sweep supplied nothing measurable:
-// its share is 0, never negative, and the other takes the draw.
+// A tank that gained heat (by no more than GainKWh) by the balance sweep
+// supplied nothing measurable: its share is 0, never negative, and the
+// other takes the draw.
 func TestNegativeLossClampsToZeroShare(t *testing.T) {
 	cfg := testConfig()
-	a := Attribute(cfg, shower(), showerWindow(11, 11.2, 10.9, 10.7, 8.9, 8.1))
+	a := Attribute(cfg, shower(), showerWindow(11, 10.4, 11.04, 10.7, 8.9, 8.1))
 	if l, r := tankOf(t, a, left), tankOf(t, a, right); !near(l.Share, 0, 0) || !near(r.Share, 1, 0) {
 		t.Errorf("shares left %v right %v, want 0 / 1", show(l.Share), show(r.Share))
 	}
 }
 
-// No tank lost heat by the share sweep: the split is unknown, not 50/50.
+// No tank lost heat by the balance sweep: the split is unknown, not 50/50.
 func TestNoLossLeavesSharesUnknown(t *testing.T) {
 	cfg := testConfig()
 	a := Attribute(cfg, shower(), showerWindow(11, 11.1, 11, 10.7, 10.8, 10.7))
@@ -197,6 +270,9 @@ func bigShower() Window { return showerWindow(11, 10.4, 10.6, 10.7, 8.9, 8.1) }
 
 // HW on at any moment from the first before sweep to the last balance sweep
 // masks the draw; HW off before the window, or on only after it, doesn't.
+// HW unknown at any moment of the window (no state at all, a state known
+// only from mid-window, or a spell of unknown) says so: hw_unknown, which
+// counts as masking for the shares.
 func TestHWOnMasks(t *testing.T) {
 	cfg := testConfig()
 	d := shower()
@@ -204,16 +280,21 @@ func TestHWOnMasks(t *testing.T) {
 		name   string
 		hw     []Programmer
 		masked bool
+		want   []Reason
 	}{
-		{"unknown", nil, false},
-		{"off throughout", []Programmer{{t0.Add(-time.Hour), boiler.Off}}, false},
-		{"on throughout", []Programmer{{t0.Add(-time.Hour), boiler.On}}, true},
-		{"on mid-draw", []Programmer{{t0.Add(-time.Hour), boiler.Off}, {d.Start.Add(time.Minute), boiler.On}}, true},
-		{"on while settling", []Programmer{{t0.Add(-time.Hour), boiler.Off}, {d.End.Add(7 * time.Minute), boiler.On}}, true},
-		{"a burst mid-window", []Programmer{{t0.Add(-time.Hour), boiler.Off}, {d.End, boiler.On}, {d.End.Add(time.Minute), boiler.Off}}, true},
-		{"off before the window", []Programmer{{t0.Add(-time.Hour), boiler.On}, {d.Start.Add(-time.Minute), boiler.Off}}, false},
-		{"on after the window", []Programmer{{t0.Add(-time.Hour), boiler.Off}, {d.End.Add(9 * time.Minute), boiler.On}}, false},
-		{"on then unknown", []Programmer{{t0.Add(-time.Hour), boiler.On}, {d.Start.Add(-time.Minute), boiler.Unknown}}, false},
+		{"unknown", nil, false, []Reason{ReasonHWUnknown}},
+		{"off throughout", []Programmer{{t0.Add(-time.Hour), boiler.Off}}, false, nil},
+		{"on throughout", []Programmer{{t0.Add(-time.Hour), boiler.On}}, true, []Reason{ReasonHWOn}},
+		{"on mid-draw", []Programmer{{t0.Add(-time.Hour), boiler.Off}, {d.Start.Add(time.Minute), boiler.On}}, true, []Reason{ReasonHWOn}},
+		{"on while settling", []Programmer{{t0.Add(-time.Hour), boiler.Off}, {d.End.Add(7 * time.Minute), boiler.On}}, true, []Reason{ReasonHWOn}},
+		{"a burst mid-window", []Programmer{{t0.Add(-time.Hour), boiler.Off}, {d.End, boiler.On}, {d.End.Add(time.Minute), boiler.Off}}, true, []Reason{ReasonHWOn}},
+		{"off before the window", []Programmer{{t0.Add(-time.Hour), boiler.On}, {d.Start.Add(-time.Minute), boiler.Off}}, false, nil},
+		{"on after the window", []Programmer{{t0.Add(-time.Hour), boiler.Off}, {d.End.Add(9 * time.Minute), boiler.On}}, false, nil},
+		{"on then unknown", []Programmer{{t0.Add(-time.Hour), boiler.On}, {d.Start.Add(-time.Minute), boiler.Unknown}}, false, []Reason{ReasonHWUnknown}},
+		{"known only from mid-window", []Programmer{{d.Start.Add(time.Minute), boiler.Off}}, false, []Reason{ReasonHWUnknown}},
+		{"unknown mid-window", []Programmer{{t0.Add(-time.Hour), boiler.Off}, {d.End, boiler.Unknown}, {d.End.Add(time.Minute), boiler.Off}}, false, []Reason{ReasonHWUnknown}},
+		{"unknown after the window", []Programmer{{t0.Add(-time.Hour), boiler.Off}, {d.End.Add(9 * time.Minute), boiler.Unknown}}, false, nil},
+		{"unknown, then on", []Programmer{{t0.Add(-time.Hour), boiler.Unknown}, {d.End, boiler.On}}, true, []Reason{ReasonHWOn, ReasonHWUnknown}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := bigShower()
@@ -222,11 +303,7 @@ func TestHWOnMasks(t *testing.T) {
 			if a.MaskedByReheat != tc.masked {
 				t.Fatalf("masked %v, want %v", a.MaskedByReheat, tc.masked)
 			}
-			if tc.masked {
-				reasonsOf(t, a, ReasonHWOn)
-			} else {
-				reasonsOf(t, a)
-			}
+			reasonsOf(t, a, tc.want...)
 		})
 	}
 }
@@ -286,6 +363,32 @@ func TestThermoclineInGap(t *testing.T) {
 	}
 }
 
+// The gap probes are found by position, not height: a probe whose height
+// is re-measured (400 → 402 mm) is still the lower probe.
+func TestThermoclineByPosition(t *testing.T) {
+	w := bigShower()
+	for _, id := range []string{left, right} {
+		for k := range w.Sweeps[id] {
+			w.Sweeps[id][k].Probes[1].HeightMM = 402
+		}
+	}
+	w.Sweeps[right][0].Probes = sw(right, t0, 0, tt(14, 18, 60, 60, 55)).Probes
+	w.Sweeps[right][0].Probes[1].HeightMM = 402
+	reasonsOf(t, Attribute(testConfig(), shower(), w), ReasonThermocline)
+}
+
+// Every configured gap is checked: a cold layer between middle and upper
+// flags the draw when that pair is configured, and not when it isn't.
+func TestThermoclineSeveralGaps(t *testing.T) {
+	cfg := testConfig()
+	before := tt(14, 18, 30, 60, 62)
+	w := bigShower()
+	w.Sweeps[left][0].Probes = sw(left, t0, 0, before).Probes
+	reasonsOf(t, Attribute(cfg, shower(), w))
+	cfg.Gaps = append(cfg.Gaps, Gap{Low: "middle", High: "upper"})
+	reasonsOf(t, Attribute(cfg, shower(), w), ReasonThermocline)
+}
+
 // A suspect reading at a gap probe is unread.
 func TestThermoclineSuspectIsUnread(t *testing.T) {
 	w := bigShower()
@@ -319,7 +422,7 @@ func TestMissingOutletFallsBackToProfileTop(t *testing.T) {
 	if r.OutletPeakC != nil || !r.OutletFromProfile || !near(r.PeakUsedC, 57, 0) {
 		t.Fatalf("right peak %v used %v from profile %v, want nil, 57, true", show(r.OutletPeakC), show(r.PeakUsedC), r.OutletFromProfile)
 	}
-	lL, rL := 0.6/(c*55), 1.8/(c*47)
+	lL, rL := 0.4/(c*55), 2.6/(c*47)
 	if !near(r.Share, rL/(lL+rL), 1e-9) {
 		t.Errorf("right share %v, want %v", show(r.Share), rL/(lL+rL))
 	}
@@ -358,8 +461,8 @@ func TestTankNotReporting(t *testing.T) {
 		t.Errorf("left lost %v shares %v/%v outlet %v balance %v energy %v, want all unknown",
 			show(l.LostKWh), show(l.Share), show(r.Share), show(a.OutletC), show(a.HeatBalanceL), show(a.EnergyKWh))
 	}
-	if !near(r.LostKWh, 1.8, 1e-9) {
-		t.Errorf("right lost %v, want 1.8", show(r.LostKWh))
+	if !near(r.EarlyLostKWh, 1.8, 1e-9) || !near(r.SettledLostKWh, 2.6, 1e-9) {
+		t.Errorf("right lost %v / %v, want 1.8 / 2.6", show(r.EarlyLostKWh), show(r.SettledLostKWh))
 	}
 	reasonsOf(t, a, ReasonTankMissing)
 }
@@ -390,9 +493,12 @@ func TestStaleSweepsAreMissing(t *testing.T) {
 			if got := a.HeatBalanceL != nil; got != tc.balance {
 				t.Errorf("balance known %v, want %v", got, tc.balance)
 			}
-			if tc.balance {
+			switch {
+			case tc.balance:
 				reasonsOf(t, a)
-			} else {
+			case tc.shares:
+				reasonsOf(t, a, ReasonTankMissing, ReasonSharesEarly)
+			default:
 				reasonsOf(t, a, ReasonTankMissing)
 			}
 		})
@@ -414,7 +520,7 @@ func TestNextDrawInterruptsBalance(t *testing.T) {
 	}
 	w.Cut = d.End.Add(5 * time.Minute)
 	a := Attribute(cfg, d, w)
-	reasonsOf(t, a, ReasonInterrupted)
+	reasonsOf(t, a, ReasonInterrupted, ReasonSharesEarly)
 	if l := tankOf(t, a, left); !l.BalanceAt.Equal(d.End.Add(4*time.Minute)) || !near(l.SettledLostKWh, 0.7, 1e-9) {
 		t.Errorf("left balance at %v lost %v, want End+4m and 0.7", l.BalanceAt, show(l.SettledLostKWh))
 	}
@@ -436,20 +542,21 @@ func TestNextDrawBeforeShareSweep(t *testing.T) {
 	}
 	w.Cut = d.End.Add(90 * time.Second)
 	a := Attribute(cfg, d, w)
-	reasonsOf(t, a, ReasonInterrupted)
+	reasonsOf(t, a, ReasonInterrupted, ReasonSharesEarly)
 	if l := tankOf(t, a, left); !l.BalanceAt.Equal(l.ShareAt) {
 		t.Errorf("balance at %v, want the share sweep %v", l.BalanceAt, l.ShareAt)
 	}
 }
 
 // The balance clamps at zero when the tanks gained overall (and says so
-// through the gain rule); it is never negative.
+// through the gain rule); it is never negative. With no tank losing heat
+// by the balance sweep there is no split either (no_loss).
 func TestBalanceNeverNegative(t *testing.T) {
 	a := Attribute(testConfig(), shower(), showerWindow(11, 10.4, 11.5, 10.7, 8.9, 10.8))
 	if !near(a.HeatBalanceL, 0, 0) {
 		t.Errorf("balance %v, want 0", show(a.HeatBalanceL))
 	}
-	reasonsOf(t, a, ReasonGained)
+	reasonsOf(t, a, ReasonGained, ReasonNoLoss)
 }
 
 // The gain rule compares the bulk probes' energy when the sweeps carry it:

@@ -34,11 +34,13 @@ var allFixtures = []string{"shower-layered", "bath-in-reheat", "bath-87", "taps-
 
 // run is what a replay produced.
 type run struct {
-	events []Event
-	states []State // after every input
-	ended  []DrawEnded
-	start  time.Time
-	sweeps map[string][]sweepSnap
+	events   []Event
+	states   []State   // after every input
+	inputEv  [][]Event // each input's events, by states' index
+	ended    []DrawEnded
+	balanced []DrawBalanced
+	start    time.Time
+	sweeps   map[string][]sweepSnap
 }
 
 // sweepSnap is a tank's raw probe readings and its profile at the
@@ -48,6 +50,7 @@ type sweepSnap struct {
 	raw     map[string]float64 // by position; missing if the read failed
 	profile map[string]float64 // the strat profile at each position's height
 	probes  []profile.Probe
+	prof    *profile.Profile
 	state   thermal.State
 }
 
@@ -66,15 +69,22 @@ func feed(t *testing.T, e *Engine, name string, o feedOpts) run {
 	}
 	r := run{start: t0.Add(o.shift), sweeps: map[string][]sweepSnap{}}
 	var last time.Time
-	add := func(ev []Event) {
+	collect := func(ev []Event) {
 		r.events = append(r.events, ev...)
 		for _, x := range ev {
-			if x.Type == EventDrawEnded {
+			switch x.Type {
+			case EventDrawEnded:
 				r.ended = append(r.ended, *x.Ended)
+			case EventDrawBalanced:
+				r.balanced = append(r.balanced, *x.Balanced)
 			}
 		}
+	}
+	add := func(ev []Event) {
+		collect(ev)
 		s := e.State()
 		r.states = append(r.states, s)
+		r.inputEv = append(r.inputEv, ev)
 		if s.At.After(last) {
 			last = s.At
 		}
@@ -89,7 +99,7 @@ func feed(t *testing.T, e *Engine, name string, o feedOpts) run {
 			}
 			add(ev)
 			if sw, ok := e.LastSweep(m.State.DeviceID); ok && sw.At.Equal(m.State.Timestamp) {
-				sn := sweepSnap{at: sw.At, raw: map[string]float64{}, profile: map[string]float64{}}
+				sn := sweepSnap{at: sw.At, raw: map[string]float64{}, profile: map[string]float64{}, prof: sw.Profile}
 				for _, p := range sw.Probes {
 					if p.TempC != nil {
 						sn.raw[p.Position] = *p.TempC
@@ -120,13 +130,7 @@ func feed(t *testing.T, e *Engine, name string, o feedOpts) run {
 		}
 	}
 	c := planConfig()
-	ev := e.Tick(last.Add(c.Meter.DrawEnd + c.Draw.BalanceSettle + c.Draw.MaxSweepGap + time.Second))
-	r.events = append(r.events, ev...)
-	for _, x := range ev {
-		if x.Type == EventDrawEnded {
-			r.ended = append(r.ended, *x.Ended)
-		}
-	}
+	collect(e.Tick(last.Add(c.Meter.DrawEnd + c.Draw.BalanceSettle + c.Draw.MaxSweepGap + time.Second)))
 	return r
 }
 
@@ -176,7 +180,24 @@ func replayOne(t *testing.T, name string) run {
 
 func (r run) ofs(at time.Time) time.Duration { return at.Sub(r.start) }
 
-func shareOf(d DrawEnded, id string) *float64 {
+// endedOf is the draw_ended of draw id.
+func (r run) endedOf(t *testing.T, id string) DrawEnded {
+	t.Helper()
+	for _, d := range r.ended {
+		if d.DrawID == id {
+			return d
+		}
+	}
+	t.Fatalf("no draw_ended for %s", id)
+	return DrawEnded{}
+}
+
+// masked says whether b's shares are masked: a reheat, or HW unknown.
+func masked(b DrawBalanced) bool {
+	return b.MaskedByReheat || slices.Contains(b.Reasons, draw.ReasonHWUnknown)
+}
+
+func shareOf(d DrawBalanced, id string) *float64 {
 	for _, x := range d.Tanks {
 		if x.DeviceID == id {
 			return x.Share
@@ -295,25 +316,67 @@ func TestFixtureDrawsAreTheMeters(t *testing.T) {
 	}
 }
 
-// 2. The right tank's share is about 0.75 (0.65–0.85) on every unmasked
-// draw of 10 L or more.
+// 2. The right tank's share, from the balance sweep, is about 0.89
+// (0.85–0.95) on every unmasked draw of 10 L or more whose before sweep
+// had no cold layer in a gap (internal/draw's TestFixtureShareDistribution
+// says why that one is left out). Masked draws have no shares.
 func TestFixtureRightShare(t *testing.T) {
 	n := 0
 	for _, name := range allFixtures {
-		for _, d := range replayOne(t, name).ended {
-			if d.Litres < 10 || d.MaskedByReheat {
+		r := replayOne(t, name)
+		for _, b := range r.balanced {
+			d := r.endedOf(t, b.DrawID)
+			s := shareOf(b, right)
+			if masked(b) {
+				if s != nil {
+					t.Errorf("%s %v L: masked %v, yet right share %.3f", name, d.Litres, b.Reasons, *s)
+				}
+				continue
+			}
+			if d.Litres < 10 {
+				continue
+			}
+			t.Logf("%s %v L: right share %s %v", name, d.Litres, fm(s, "%.3f"), b.Reasons)
+			if slices.Contains(b.Reasons, draw.ReasonThermocline) {
 				continue
 			}
 			n++
-			s := shareOf(d, right)
-			t.Logf("%s %v L: right share %s", name, d.Litres, fm(s, "%.3f"))
-			if s == nil || *s < 0.65 || *s > 0.85 {
-				t.Errorf("%s %v L: right share %s, want 0.65–0.85", name, d.Litres, fm(s, "%.3f"))
+			if s == nil || *s < 0.85 || *s > 0.95 {
+				t.Errorf("%s %v L: right share %s, want 0.85–0.95", name, d.Litres, fm(s, "%.3f"))
 			}
 		}
 	}
-	if n < 3 {
+	if n < 2 {
 		t.Errorf("only %d unmasked draws of 10 L or more", n)
+	}
+}
+
+// draw_balanced follows each draw_ended with the same draw_id and an
+// identical ended_at, and comes no earlier.
+func TestFixtureBalancedFollowsEnded(t *testing.T) {
+	for _, name := range allFixtures {
+		r := replayOne(t, name)
+		if len(r.balanced) != len(r.ended) {
+			t.Errorf("%s: %d draw_balanced for %d draw_ended", name, len(r.balanced), len(r.ended))
+			continue
+		}
+		at := map[string]time.Time{}
+		for _, x := range r.events {
+			switch x.Type {
+			case EventDrawEnded:
+				at[x.Ended.DrawID] = x.At
+			case EventDrawBalanced:
+				ea, ok := at[x.Balanced.DrawID]
+				if !ok || x.At.Before(ea) {
+					t.Errorf("%s: draw_balanced %s at %v, draw_ended at %v (%v)", name, x.Balanced.DrawID, x.At, ea, ok)
+				}
+				if d := r.endedOf(t, x.Balanced.DrawID); !d.EndedAt.Equal(x.Balanced.EndedAt) {
+					t.Errorf("%s: %s ended_at %v in draw_balanced, %v in draw_ended", name, d.DrawID, x.Balanced.EndedAt, d.EndedAt)
+				}
+				t.Logf("%s %s: draw_ended +%v after the last litre, draw_balanced +%v", name, x.Balanced.DrawID,
+					ea.Sub(x.Balanced.EndedAt).Truncate(time.Second), x.At.Sub(x.Balanced.EndedAt).Truncate(time.Second))
+			}
+		}
 	}
 }
 
@@ -322,8 +385,8 @@ func TestFixtureRightShare(t *testing.T) {
 // 15 L draw after the shower.
 func TestFixtureHeatBalance(t *testing.T) {
 	sh := replayOne(t, "shower-layered")
-	for _, d := range sh.ended {
-		switch d.Litres {
+	for _, d := range sh.balanced {
+		switch sh.endedOf(t, d.DrawID).Litres {
 		case 50:
 			t.Logf("shower: heat balance %s L, reliable %v %v", fm(d.HeatBalanceL, "%.1f"), d.HeatBalanceReliable, d.Reasons)
 			if d.HeatBalanceL == nil || math.Abs(*d.HeatBalanceL/50-1) > 0.10 || !d.HeatBalanceReliable || len(d.Reasons) != 0 {
@@ -338,8 +401,9 @@ func TestFixtureHeatBalance(t *testing.T) {
 	}
 	for name, l := range map[string]float64{"bath-in-reheat": 72, "bath-87": 87} {
 		found := false
-		for _, d := range replayOne(t, name).ended {
-			if d.Litres != l {
+		r := replayOne(t, name)
+		for _, d := range r.balanced {
+			if r.endedOf(t, d.DrawID).Litres != l {
 				continue
 			}
 			found = true
@@ -354,13 +418,15 @@ func TestFixtureHeatBalance(t *testing.T) {
 	}
 	small := 0
 	for _, name := range allFixtures {
-		for _, d := range replayOne(t, name).ended {
-			if d.Litres >= planConfig().Draw.MinReliableLitres {
+		r := replayOne(t, name)
+		for _, d := range r.balanced {
+			e := r.endedOf(t, d.DrawID)
+			if e.Litres >= planConfig().Draw.MinReliableLitres {
 				continue
 			}
 			small++
 			if d.HeatBalanceReliable || !slices.Contains(d.Reasons, draw.ReasonSmall) {
-				t.Errorf("%s %v L: reliable %v %v, want small", name, d.Litres, d.HeatBalanceReliable, d.Reasons)
+				t.Errorf("%s %v L: reliable %v %v, want small", name, e.Litres, d.HeatBalanceReliable, d.Reasons)
 			}
 		}
 	}
@@ -419,7 +485,7 @@ func TestFixtureCreep(t *testing.T) {
 func TestFixtureQuietNightsHaveNoDraws(t *testing.T) {
 	for _, name := range []string{"quiet-night", "night-loop-stopped"} {
 		r := replayOne(t, name)
-		for _, ty := range []EventType{EventDrawStarted, EventDrawUpdated, EventDrawEnded, EventContinuousFlowStarted} {
+		for _, ty := range []EventType{EventDrawStarted, EventDrawUpdated, EventDrawEnded, EventDrawBalanced, EventContinuousFlowStarted} {
 			if n := len(ofType(r.events, ty)); n != 0 {
 				t.Errorf("%s: %d %s", name, n, ty)
 			}
@@ -592,57 +658,76 @@ func TestFixtureUAFollowsTheLoop(t *testing.T) {
 	}
 }
 
-// 9. Over quiet-night low_hot_water stays false, while the right tank
-// alone falls below 45 °C at the top.
+// 9. low_hot_water through the merged outlet. The tanks are in parallel,
+// so every litre takes OutletSplit from each and the tap gets the mix. On
+// quiet-night the right tank (0.89 of the flow) cools overnight with its
+// loop running while the left stays hot: by the morning the first litre is
+// the right's cool top mixed with a little of the left's hot one, about
+// 39–43 °C (tanktemp's review of PR #2) and falling, so the system is low
+// on hot water although the left tank alone holds plenty. At the start,
+// with both tanks hot, it is not.
 func TestFixtureLowHotWaterIsTheSystems(t *testing.T) {
+	cfg := planConfig()
 	r := replayOne(t, "quiet-night")
-	known := 0
-	minTop, minLow, minTotal := math.Inf(1), math.Inf(1), math.Inf(1)
-	var minTopAt time.Duration
-	first45, firstLow := time.Duration(-1), time.Duration(-1)
-	for _, s := range r.states {
+	v, err := vessel.New(cfg.Vessel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	est, err := estimate.New(v, cfg.Estimate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// low_hot_water's changes through the night.
+	var prev *bool
+	var first, last *State
+	sets := 0
+	for i := range r.states {
+		s := &r.states[i]
 		if s.LowHotWater == nil {
 			continue
 		}
-		known++
-		if *s.LowHotWater {
-			t.Errorf("low_hot_water at +%v: total usable_l40_low %s L", r.ofs(s.At), fm(s.UsableL40Low, "%.1f"))
+		if first == nil {
+			first = s
 		}
-		rt := s.Tanks[1]
-		if *rt.TopC < minTop {
-			minTop, minTopAt = *rt.TopC, r.ofs(s.At)
+		last = s
+		if prev == nil || *prev != *s.LowHotWater {
+			t.Logf("+%v low_hot_water %v: system usable_l40_low %.1f L (left %.1f, right %.1f), right top %.1f °C",
+				r.ofs(s.At).Truncate(time.Second), *s.LowHotWater, *s.UsableL40Low, *s.Tanks[0].UsableL40Low,
+				*s.Tanks[1].UsableL40Low, *s.Tanks[1].TopC)
+			if *s.LowHotWater {
+				sets++
+			}
 		}
-		minLow = min(minLow, *rt.UsableL40Low)
-		if *rt.TopC < 45 && first45 < 0 {
-			first45 = r.ofs(s.At)
-		}
-		if *rt.UsableL40Low < planConfig().LowHotWaterL && firstLow < 0 {
-			firstLow = r.ofs(s.At)
-		}
-		minTotal = min(minTotal, *s.UsableL40Low)
+		prev = s.LowHotWater
 	}
-	last := r.states[len(r.states)-1]
-	for last.LowHotWater == nil && len(r.states) > 1 {
-		r.states = r.states[:len(r.states)-1]
-		last = r.states[len(r.states)-1]
+	if first == nil {
+		t.Fatal("low_hot_water never known")
+	}
+	if *first.LowHotWater || *first.Tanks[0].TopC < 50 || *first.Tanks[1].TopC < 50 {
+		t.Errorf("at the start: low %v, tops %.1f / %.1f °C; want both hot and not low", *first.LowHotWater, *first.Tanks[0].TopC, *first.Tanks[1].TopC)
+	}
+	if sets != 1 {
+		t.Errorf("low_hot_water set %d times, want once (hysteresis)", sets)
+	}
+	// The morning: the tap's first litre from the tanks' last profiles.
+	ps := []*profile.Profile{r.sweeps[left][len(r.sweeps[left])-1].prof, r.sweeps[right][len(r.sweeps[right])-1].prof}
+	m, err := est.Merged(ps, cfg.OutletSplit)
+	if err != nil {
+		t.Fatal(err)
 	}
 	lt, rt := last.Tanks[0], last.Tanks[1]
-	t.Logf("right tank: top_c min %.1f °C (at +%v), usable_l40_low min %.1f L; system usable_l40_low min %.1f L (threshold %v L)",
-		minTop, minTopAt.Truncate(time.Minute), minLow, minTotal, planConfig().LowHotWaterL)
-	t.Logf("at the end: left top %.1f °C usable_l40 %.1f L (low %.1f), right top %.1f °C usable_l40 %.1f L (low %.1f)",
-		*lt.TopC, *lt.UsableL40, *lt.UsableL40Low, *rt.TopC, *rt.UsableL40, *rt.UsableL40Low)
-	if known < len(r.states)/2 {
-		t.Errorf("low_hot_water known in only %d of %d states", known, len(r.states))
+	t.Logf("at the end (+%v): left top %.1f °C usable_l40 %.1f L, right top %.1f °C usable_l40 %.1f L; split %v",
+		r.ofs(last.At).Truncate(time.Second), *lt.TopC, *lt.UsableL40, *rt.TopC, *rt.UsableL40, cfg.OutletSplit)
+	t.Logf("system through the merged outlet: first litre %.1f °C, %.1f L before the mix falls below %v °C, usable_l40 %.1f L, usable_l40_low %.1f L (the tanks summed: %.1f L)",
+		m.FirstC, m.Litres, cfg.Estimate.MinC, *last.UsableL40, *last.UsableL40Low, *lt.UsableL40+*rt.UsableL40)
+	if m.FirstC < 38 || m.FirstC > 44 {
+		t.Errorf("first litre %.1f °C, want about 39–43", m.FirstC)
 	}
-	if !(minTop < 45) {
-		t.Errorf("the right tank's top stayed at %.1f °C or more: the fixture no longer shows it alone low", minTop)
+	if !*last.LowHotWater || *last.UsableL40Low >= cfg.LowHotWaterL {
+		t.Errorf("at the end: low %v, usable_l40_low %.1f L; want low", *last.LowHotWater, *last.UsableL40Low)
 	}
-	if !(minLow < planConfig().LowHotWaterL) {
-		t.Errorf("the right tank alone never fell below the threshold (min %.1f L)", minLow)
-	}
-	if first45 >= 0 {
-		t.Logf("the right tank's top first below 45 °C at +%v; its usable_l40_low first below %v L at +%v",
-			first45.Truncate(time.Minute), planConfig().LowHotWaterL, firstLow.Truncate(time.Minute))
+	if !(*lt.UsableL40 > cfg.LowHotWaterL) {
+		t.Errorf("the left tank alone holds %.1f L: the fixture no longer shows one tank full", *lt.UsableL40)
 	}
 }
 
@@ -681,6 +766,41 @@ func TestFixtureRetainedStateFacts(t *testing.T) {
 		for id := range starts {
 			if !seen[id] {
 				t.Errorf("%s: draw %s never in active_draw", name, id)
+			}
+		}
+		// A draw stays in active_draw from its draw_started until the input
+		// that gives its draw_ended, and is gone from that input on.
+		firstIn, endIn := map[string]int{}, map[string]int{}
+		for i, s := range r.states {
+			if a := s.ActiveDraw; a != nil {
+				if _, ok := firstIn[a.DrawID]; !ok {
+					firstIn[a.DrawID] = i
+				}
+				if _, ended := endIn[a.DrawID]; ended {
+					t.Errorf("%s: draw %s in active_draw at +%v, after its draw_ended", name, a.DrawID, r.ofs(s.At))
+				}
+			}
+			for _, x := range r.inputEv[i] {
+				if x.Type == EventDrawEnded {
+					endIn[x.Ended.DrawID] = i
+				}
+			}
+		}
+		for id, from := range firstIn {
+			to, ok := endIn[id]
+			if !ok {
+				to = len(r.states)
+			}
+			for i := from; i < to; i++ {
+				if a := r.states[i].ActiveDraw; a == nil || a.DrawID != id {
+					t.Errorf("%s: draw %s left active_draw at +%v, before its draw_ended", name, id, r.ofs(r.states[i].At))
+					break
+				}
+			}
+			if ok && to > 0 {
+				if a := r.states[to].ActiveDraw; a != nil && a.DrawID == id {
+					t.Errorf("%s: draw %s still active in the state of its draw_ended", name, id)
+				}
 			}
 		}
 		for _, d := range r.ended {

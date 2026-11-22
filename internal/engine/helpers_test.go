@@ -31,9 +31,20 @@ const (
 //   - Tanks: internal/tank's houseTanks.
 //   - Thermal: internal/thermal's planConfig.
 //   - Draw: internal/draw's testConfig.
+//   - OutletSplit 0.11 left, 0.89 right: the right tank's share of the
+//     50 L layered shower, from the balance sweep (internal/draw's
+//     TestFixtureShowerLayered: 0.893; the 12 L evening tap reads 0.902),
+//     the only unmasked multi-litre draws with a clean before sweep.
 //   - LowHotWaterL 60: this package's choice, from the explainer's
-//     simulation (docs/washhouse-explainer.html, low_hot_water: the summed
-//     usable_l40_low under 60 L). PLAN.md gives no number.
+//     simulation (docs/washhouse-explainer.html, low_hot_water under 60 L
+//     of usable_l40_low). PLAN.md gives no number; provisional, for the
+//     owner. LowHotWaterMarginL 10: this package's choice, about one
+//     sweep-to-sweep wobble of a tank in a draw's first minutes, several
+//     times over.
+//   - BoilerHeartbeat 15 min: boiler-sensor's heartbeat_ms (900000) in
+//     its wire-contract test and the fixtures' spacing; the fixtures strip
+//     the config block that carries it. BoilerMissedHeartbeats 2.5:
+//     tanktemp's review of PR #2.
 //   - RecentDraws 50: this package's choice; a day is a few dozen draws.
 func planConfig() Config {
 	probes := func(upper profile.Role) []tank.ProbeConfig {
@@ -97,11 +108,14 @@ func planConfig() Config {
 			MinReliableLitres: 20,
 			GainKWh:           0.05,
 			ThermoclineC:      40,
-			GapLowMM:          400,
-			GapHighMM:         825,
+			Gaps:              []draw.Gap{{Low: "lower", High: "middle"}},
 		},
-		LowHotWaterL: 60,
-		RecentDraws:  50,
+		OutletSplit:            []float64{0.11, 0.89},
+		LowHotWaterL:           60,
+		LowHotWaterMarginL:     10,
+		BoilerHeartbeat:        15 * time.Minute,
+		BoilerMissedHeartbeats: 2.5,
+		RecentDraws:            50,
 	}
 }
 

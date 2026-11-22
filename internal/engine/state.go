@@ -14,19 +14,26 @@ type State struct {
 	// Zero only before the first input.
 	At    time.Time
 	Tanks []TankState // in Config.Tanks order
-	// Totals are summed over every tank; unknown unless every tank's
-	// estimate is known.
+	// Totals are unknown unless every tank's estimate is known. StoredKWh
+	// is summed over the tanks; UsableL40 and UsableL40Low are a draw
+	// through the merged outlet at Config.OutletSplit (estimate.Merged),
+	// not the tanks summed: a tank taking most of the flow that runs cold
+	// first brings the tap below MinC whatever the others hold.
 	StoredKWh    *float64
 	UsableL40    *float64
 	UsableL40Low *float64
-	// LowHotWater: UsableL40Low below Config.LowHotWaterL. Judged for the
-	// system, never one tank; unknown when the total is.
+	// LowHotWater: the system's UsableL40Low, with hysteresis: set below
+	// Config.LowHotWaterL, cleared above it plus LowHotWaterMarginL, held
+	// in between. Judged for the system, never one tank; unknown when the
+	// total is (the held value is kept for when it is known again).
 	LowHotWater *bool
 	Boiler      Boiler
 	// AmbientC is the boiler room's latest reading, unknown once older
 	// than Thermal.AmbientStale.
-	AmbientC   *float64
-	ActiveDraw *ActiveDraw // nil: no draw running
+	AmbientC *float64
+	// ActiveDraw is the running draw, or one the meter has ended whose
+	// draw_ended hasn't been given yet; nil when neither.
+	ActiveDraw *ActiveDraw
 	Meter      MeterState
 	Tanktemp   TanktempStatus
 }
@@ -103,7 +110,8 @@ type Flow struct {
 	FlowLPerMin float64
 }
 
-// DrawEnded is an ended draw with its attribution.
+// DrawEnded is a draw the meter has ended: the volume and the meter's
+// account of it. Its attribution comes later, in DrawBalanced.
 type DrawEnded struct {
 	DrawID    string
 	StartedAt time.Time // the first litre's closing
@@ -115,7 +123,16 @@ type DrawEnded struct {
 	VolumeKind  string
 	FlowLPerMin *float64
 	Kind        meter.Kind // final
-	Tanks       []TankShare
+	// The meter messages the draw covers.
+	From, To meter.Ref
+}
+
+// DrawBalanced is an ended draw's attribution, with its draw_ended's
+// DrawID and EndedAt.
+type DrawBalanced struct {
+	DrawID  string
+	EndedAt time.Time // identical to its draw_ended's
+	Tanks   []TankShare
 	// OutletPeakC is the share-weighted outlet peak (the delivered
 	// temperature); InletDropC the largest inlet drop; EnergyKWh the heat
 	// the tanks lost by the balance sweep.
@@ -127,11 +144,17 @@ type DrawEnded struct {
 	HeatBalanceReliable bool
 	Reasons             []draw.Reason
 	MaskedByReheat      bool
-	// The meter messages the draw covers.
-	From, To meter.Ref
 }
 
-// TankShare is one tank's part in a draw.
+// DrawRecord is one draw in Recent: its draw_ended, and its draw_balanced
+// once there is one (nil until then).
+type DrawRecord struct {
+	DrawEnded
+	Balanced *DrawBalanced
+}
+
+// TankShare is one tank's part in a draw. Share and Litres are unknown
+// when the draw was masked (a reheat, or HW unknown) or a tank is missing.
 type TankShare struct {
 	DeviceID    string
 	Share       *float64
@@ -148,6 +171,7 @@ const (
 	EventDrawStarted           EventType = "draw_started"
 	EventDrawUpdated           EventType = "draw_updated"
 	EventDrawEnded             EventType = "draw_ended"
+	EventDrawBalanced          EventType = "draw_balanced"
 	EventContinuousFlowStarted EventType = "continuous_flow_started"
 	EventContinuousFlowEnded   EventType = "continuous_flow_ended"
 	EventHeatingStarted        EventType = "heating_started"
@@ -156,14 +180,15 @@ const (
 )
 
 // Event is one thing the engine decided, at its event time. Exactly one
-// of Draw, Ended, Flow and Tank is set, by Type.
+// of Draw, Ended, Balanced, Flow and Tank is set, by Type.
 type Event struct {
-	Type  EventType
-	At    time.Time
-	Draw  *ActiveDraw // draw_started, draw_updated
-	Ended *DrawEnded  // draw_ended
-	Flow  *Flow       // continuous_flow_*
-	Tank  *TankEvent  // heating_*, tank_state_changed
+	Type     EventType
+	At       time.Time
+	Draw     *ActiveDraw   // draw_started, draw_updated
+	Ended    *DrawEnded    // draw_ended
+	Balanced *DrawBalanced // draw_balanced
+	Flow     *Flow         // continuous_flow_*
+	Tank     *TankEvent    // heating_*, tank_state_changed
 }
 
 // TankEvent is a thermal change in one tank.

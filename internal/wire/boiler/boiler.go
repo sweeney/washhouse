@@ -97,10 +97,18 @@ type System struct {
 	StartTime *time.Time // status shape only
 	Reason    string     // e.g. MQTT_DISCONNECT in the last will
 	Source    string     // e.g. last_will
+	// HeartbeatMS is config.heartbeat_ms, the heartbeat interval, when the
+	// message carries it (status shape; the fixtures strip it).
+	HeartbeatMS *int64
 }
 
 // IsHeartbeat says whether this is a HEARTBEAT snapshot.
 func (s System) IsHeartbeat() bool { return s.Shape == ShapeStatus && s.Event == SystemHeartbeat }
+
+// ReadyHeartbeat says whether s says what HW and CH are: a HEARTBEAT with
+// ready true. Anything else (RECONNECTED, the last will, STARTUP, a
+// heartbeat before the GPIO baseline) doesn't.
+func (s System) ReadyHeartbeat() bool { return s.IsHeartbeat() && s.Ready != nil && *s.Ready }
 
 // DecodeSystem decodes an `energy/boiler/sensor/system` payload.
 func DecodeSystem(b []byte) (System, error) { return decodeSystem(b) }
