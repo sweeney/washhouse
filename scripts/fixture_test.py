@@ -2,6 +2,7 @@
 
 Run: cd scripts && python3 -m unittest -q fixture_test
 """
+import collections
 import gzip
 import io
 import json
@@ -93,6 +94,121 @@ class Reduce(unittest.TestCase):
         self.assertNotIn("last_seen", out)
         self.assertIsNone(fixture.reduce("zigbee2mqtt/climate_groundfloor_boiler-room",
                                          '{"battery":100}'))
+
+
+STATE = ('{"device_id":"hot_water_cylinder_left","timestamp":"2030-06-01T10:00:00Z",'
+         '"clock_synced":true,"sweep_ms":4000,"sensors":[{"position":"bottom","order":1,'
+         '"height_mm":null,"rom":"28-00001172de60","temp_c":20.875,"raw_c":20.875,'
+         '"offset_c":0,"error":null,"suspect":null}]}')
+STATUS = ('{"online":true,"event":"HEARTBEAT","timestamp":"2030-06-01T10:00:00Z",'
+          '"version":"8009cb7","ready":true,"uptime_s":100,"tanks":["a"],"meters":["m"],'
+          '"sensors_ok":5,"sensors_failed":0,"unexpected":[],"startup_problems":'
+          '[{"rom":null,"code":"discover_failed","message":"no 1-Wire bus masters"}]}')
+
+
+def with_key(payload, key_json, before):
+    """payload with key_json inserted just before the text before."""
+    assert payload.count(before) >= 1, before
+    return payload.replace(before, key_json + "," + before, 1)
+
+
+class AllowList(unittest.TestCase):
+    """tanktemp and boiler payloads keep only the keys WIRE.md (or
+    boiler-sensor's wire contract) documents: an unknown key is dropped and
+    counted, so a new upstream field never reaches a fixture unreviewed."""
+
+    def reduce(self, topic, payload):
+        dropped = collections.Counter()
+        return fixture.reduce(topic, payload, dropped), dropped
+
+    def test_documented_payloads_are_kept_verbatim(self):
+        meter = METER % ("2030-06-01T10:00:05Z", 1)
+        for topic, p in (("water/hot/tanktemp/meter", meter),
+                         ("water/hot/tanktemp/hot_water_cylinder_left/state", STATE),
+                         ("energy/hot_water/hot_water_cylinder_left/state", STATE),
+                         ("water/hot/tanktemp/status", '{"online":false,"event":"LWT"}'),
+                         ("energy/boiler/sensor/events", event("2030-06-01T10:00:00Z", "HW_ON"))):
+            out, dropped = self.reduce(topic, p)
+            self.assertEqual(out, p, topic)
+            self.assertEqual(dropped, {}, topic)
+
+    def test_status_version_replaced_and_rest_verbatim(self):
+        out, dropped = self.reduce("water/hot/tanktemp/status", STATUS)
+        self.assertEqual(out, STATUS.replace('"8009cb7"', '"fixture"'))
+        self.assertEqual(dropped, {})
+
+    def test_unknown_state_key_dropped(self):
+        p = with_key(STATE, '"build":"tanktemp-x"', '"sensors"')
+        out, dropped = self.reduce("water/hot/tanktemp/hot_water_cylinder_left/state", p)
+        self.assertEqual(json.loads(out), json.loads(STATE))
+        self.assertEqual(dropped, {"tanktemp state: build": 1})
+
+    def test_unknown_sensor_key_dropped(self):
+        p = with_key(STATE, '"serial":"x"', '"suspect"')
+        out, dropped = self.reduce("energy/hot_water/hot_water_cylinder_left/state", p)
+        self.assertEqual(json.loads(out), json.loads(STATE))
+        self.assertEqual(dropped, {"tanktemp state: sensors[].serial": 1})
+
+    def test_unknown_status_keys_dropped_and_version_still_replaced(self):
+        p = with_key(STATUS, '"commit_date":"x","host":{"name":"y"}', '"ready"')
+        p = with_key(p, '"detail":"z"', '"message"')
+        out, dropped = self.reduce("water/hot/tanktemp/status", p)
+        want = json.loads(STATUS)
+        want["version"] = "fixture"
+        self.assertEqual(json.loads(out), want)
+        self.assertEqual(list(json.loads(out)), list(want), "key order kept")
+        self.assertEqual(dropped, {"tanktemp status: commit_date": 1, "tanktemp status: host": 1,
+                                   "tanktemp status: startup_problems[].detail": 1})
+
+    def test_non_string_version_replaced(self):
+        out, _ = self.reduce("water/hot/tanktemp/status", '{"online":true,"version":12345}')
+        self.assertEqual(json.loads(out), {"online": True, "version": "fixture"})
+
+    def test_unknown_meter_key_dropped(self):
+        p = with_key(METER % ("2030-06-01T10:00:05Z", 1), '"gpio":27', '"noise"')
+        out, dropped = self.reduce("water/hot/tanktemp/meter", p)
+        self.assertEqual(json.loads(out), json.loads(METER % ("2030-06-01T10:00:05Z", 1)))
+        self.assertEqual(dropped, {"tanktemp meter: gpio": 1})
+
+    def test_object_where_a_value_belongs_is_dropped(self):
+        p = METER % ("2030-06-01T10:00:05Z", 1)
+        p = p.replace('"device_id":"hot_water_meter"', '"device_id":{"host":"x"}')
+        out, dropped = self.reduce("water/hot/tanktemp/meter", p)
+        self.assertNotIn("device_id", json.loads(out))
+        self.assertEqual(dropped, {"tanktemp meter: device_id": 1})
+        p = STATUS.replace('"tanks":["a"]', '"tanks":[{"host":"x"}]')
+        out, dropped = self.reduce("water/hot/tanktemp/status", p)
+        self.assertNotIn("tanks", json.loads(out))
+
+    def test_boiler_event_reduced_to_its_fields(self):
+        p = ('{"boiler":{"timestamp":"2030-06-01T10:00:00Z","event":"HW_ON","version":"abc1234",'
+             '"ch":{"state":"OFF","pin":17},"hw":{"state":"ON"}},"network":{"ip":"x"}}')
+        out, dropped = self.reduce("energy/boiler/sensor/events", p)
+        self.assertEqual(out, event("2030-06-01T10:00:00Z", "HW_ON"))
+        self.assertEqual(dropped, {"boiler event: boiler.version": 1,
+                                   "boiler event: boiler.ch.pin": 1,
+                                   "boiler event: network": 1})
+
+    def test_unknown_tanktemp_topics_and_non_objects_dropped(self):
+        for topic in ("water/hot/tanktemp/meter/second", "water/hot/tanktemp/debug",
+                      "water/hot/tanktemp/a/b/state", "energy/hot_water/x/config",
+                      "water/hot/tanktemp"):
+            self.assertIsNone(fixture.reduce(topic, '{"a":1}'), topic)
+        for p in ("not json", "[1]", "null", '"s"'):
+            self.assertIsNone(fixture.reduce("water/hot/tanktemp/meter", p), p)
+            self.assertIsNone(fixture.reduce("energy/boiler/sensor/events", p), p)
+
+    def test_cut_counts_dropped_keys_and_report_shows_them(self):
+        p = with_key(METER % ("2030-06-01T10:00:05Z", 1), '"gpio":27', '"noise"')
+        _, stats = fixture.cut([line(recv("10:00:05"), "water/hot/tanktemp/meter", p)],
+                               fixture.parse_time(START), fixture.parse_time(END))
+        self.assertEqual(stats.unknown_keys, {"tanktemp meter: gpio": 1})
+        job = fixture.Job("x", 0, 1, "x.log.gz", [])
+        job.stats = stats
+        buf = io.StringIO()
+        job.report(buf)
+        self.assertIn("dropped 1 unknown key", buf.getvalue())
+        self.assertIn("tanktemp meter: gpio", buf.getvalue())
 
 
 class Shift(unittest.TestCase):
@@ -274,6 +390,63 @@ class Privacy(unittest.TestCase):
             self.assertTrue(self.problems('x t {"last_seen":%s}\n' % bad), bad)
         self.assertEqual(self.problems('x t {"v":12345678901,"f":0.1906452000}\n'), [])
 
+    # Forms the ISO shift can't move, so any of them is a real date or a
+    # network detail. tanktemp's payloads use ISO for every time, so there is
+    # no fake-epoch exception: a compact or written date in 2000/2001 is
+    # refused too.
+    def refused(self, payload):
+        return self.problems(FAKE + "+0000 t " + payload + "\n")
+
+    def test_refuses_a_url(self):
+        for bad in ("tcp://broker:1883", "mqtt://10.9.9.9", "https://example.org/x",
+                    "ws+tls://h"):
+            self.assertTrue(self.refused('{"broker":"%s"}' % bad), bad)
+
+    def test_refuses_a_compact_date_time_with_z(self):
+        self.assertTrue(self.refused('{"at":"20010101T000000Z"}'))
+        self.assertTrue(self.refused('{"at":"20301231T235959Z"}'))
+
+    def test_refuses_a_compact_date_time_without_z(self):
+        self.assertTrue(self.refused('{"at":"20300601T100000"}'))
+        self.assertTrue(self.refused('{"at":"20300601100000"}'))
+
+    def test_refuses_a_build_name_with_a_date_and_time(self):
+        self.assertTrue(self.refused('{"build":"tanktemp-20301120-221500-4aba4d5"}'))
+        self.assertTrue(self.refused('{"build":"tanktemp_20301120_2215"}'))
+
+    def test_refuses_a_compact_date_in_a_name(self):
+        self.assertTrue(self.refused('{"build":"tanktemp-20301120"}'))
+        self.assertTrue(self.refused('{"build":"v20010101.1"}'))
+
+    def test_refuses_a_fractional_unix_time(self):
+        for bad in ("1906452000.5", "1906452000.125", "1906452000000.5"):
+            self.assertTrue(self.refused('{"t":%s}' % bad), bad)
+
+    def test_refuses_a_slashed_or_dotted_date(self):
+        for bad in ("2001/01/01", "2030/6/1", "01/01/2001", "1/6/30", "2030.06.01",
+                    "1.6.2030"):
+            self.assertTrue(self.refused('{"d":"%s"}' % bad), bad)
+
+    def test_refuses_a_day_month_year(self):
+        for bad in ("1 Jan 2001", "01 January 2001", "1st june 2030",
+                    "Mon, 01 Jan 2001 00:00:00 GMT"):
+            self.assertTrue(self.refused('{"d":"%s"}' % bad), bad)
+
+    def test_refuses_a_month_day_year(self):
+        for bad in ("Jan 1 2001", "Jan 1, 2001", "September 30, 2030", "Jun 2030",
+                    "Mon Jan  1 00:00:00 2001"):
+            self.assertTrue(self.refused('{"d":"%s"}' % bad), bad)
+
+    def test_no_false_alarms_on_payload_values(self):
+        # ROMs, versions, temperatures, large counts, uptimes and words that
+        # start like a month stay clean.
+        for ok in ('{"rom":"28-00001172de60","rom2":"28-200117211234ab"}',
+                   '{"v":"1.2.3","v2":"0.10.12"}', '{"temp_c":61.185,"raw_c":-0.0625}',
+                   '{"uptime_s":20011231,"count":12345678}',
+                   '{"note":"market 2001 marching mayday"}', '{"path":"a/b/c"}',
+                   '{"ratio":"1/2"}'):
+            self.assertEqual(self.refused(ok), [], ok)
+
     def test_problem_names_the_line_not_the_data(self):
         (msg,) = self.problems('x t {"ssid":"examplenet"}\n')
         self.assertIn("line 2", msg)
@@ -364,7 +537,7 @@ class CLI(unittest.TestCase):
 
     def test_refuses_a_leak_and_writes_nothing(self):
         leaky = self.write("leaky.log", line(recv("10:00:01"), "water/hot/tanktemp/status",
-                                             '{"online":true,"broker":"192.168.7.7"}'))
+                                             '{"online":false,"event":"SHUTDOWN","reason":"192.168.7.7"}'))
         code, _, err = self.run_main("--from", START, "--to", END, "--out", self.out, leaky)
         self.assertEqual(code, 1)
         self.assertIn("192.168.", err)
@@ -373,8 +546,9 @@ class CLI(unittest.TestCase):
 
     def test_refuses_a_real_date_left_in_a_payload(self):
         # A timestamp over a year before START shifts out of the fake epoch.
+        # (In an allowed key: the allow-list would drop an unknown one.)
         old = self.write("old.log", line(recv("10:00:01"), "water/hot/tanktemp/status",
-                                         '{"since":"2028-01-01T00:00:00Z"}'))
+                                         '{"timestamp":"2028-01-01T00:00:00Z"}'))
         code, _, err = self.run_main("--from", START, "--to", END, "--out", self.out, old)
         self.assertEqual(code, 1)
         self.assertIn("real date", err)

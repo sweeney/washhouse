@@ -5,8 +5,10 @@ Input: mosquitto_sub -F '%I %t %p' lines (receive time, topic, one-line JSON
 payload), as tools/record.sh writes them. Output: the same format, gzipped
 deterministically, with
 
-  - only the topics washhouse reads, the boiler heartbeat reduced to its
-    state fields and the boiler-room climate to temperature and humidity;
+  - only the topics washhouse reads, each payload reduced to an allow-list
+    of keys (tanktemp's per WIRE.md, its version replaced; the boiler's
+    events and heartbeat to their state fields; the boiler-room climate to
+    temperature and humidity), unknown keys dropped and counted;
   - a prelude: each kept topic's last message before START, stamped START
     (what a consumer connecting at START would be handed);
   - retained replays (the same topic and payload seen again) dropped;
@@ -18,6 +20,7 @@ Python 3 stdlib only. See scripts/make-fixture.sh for usage.
 """
 import argparse
 import calendar
+import collections
 import gzip
 import io
 import json
@@ -31,15 +34,45 @@ KEEP_PREFIXES = ("water/hot/tanktemp", "energy/hot_water")
 BOILER_EVENTS = "energy/boiler/sensor/events"
 BOILER_SYSTEM = "energy/boiler/sensor/system"
 CLIMATE = "zigbee2mqtt/climate_groundfloor_boiler-room"
-# Per payload shape of the boiler system topic: the fields kept.
-SYSTEM_FIELDS = {
-    "status": ("event", "ch", "hw", "ready", "timestamp"),
-    "system": ("timestamp", "event", "reason", "source"),
+
+# Allow-lists, per topic: the keys a fixture keeps, so a field nobody has
+# reviewed never reaches one (fail closed). A dict is an object and the keys
+# it may keep; [spec] is a list of those; VALUE is a scalar or a list of
+# scalars (an object or nested list there is dropped too). Unknown keys are
+# dropped, not refused: upstream fields are additive (tanktemp's WIRE.md), so
+# a new one shouldn't stop a recut, and each cut reports what it dropped so
+# the list can be extended once someone has looked.
+VALUE = None
+# tanktemp's docs/WIRE.md: State, Status (and the last will), Meter.
+TANKTEMP_STATE = {
+    "device_id": VALUE, "timestamp": VALUE, "clock_synced": VALUE, "sweep_ms": VALUE,
+    "sensors": [{k: VALUE for k in ("position", "order", "height_mm", "rom", "temp_c",
+                                     "raw_c", "offset_c", "error", "suspect")}],
 }
-CLIMATE_FIELDS = ("temperature", "humidity")
+TANKTEMP_STATUS = {
+    **{k: VALUE for k in ("online", "event", "timestamp", "version", "ready", "uptime_s",
+                          "tanks", "meters", "sensors_ok", "sensors_failed", "unexpected")},
+    "startup_problems": [{"rom": VALUE, "code": VALUE, "message": VALUE}],
+    "reason": VALUE,
+}
+TANKTEMP_METER = {k: VALUE for k in (
+    "device_id", "timestamp", "clock_synced", "trigger", "seq", "litres_per_pulse", "level",
+    "counting_since", "count", "last_pulse_at", "last_interval_ms", "last_closed_ms",
+    "noise", "short", "glitches", "lost")}
+# boiler-sensor: the switch events, and the system topic's two shapes (a
+# heartbeat keeps its state fields only, a system event its own).
+BOILER_EVENT = {"boiler": {"timestamp": VALUE, "event": VALUE,
+                           "ch": {"state": VALUE}, "hw": {"state": VALUE}}}
+SYSTEM_FIELDS = {
+    "status": {k: VALUE for k in ("event", "ch", "hw", "ready", "timestamp")},
+    "system": {k: VALUE for k in ("timestamp", "event", "reason", "source")},
+}
+CLIMATE_FIELDS = {"temperature": VALUE, "humidity": VALUE}
 # tanktemp's build version is a public commit hash; its commit date would pin
-# a fixture to a real day. Replaced in place, so key order stays verbatim.
+# a fixture to a real day.
 VERSION = re.compile(r'"version":"[^"]*"')
+# A tank's state topic: {prefix}/{device_id}/state (WIRE.md, Topics).
+DEVICE_STATE = re.compile(r"[a-z0-9_-]+/state\Z")
 
 FAKE_EPOCH = calendar.timegm((2001, 1, 1, 0, 0, 0))
 # An ISO-8601 timestamp: date, time, optional fraction, optional zone.
@@ -49,23 +82,46 @@ ISO = re.compile(r"(?<!\d)(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})"
 # What must not survive into a fixture.
 FAKE_YEARS = ("2000", "2001")
 DATE = re.compile(r"(?<!\d)(\d{4})-\d{2}-\d{2}(?!\d)")
-# Unix times in seconds or milliseconds, 2001..2036 (zigbee's last_seen is one).
-EPOCH_NUMBER = re.compile(r"(?<![\d.])(1\d{9}|20\d{8}|1\d{12}|20\d{11})(?![\d.])")
+# Unix times in seconds or milliseconds, 2001..2036 (zigbee's last_seen is
+# one), whole or fractional.
+EPOCH_NUMBER = re.compile(r"(?<![\d.])(1\d{9}|20\d{8}|1\d{12}|20\d{11})(\.\d*)?(?!\d)")
+# The shift moves ISO-8601 times only, so any other way of writing a date is
+# real (tanktemp writes every time as ISO). Refused whatever the year, the
+# fake epoch's included.
+_Y, _M, _D = r"(?:19|20)\d\d", r"(?:0[1-9]|1[0-2])", r"(?:0[1-9]|[12]\d|3[01])"
+_HMS = r"(?:[01]\d|2[0-3])[0-5]\d"
+# YYYYMMDD then a time: 20010101T000000Z, 20010101-000000 (a build name),
+# 20010101_0000, 20010101000000.
+COMPACT_DATE_TIME = re.compile(r"(?<!\d)%s%s%s(?:[T_-]%s(?:[0-5]\d)?|%s[0-5]\d)(?!\d)"
+                               % (_Y, _M, _D, _HMS, _HMS))
+# YYYYMMDD on its own inside a name (tanktemp-20010101, v20010101.1). A bare
+# number is left alone: an uptime or a count can look like one.
+COMPACT_DATE = re.compile(r"(?<=[A-Za-z_-])%s%s%s(?![0-9A-Za-z])" % (_Y, _M, _D))
+# 2001/01/01, 2001.01.01, 01/01/2001, 1/1/01, 1.1.2001.
+NUMERIC_DATE = re.compile(r"(?<![\d./])(?:%s[/.]\d{1,2}[/.]\d{1,2}|\d{1,2}/\d{1,2}/\d{2,4}"
+                          r"|\d{1,2}\.\d{1,2}\.%s)(?![\d./])" % (_Y, _Y))
+_MONTH = (r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?"
+          r"|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?")
+_DAY = r"\d{1,2}(?:st|nd|rd|th)?"
+# 1 Jan 2001, 01 January 2001, Mon, 01 Jan 2001 00:00:00 GMT; Jan 1 2001,
+# Jan 1, 2001, Jun 2001, Mon Jan  1 00:00:00 2001 (ctime).
+WRITTEN_DATE = re.compile(r"\b(?:%s\s+%s,?\s+%s|%s[\s,]+(?:%s[\s,]+)?(?:\d\d:\d\d(?::\d\d)?\s+)?%s)\b"
+                          % (_DAY, _MONTH, _Y, _MONTH, _DAY, _Y), re.IGNORECASE)
 LEAKS = (
     ("a private network address (192.168.)", re.compile(r"192\.168\.")),
+    ("a URL (scheme://)", re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")),
     ("an ssid", re.compile(r"ssid", re.IGNORECASE)),
     ('an "ip" key', re.compile(r'"ip"\s*:')),
     ("a Unix time", EPOCH_NUMBER),
+    ("a compact date and time", COMPACT_DATE_TIME),
+    ("a compact date in a name", COMPACT_DATE),
+    ("a numeric date (slashes or dots)", NUMERIC_DATE),
+    ("a written date", WRITTEN_DATE),
 )
 
 
 def _dumps(obj):
     return json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
-
-
-def _subset(obj, fields):
-    """obj's fields that are in fields, in obj's own order."""
-    return {k: v for k, v in obj.items() if k in fields}
 
 
 def _object(payload):
@@ -76,13 +132,96 @@ def _object(payload):
     return obj if isinstance(obj, dict) else None
 
 
-def reduce(topic, payload):
-    """The payload to keep for topic, or None to drop the message."""
+def _scalar(v):
+    return not isinstance(v, (dict, list))
+
+
+def _allow(obj, spec, path, dropped):
+    """obj (an object) reduced to spec's keys, in obj's own order. Each key
+    dropped is counted in dropped under its path."""
+    out = {}
+    for k, v in obj.items():
+        where = path + k
+        if k not in spec:
+            dropped[where] += 1
+            continue
+        sub = spec[k]
+        if sub is VALUE:
+            if _scalar(v) or (isinstance(v, list) and all(_scalar(x) for x in v)):
+                out[k] = v
+            else:
+                dropped[where] += 1
+        elif isinstance(sub, dict):
+            if isinstance(v, dict):
+                out[k] = _allow(v, sub, where + ".", dropped)
+            else:
+                dropped[where] += 1
+        else:  # [spec]: a list of objects
+            if isinstance(v, list) and all(isinstance(x, dict) for x in v):
+                out[k] = [_allow(x, sub[0], where + "[].", dropped) for x in v]
+            else:
+                dropped[where] += 1
+    return out
+
+
+def _filter(payload, spec, kind, dropped, fix=None):
+    """payload reduced to spec: verbatim when nothing is dropped (so floats
+    and key order are as sent), re-encoded otherwise; None if it isn't an
+    object. fix(obj) may rewrite the kept object and says whether the
+    verbatim text still stands."""
+    obj = _object(payload)
+    if obj is None:
+        return None
+    mine = collections.Counter()
+    kept = _allow(obj, spec, kind + ": ", mine)
+    dropped.update(mine)
+    verbatim = not mine
+    if fix is not None:
+        verbatim = fix(kept) and verbatim
+    return payload if verbatim else _dumps(kept)
+
+
+def _version(payload):
+    """A status fix: version becomes "fixture"."""
+    def fix(kept):
+        if "version" not in kept:
+            return True
+        was = kept["version"]
+        kept["version"] = "fixture"
+        return isinstance(was, str)
+    return fix
+
+
+def _tanktemp_spec(topic):
+    """(spec, kind) for a tanktemp topic, or None for one not kept."""
     for p in KEEP_PREFIXES:
-        if topic == p or topic.startswith(p + "/"):
-            return VERSION.sub('"version":"fixture"', payload)
+        if not topic.startswith(p + "/"):
+            continue
+        rest = topic[len(p) + 1:]
+        if rest == "status":
+            return TANKTEMP_STATUS, "tanktemp status"
+        if rest == "meter":
+            return TANKTEMP_METER, "tanktemp meter"
+        if DEVICE_STATE.match(rest):
+            return TANKTEMP_STATE, "tanktemp state"
+    return None
+
+
+def reduce(topic, payload, dropped=None):
+    """The payload to keep for topic, or None to drop the message. Keys
+    outside the topic's allow-list are dropped and counted in dropped (a
+    Counter), by kind and path."""
+    if dropped is None:
+        dropped = collections.Counter()
+    tt = _tanktemp_spec(topic)
+    if tt is not None:
+        spec, kind = tt
+        if kind == "tanktemp status":
+            out = _filter(payload, spec, kind, dropped, _version(payload))
+            return out if out is None else VERSION.sub('"version":"fixture"', out)
+        return _filter(payload, spec, kind, dropped)
     if topic == BOILER_EVENTS:
-        return payload
+        return _filter(payload, BOILER_EVENT, "boiler event", dropped)
     if topic == BOILER_SYSTEM:
         obj = _object(payload)
         if obj is None:
@@ -90,13 +229,15 @@ def reduce(topic, payload):
         for shape, fields in SYSTEM_FIELDS.items():
             inner = obj.get(shape)
             if isinstance(inner, dict):
-                return _dumps({shape: _subset(inner, fields)})
+                # Reduced by design, not counted: the heartbeat's network,
+                # config and counters are known and never wanted.
+                return _dumps({shape: _allow(inner, fields, "", collections.Counter())})
         return None
     if topic == CLIMATE:
         obj = _object(payload)
         if obj is None:
             return None
-        kept = _subset(obj, CLIMATE_FIELDS)
+        kept = _allow(obj, CLIMATE_FIELDS, "", collections.Counter())
         return _dumps(kept) if kept else None
     return None
 
@@ -153,6 +294,7 @@ class Stats:
         self.duplicates = 0   # retained replays dropped from the window
         self.dropped = 0      # window messages on topics not kept
         self.malformed = 0    # lines that are not 'TIME TOPIC PAYLOAD'
+        self.unknown_keys = collections.Counter()  # "kind: path" -> times dropped
 
 
 def _split(raw):
@@ -183,7 +325,8 @@ def cut(lines, start, end):
         received, received_text, topic, payload = msg
         if received >= end:
             continue
-        kept = reduce(topic, payload)
+        dropped = collections.Counter()
+        kept = reduce(topic, payload, dropped)
         if kept is None:
             if received >= start:
                 stats.dropped += 1
@@ -195,14 +338,16 @@ def cut(lines, start, end):
             continue
         seen.add(key)
         if received < start:
-            prelude[topic] = (i, kept)
+            prelude[topic] = (i, kept, dropped)
             continue
+        stats.unknown_keys.update(dropped)
         window.append((received_text, topic, kept))
         stats.topics.setdefault(topic, [0, 0])[1] += 1
         stats.window += 1
     out = []
-    for topic, (_, kept) in sorted(prelude.items(), key=lambda kv: kv[1][0]):
+    for topic, (_, kept, dropped) in sorted(prelude.items(), key=lambda kv: kv[1][0]):
         stats.topics.setdefault(topic, [0, 0])[0] += 1
+        stats.unknown_keys.update(dropped)
         out.append("%s %s %s\n" % (_format(FAKE_EPOCH, None, "+0000"), topic,
                                    shift_text(kept, shift)))
     for received_text, topic, kept in window:
@@ -277,6 +422,11 @@ class Job:
                   "%d other-topic messages, %d malformed lines\n"
                   % (self.name, prelude + st.window, prelude, st.window, st.shift,
                      st.duplicates, st.dropped, st.malformed))
+        n = sum(st.unknown_keys.values())
+        out.write("  dropped %d unknown key%s (not in the topic's allow-list)%s\n"
+                  % (n, "" if n == 1 else "s", ":" if n else ""))
+        for key in sorted(st.unknown_keys):
+            out.write("    %s x%d\n" % (key, st.unknown_keys[key]))
         width = max([len(t) for t in st.topics] + [5])
         out.write("  %-*s %7s %7s\n" % (width, "topic", "prelude", "window"))
         for topic in sorted(st.topics):

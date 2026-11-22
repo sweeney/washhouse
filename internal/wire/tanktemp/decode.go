@@ -143,16 +143,37 @@ func stateFrom(m map[string]json.RawMessage) (State, error) {
 				return State{}, fmt.Errorf("sensors[%d]: %w", i, err)
 			}
 		}
+		if err := sensorInvariants(x); err != nil {
+			return State{}, fmt.Errorf("sensors[%d]: %w", i, err)
+		}
 		s.Sensors = append(s.Sensors, x)
 	}
 	return s, nil
+}
+
+// sensorInvariants checks WIRE.md's pairing: temp_c and raw_c are null
+// exactly when the read failed, and error is then why (non-null), else null.
+// error's vocabulary is left open: a new code from tanktemp is still a
+// failed read, and refusing it would drop the whole sweep.
+func sensorInvariants(x Sensor) error {
+	failed := x.TempC == nil
+	if (x.RawC == nil) != failed {
+		return errors.New("temp_c and raw_c: one null, one not")
+	}
+	if (x.Error != nil) != failed {
+		if failed {
+			return errors.New("no value and error null")
+		}
+		return fmt.Errorf("a value and error %q", *x.Error)
+	}
+	return nil
 }
 
 // --- status
 
 var lwtKeys = []string{"online", "event"}
 
-var statusKeys = []string{"online", "event", "timestamp", "version", "ready", "uptime_s", "tanks", "meters",
+var statusKeys = []string{"online", "event", "timestamp", "version", "ready", "uptime_s", "tanks",
 	"sensors_ok", "sensors_failed", "unexpected", "startup_problems"}
 var statusNullable = []string{"sensors_ok", "sensors_failed", "unexpected"}
 
@@ -184,7 +205,14 @@ func statusFrom(b []byte) (Status, error) {
 			return Status{}, errors.New("last will with online true")
 		}
 		return Status{Online: false, Event: EventLWT}, nil
-	case EventStartup, EventHeartbeat, EventShutdown:
+	case EventStartup, EventHeartbeat:
+		if !s.Online {
+			return Status{}, fmt.Errorf("%s with online false", s.Event)
+		}
+	case EventShutdown:
+		if s.Online {
+			return Status{}, errors.New("SHUTDOWN with online true")
+		}
 	default:
 		return Status{}, fmt.Errorf("unknown event %q", s.Event)
 	}
@@ -201,10 +229,20 @@ func statusFrom(b []byte) (Status, error) {
 		v any
 	}{
 		{"version", &s.Version}, {"ready", &s.Ready}, {"uptime_s", &s.UptimeS}, {"tanks", &s.Tanks},
-		{"meters", &s.Meters}, {"sensors_ok", &s.SensorsOK}, {"sensors_failed", &s.SensorsFailed},
+		{"sensors_ok", &s.SensorsOK}, {"sensors_failed", &s.SensorsFailed},
 		{"unexpected", &s.Unexpected},
 	} {
 		if err := field(m, f.k, f.v); err != nil {
+			return Status{}, err
+		}
+	}
+	// meters is absent from builds before the meter: unknown, so nil. When
+	// present it is never null (`[]` with none).
+	if v, ok := m["meters"]; ok {
+		if isNull(v) {
+			return Status{}, errors.New("meters is null")
+		}
+		if err := field(m, "meters", &s.Meters); err != nil {
 			return Status{}, err
 		}
 	}

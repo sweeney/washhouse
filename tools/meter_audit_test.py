@@ -8,8 +8,10 @@ from datetime import datetime, timedelta, timezone
 
 import meter_audit as ma
 
-T0 = datetime(2026, 11, 21, 7, 0, 0, tzinfo=timezone.utc)
-SINCE = "2026-11-21T06:59:30Z"
+# The fixtures' fake epoch (scripts/fixture.py), so no synthetic scenario
+# carries a real-looking date.
+T0 = datetime(2001, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+SINCE = "2000-12-31T23:59:30Z"
 
 
 def z(d, ms=False):
@@ -224,7 +226,7 @@ class Broken(unittest.TestCase):
         a = Meter()
         a.sweep(T0)
         shower(a, T0 + timedelta(seconds=2), 2, 6.0)
-        b = Meter(since="2026-11-21T07:05:00Z")
+        b = Meter(since="2001-01-01T00:05:00Z")
         b.sweep(T0 + timedelta(minutes=5, seconds=10))
         au = run_audit(a.lines() + b.lines())
         self.assertEqual(len(au.runs), 2)
@@ -269,6 +271,24 @@ class Broken(unittest.TestCase):
         m.sweep(T0 + timedelta(seconds=120))
         au = run_audit(m.lines())
         self.assertEqual(len(next(iter(au.runs.values()))["sweep_gaps"]), 1)
+
+
+class ScenariosOnTheFakeEpoch(unittest.TestCase):
+    """The parity scenarios (meter_scenarios.py, committed under
+    internal/meter/testdata/audit) are synthetic, so they sit on the
+    fixtures' fake epoch: the fixtures' leak check passes on them, and one
+    check covers all of testdata/."""
+
+    def test_scenarios_pass_the_fixture_leak_check(self):
+        import os
+        import sys
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
+        import fixture
+        import meter_scenarios
+        for name, build in meter_scenarios.SCENARIOS.items():
+            lines = ["%s %s %s\n" % row for row in build()]
+            self.assertEqual(fixture.problems(lines), [], name)
+            self.assertTrue(lines[0].startswith("2001-01-01T00:00:00"), name)
 
 
 if __name__ == "__main__":

@@ -13,8 +13,11 @@ writes them: `RECEIVE-TIME TOPIC PAYLOAD`, the payload one line of JSON.
   inside a payload, is moved by one whole number of seconds so that the
   slice's start is `2001-01-01T00:00:00Z`. Intervals are exact; times before
   the start (`counting_since`, the prelude's own timestamps) fall on
-  31 Dec 2000. Real dates and times of day are gone: draw times are an
-  occupancy pattern. Times below are offsets from the fixture's start.
+  31 Dec 2000. Real dates are gone. The time of day is not hidden: each
+  slice starts on a real whole minute, so the boiler programmer's
+  quarter-hour events keep their real phase (and the timer windows their
+  lengths). The owner accepted that. Times below are offsets from the
+  fixture's start.
 - **Prelude.** The first lines, all stamped `2001-01-01T00:00:00+0000`, are
   each kept topic's last message before the start, in the order they were
   received: what a consumer connecting at the start would know. That
@@ -22,13 +25,17 @@ writes them: `RECEIVE-TIME TOPIC PAYLOAD`, the payload one line of JSON.
   climate); their payload timestamps say how old they are.
 - **Retained replays dropped.** A topic and payload seen before (the broker
   replaying retained messages when the recorder reconnected) appears once.
-- **Topics kept:** `water/hot/tanktemp/#` (`energy/hot_water/#` in the
-  older watch48b recording), `energy/boiler/sensor/events`,
+- **Topics kept:** `water/hot/tanktemp/` `status`, `meter` and
+  `+/state` (under `energy/hot_water/` in the older watch48b recording), `energy/boiler/sensor/events`,
   `energy/boiler/sensor/system` (a heartbeat keeps only
   `status.{event,ch,hw,ready,timestamp}`, a system event only
   `system.{timestamp,event,reason,source}`), and
   `zigbee2mqtt/climate_groundfloor_boiler-room` reduced to `humidity` and
   `temperature`. Nothing else: no statehouse topics, no network details.
+  tanktemp's state, status and meter keep only the keys in its WIRE.md, and
+  boiler events only `boiler.{timestamp,event,ch.state,hw.state}`; any other
+  key is dropped, and each cut reports how many. tanktemp's `version` reads
+  `fixture`.
 
 The slice table (names and real times) lives outside the repo; with it,
 `scripts/make-fixture.sh --slices TABLE` regenerates these files byte for

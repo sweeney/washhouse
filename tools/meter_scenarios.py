@@ -21,7 +21,7 @@ from datetime import timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import meter_audit as ma  # noqa: E402
-from meter_audit_test import T0, Meter, run_audit, shower  # noqa: E402
+from meter_audit_test import T0, Meter, run_audit, shower, z  # noqa: E402
 
 S = timedelta(seconds=1)
 
@@ -62,7 +62,7 @@ def restart():
     a.sweep(T0)
     shower(a, T0 + 2 * S, 2, 6.0)
     a.sweep(T0 + 30 * S)
-    b = Meter(since="2026-11-21T07:05:00Z")
+    b = Meter(since=z(T0 + 5 * 60 * S))
     b.sweep(T0 + 5 * 60 * S + 10 * S)
     shower(b, T0 + 5 * 60 * S + 20 * S, 3, 5.0)
     b.sweep(T0 + 5 * 60 * S + 40 * S)

@@ -39,6 +39,7 @@ run "$MF" --check --from "$FROM" --to "$TO" --out "$OUT" "$T/rec/a.log"
 expect "--check exits 0" test "$code" -eq 0
 expect "--check reports per topic" grep -q 'water/hot/tanktemp/meter' <<<"$out"
 expect "--check says it would write" grep -q 'would write' <<<"$out"
+expect "--check counts dropped unknown keys" grep -q "dropped 0 unknown keys" <<<"$out"
 expect "--check writes nothing" test ! -e "$T/fx"
 
 run "$MF" --from "$FROM" --to "$TO" --out "$OUT" "$T/rec/a.log"
@@ -59,7 +60,8 @@ expect "changed fixture without --yes refused" test "$code" -eq 1
 expect "refusal names --yes" grep -q -- '--yes' <<<"$out"
 expect "refused fixture left alone" cmp -s "$OUT" "$T/first.gz"
 
-echo '2030-06-01T10:00:01+0000 water/hot/tanktemp/status {"online":true,"broker":"192.168.9.9"}' >"$T/rec/leak.log"
+# (In an allowed key: an unknown key would be dropped by the allow-list.)
+echo '2030-06-01T10:00:01+0000 water/hot/tanktemp/status {"online":false,"event":"SHUTDOWN","reason":"192.168.9.9"}' >"$T/rec/leak.log"
 run "$MF" --from "$FROM" --to "$TO" --out "$T/fx/leak.log.gz" "$T/rec/leak.log"
 expect "leak refused" test "$code" -eq 1
 expect "leak refusal says why" grep -q '192\.168\.' <<<"$out"

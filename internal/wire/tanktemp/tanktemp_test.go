@@ -181,7 +181,7 @@ func removeKey(t *testing.T, b []byte, key string) []byte {
 func TestMissingKeyIsAnError(t *testing.T) {
 	cases := map[string][]string{
 		"state-ok.golden":         {"device_id", "timestamp", "clock_synced", "sweep_ms", "sensors"},
-		"status-heartbeat.golden": {"online", "event", "timestamp", "version", "ready", "uptime_s", "tanks", "meters", "sensors_ok", "sensors_failed", "unexpected", "startup_problems"},
+		"status-heartbeat.golden": {"online", "event", "timestamp", "version", "ready", "uptime_s", "tanks", "sensors_ok", "sensors_failed", "unexpected", "startup_problems"},
 		"meter-open.golden": {"device_id", "timestamp", "clock_synced", "trigger", "seq", "litres_per_pulse", "level",
 			"counting_since", "count", "last_pulse_at", "last_interval_ms", "last_closed_ms", "noise", "short", "glitches", "lost"},
 		"lwt.golden": {"online", "event"},
@@ -193,6 +193,28 @@ func TestMissingKeyIsAnError(t *testing.T) {
 				t.Errorf("%s without %s: no error\n%s", name, k, b)
 			}
 		}
+	}
+}
+
+// Builds before the meter (before 2026-11-20) send status without `meters`:
+// that is unknown (nil), not "no meters" ([]), and everything else decodes.
+// `meters: null` is still refused: a build with the key never sends null.
+func TestMissingMetersIsUnknown(t *testing.T) {
+	for _, name := range []string{"status-heartbeat.golden", "status-startup.golden", "status-shutdown.golden"} {
+		got, err := DecodeStatus(removeKey(t, golden(t, name), "meters"))
+		if err != nil {
+			t.Errorf("%s without meters: %v", name, err)
+			continue
+		}
+		exp := want[name].(Status)
+		exp.Meters = nil
+		if !reflect.DeepEqual(got, exp) {
+			t.Errorf("%s without meters: got\n%#v\nwant\n%#v", name, got, exp)
+		}
+	}
+	b := strings.Replace(string(golden(t, "status-heartbeat.golden")), `"meters":["hot_water_meter"]`, `"meters":null`, 1)
+	if _, err := DecodeStatus([]byte(b)); err == nil {
+		t.Error("meters null: no error")
 	}
 }
 
@@ -228,10 +250,26 @@ func TestUnknownKeysAreAccepted(t *testing.T) {
 	}
 }
 
+// error's vocabulary is open (WIRE.md lists today's codes): a new code is
+// still a failed read, not a reason to drop the sweep.
+func TestUnknownSensorErrorIsAccepted(t *testing.T) {
+	b := strings.Replace(string(golden(t, "state-failures.golden")), `"error":"crc"`, `"error":"some_new_code"`, 1)
+	s, err := DecodeState([]byte(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := s.Sensors[0].Error; e == nil || *e != "some_new_code" || s.Sensors[0].TempC != nil {
+		t.Errorf("sensor 0 = %#v", s.Sensors[0])
+	}
+}
+
 func TestBadPayloadsAreErrors(t *testing.T) {
 	meter := string(golden(t, "meter-open.golden"))
 	status := string(golden(t, "status-heartbeat.golden"))
 	state := string(golden(t, "state-ok.golden"))
+	shutdown := string(golden(t, "status-shutdown.golden"))
+	startup := string(golden(t, "status-startup.golden"))
+	failures := string(golden(t, "state-failures.golden"))
 	cases := []struct {
 		name, kind, payload string
 	}{
@@ -262,10 +300,22 @@ func TestBadPayloadsAreErrors(t *testing.T) {
 		{"status timestamp null", "status", strings.Replace(status, `"timestamp":"2026-11-03T21:00:00Z"`, `"timestamp":null`, 1)},
 		{"lwt online true", "status", `{"online":true,"event":"LWT"}`},
 		{"heartbeat with only lwt keys", "status", `{"online":true,"event":"HEARTBEAT"}`},
+		// online: true from tanktemp; false in the last will and on SHUTDOWN.
+		{"heartbeat online false", "status", strings.Replace(status, `"online":true`, `"online":false`, 1)},
+		{"startup online false", "status", strings.Replace(startup, `"online":true`, `"online":false`, 1)},
+		{"shutdown online true", "status", strings.Replace(shutdown, `"online":false`, `"online":true`, 1)},
 		{"sensors null", "state", strings.Replace(state, `"sensors":[`, `"sensors":null,"x":[`, 1)},
 		{"sensor not object", "state", `{"device_id":"a","timestamp":"2026-11-02T21:06:26Z","clock_synced":true,"sweep_ms":1,"sensors":[1]}`},
 		{"state device_id empty", "state", strings.Replace(state, `"device_id":"hot-water-cylinder"`, `"device_id":""`, 1)},
 		{"order string", "state", strings.Replace(state, `"order":1`, `"order":"1"`, 1)},
+		// temp_c and raw_c are null exactly when the read failed, and error
+		// then says why (WIRE.md, State).
+		{"temp_c null, error null", "state", strings.Replace(state, `"temp_c":12.0625`, `"temp_c":null`, 1)},
+		{"raw_c null, error null", "state", strings.Replace(state, `"raw_c":12.0625`, `"raw_c":null`, 1)},
+		{"temp_c null, raw_c set, error set", "state", strings.Replace(failures, `"temp_c":null,"raw_c":null,"offset_c":0,"error":"crc"`, `"temp_c":null,"raw_c":12.5,"offset_c":0,"error":"crc"`, 1)},
+		{"raw_c null, temp_c set, error set", "state", strings.Replace(failures, `"temp_c":null,"raw_c":null,"offset_c":0,"error":"crc"`, `"temp_c":12.5,"raw_c":null,"offset_c":0,"error":"crc"`, 1)},
+		{"both null, error null", "state", strings.Replace(failures, `"error":"crc"`, `"error":null`, 1)},
+		{"value with an error", "state", strings.Replace(state, `"offset_c":0,"error":null`, `"offset_c":0,"error":"crc"`, 1)},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

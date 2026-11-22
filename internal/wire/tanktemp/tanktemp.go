@@ -6,9 +6,17 @@
 //   - an unknown value is JSON null and decodes to a nil pointer, never 0;
 //   - every key is always present (except status `reason`, and the last will,
 //     which is exactly online and event), so a missing key is an error;
+//   - except status `meters`, which builds before the meter (before
+//     2026-11-20, still in the recordings) don't send: missing decodes to nil
+//     (unknown), distinct from `[]` (no meters); `null` is still an error;
 //   - new fields are additive, so unknown keys are accepted and ignored;
 //   - a closed vocabulary (event, trigger, level) outside its values is an
-//     error, as is anything that isn't the documented type.
+//     error, as is anything that isn't the documented type;
+//   - status `online` must match its event: true for STARTUP and HEARTBEAT,
+//     false for SHUTDOWN and the last will;
+//   - a sensor's temp_c and raw_c are both null (the read failed, and error
+//     is non-null) or both set (and error is null). error's vocabulary is
+//     open: an unknown code is accepted, so a new one doesn't drop a sweep.
 //
 // A message that fails to decode is an error, never a zero value.
 //
@@ -65,7 +73,9 @@ type Status struct {
 	Ready     bool
 	UptimeS   int64
 	Tanks     []string
-	Meters    []string
+	// Meters is nil when the build predates the meter (no `meters` key),
+	// and an empty, non-nil slice when none is configured.
+	Meters []string
 	// SensorsOK and SensorsFailed are nil before the first sweep.
 	SensorsOK, SensorsFailed *int
 	// Unexpected is nil before the first sweep (null on the wire), and an
