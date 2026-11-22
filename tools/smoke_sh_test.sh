@@ -18,8 +18,9 @@ pass=0 fail=0
 expect_rc() { local want="$1" what="$2"; shift 2; local rc=0; "$@" >"$T/out" 2>&1 || rc=$?
     if [ "$rc" -eq "$want" ]; then pass=$((pass+1)); echo "ok   $what"; else fail=$((fail+1)); echo "FAIL $what (rc $rc, want $want)"; cat "$T/out"; fi; }
 
-printf 'listener %s 127.0.0.1\nallow_anonymous true\n' "$PORT" >"$T/mosq.conf"
-"$MOSQ" -c "$T/mosq.conf" >"$T/mosq.log" 2>&1 & BPID=$!
+# No config file: with none, mosquitto 2 listens on loopback only and allows
+# anonymous clients. (Ubuntu's packaged broker can't read a config under /tmp.)
+"$MOSQ" -p "$PORT" >"$T/mosq.log" 2>&1 & BPID=$!
 for _ in $(seq 50); do mosquitto_pub -h 127.0.0.1 -p "$PORT" -t ping -m x 2>/dev/null && break; sleep 0.1; done
 mosquitto_pub -h 127.0.0.1 -p "$PORT" -t ping -m x 2>/dev/null || { echo "test broker never came up:" >&2; cat "$T/mosq.log" >&2; exit 1; }
 B="127.0.0.1:$PORT"
