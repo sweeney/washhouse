@@ -11,22 +11,35 @@
 //   - runs and de-duplication (WIRE.md): a message is keyed on
 //     (counting_since, seq). A new counting_since is a new run (a restart),
 //     and litres add across runs. A seq at or below the run's highest seen is
-//     a retained replay or duplicate, and not news. The first message seen
-//     of a run joined mid-run (seq > 1) is the baseline: litres counted
-//     before it are not attributed to any draw.
+//     a retained replay or duplicate, and not news. On a cold start (no run
+//     seen yet), the first message of a run joined mid-run (seq > 1) is the
+//     baseline: litres counted before it are not news. A new run first seen
+//     at seq > 1 after a run this consumer saw is a restart it lived through
+//     with messages lost: count starts at 0 per run, so everything the run
+//     counted is news, a count jump like any other.
 //   - litres (WIRE.md): only count measures litres (count × litres_per_pulse),
 //     and only as count rises within a run; a change in last_pulse_at alone
 //     is never a litre (tanktemp's open can round last_pulse_at 1 ms off its
 //     pulse's). A jump of more than one is skipped messages, not lost
 //     litres: the skipped pulses are counted, untimed, with the timed litre
 //     that revealed them.
+//   - clock_synced false (WIRE.md): a Pi with no RTC runs, until NTP
+//     syncs, on the clock saved at shutdown, which can be earlier than the
+//     last run's times. A message stamped so is de-duplicated and its count
+//     taken (Health.Litres, Health.Unsynced), but its times are used for
+//     nothing: no litre event, no draw, no event time. Litres are timed
+//     again from the first synced message. (Simpler than tracking the
+//     last litre per run, and it also covers a clock that is ahead.)
 //   - draws: a draw ends DrawEnd (event time) after its last litre, so a
 //     litre less than DrawEnd after the previous one joins it. One rule, not
 //     two: PLAN.md's 36 s join gap split a real bath at a 40.7 s pause, and
 //     tools/meter_audit.py uses the same single rule. Flow is from the median
 //     interval between litres, as meter_audit.py computes it. Kind: bath at
-//     BathFlowLPerMin or more, else shower at ShowerMinLitres and
-//     ShowerMinDuration or more, else tap.
+//     BathFlowLPerMin and BathMinLitres or more, else shower at
+//     ShowerMinFlowLPerMin, ShowerMinLitres and ShowerMinDuration or more,
+//     else tap. A steady flow with litres under DrawEnd apart is a draw
+//     however slow (1.2 L/min is one), so the shower's minimum flow is what
+//     keeps a dribbling tap from reading as a long shower.
 //   - creep (PLAN.md): a litre that would start a draw, but whose reed stayed
 //     closed CreepClosed or longer, and that no litre follows within DrawEnd,
 //     is creep, never a draw. (The last clause is a judgement from live data:
@@ -48,15 +61,28 @@ import (
 // Config holds every threshold the consumer uses. It has no defaults: the
 // values come from washhouse's config, and Validate refuses a zero.
 type Config struct {
+	// DeviceID: the meter this consumer reads (its device_id, tanktemp's
+	// key in devices_<site>). tanktemp's meters are a list, and runs are
+	// keyed on counting_since alone, so a message from any other device_id
+	// is refused (Health.OtherDevices), never merged into this one's counts.
+	DeviceID string
 	// DrawEnd: a draw ends this long after its last litre (60 s); a litre
 	// less than this after the last joins the draw.
 	DrawEnd time.Duration
-	// BathFlowLPerMin: a draw at this flow or more is a bath (10 L/min).
+	// BathFlowLPerMin and BathMinLitres: a draw at this median flow or
+	// more, and of at least these litres, is a bath (10 L/min, 20 L; real
+	// baths here are 72–87 L). The litres keep a short full-flow hot tap (a
+	// few litres at 10 L/min or more) a tap.
 	BathFlowLPerMin float64
-	// ShowerMinLitres and ShowerMinDuration: a draw under the bath flow with
-	// at least these litres and this duration is a shower (20 L, 180 s).
-	ShowerMinLitres   float64
-	ShowerMinDuration time.Duration
+	BathMinLitres   float64
+	// ShowerMinLitres, ShowerMinDuration and ShowerMinFlowLPerMin: a draw
+	// that isn't a bath, with at least these litres, this duration and this
+	// median flow, is a shower (20 L, 180 s, 3 L/min). Real showers here run
+	// at 4–6.4 L/min and taps at 3.5–5; the flow keeps a tap left dribbling
+	// (or circulation through the meter) from reading as a long shower.
+	ShowerMinLitres      float64
+	ShowerMinDuration    time.Duration
+	ShowerMinFlowLPerMin float64
 	// CreepClosed: a litre whose reed stayed closed this long or longer,
 	// while no draw is running, and that no litre follows within DrawEnd,
 	// is creep (10 s).
@@ -163,18 +189,24 @@ type ContinuousFlow struct {
 
 // Health is the meter's health as the consumer sees it.
 type Health struct {
-	Messages   int    // messages fed, duplicates included
-	Duplicates int    // de-duplicated on (counting_since, seq)
-	StaleRuns  int    // messages from an earlier run, after a newer one began
-	Runs       int    // counting runs seen
-	MissingSeq uint64 // seq gaps within runs: messages never seen
-	CountJumps int    // messages whose count rose by more than one
-	Skipped    int    // pulses seen only as a count jump
-	CountFell  int    // messages whose count fell within a run (a contract breach)
+	Messages int // messages fed, duplicates included
+	// OtherDevices: messages refused for a device_id other than
+	// Config.DeviceID. Nothing else in Health counts them.
+	OtherDevices int
+	Duplicates   int    // de-duplicated on (counting_since, seq)
+	StaleRuns    int    // messages from an earlier run, after a newer one began
+	Runs         int    // counting runs seen
+	MissingSeq   uint64 // seq gaps within runs: messages never seen
+	CountJumps   int    // messages whose count rose by more than one
+	Skipped      int    // pulses seen only as a count jump
+	CountFell    int    // messages whose count fell within a run (a contract breach)
 	// Unattributed is pulses counted with no litre time and no draw to
 	// join.
 	Unattributed int
-	Litres       float64 // metered since the consumer started, all runs
+	// Unsynced is pulses counted from messages stamped clock_synced false:
+	// in Litres, but in no litre event and no draw.
+	Unsynced int
+	Litres   float64 // metered since the consumer started, all runs
 
 	// The latest message.
 	Run           Ref

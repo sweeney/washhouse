@@ -15,6 +15,7 @@ func TestConfigValidate(t *testing.T) {
 		t.Fatalf("plan config: %v", err)
 	}
 	bad := map[string]func(*Config){
+		"DeviceID empty":         func(c *Config) { c.DeviceID = "" },
 		"DrawEnd zero":           func(c *Config) { c.DrawEnd = 0 },
 		"DrawEnd negative":       func(c *Config) { c.DrawEnd = -time.Second },
 		"BathFlow zero":          func(c *Config) { c.BathFlowLPerMin = 0 },
@@ -23,6 +24,12 @@ func TestConfigValidate(t *testing.T) {
 		"ShowerMinLitres zero":   func(c *Config) { c.ShowerMinLitres = 0 },
 		"ShowerMinLitres NaN":    func(c *Config) { c.ShowerMinLitres = math.NaN() },
 		"ShowerMinDuration zero": func(c *Config) { c.ShowerMinDuration = 0 },
+		"ShowerMinFlow zero":     func(c *Config) { c.ShowerMinFlowLPerMin = 0 },
+		"ShowerMinFlow NaN":      func(c *Config) { c.ShowerMinFlowLPerMin = math.NaN() },
+		"ShowerMinFlow Inf":      func(c *Config) { c.ShowerMinFlowLPerMin = math.Inf(1) },
+		"BathMinLitres zero":     func(c *Config) { c.BathMinLitres = 0 },
+		"BathMinLitres negative": func(c *Config) { c.BathMinLitres = -1 },
+		"BathMinLitres NaN":      func(c *Config) { c.BathMinLitres = math.NaN() },
 		"CreepClosed zero":       func(c *Config) { c.CreepClosed = 0 },
 		"CreepWindow zero":       func(c *Config) { c.CreepWindow = 0 },
 		"StaleAfter zero":        func(c *Config) { c.StaleAfter = 0 },
@@ -42,6 +49,33 @@ func TestConfigValidate(t *testing.T) {
 	c.UpdateEvery = 30 * time.Second
 	if err := c.Validate(); err != nil {
 		t.Errorf("UpdateEvery 30 s: %v", err)
+	}
+}
+
+// tanktemp's meters are a list: a second meter's messages are refused and
+// counted, never merged into the configured meter's runs and litres.
+func TestOtherDevicesAreRefused(t *testing.T) {
+	c := newConsumer(t, planConfig())
+	s := newSim(t0)
+	feedAll(c, one(s.sweep(t0)))
+	o := newSim(t0.Add(time.Minute)) // the other meter: its own run
+	msgs, _ := o.run(t0.Add(10*time.Second), 5, 6*time.Second, 0.23)
+	for i := range msgs {
+		msgs[i].DeviceID = "cold_water_meter"
+	}
+	ev := feedAll(c, msgs)
+	ev = append(ev, c.Tick(t0.Add(time.Hour))...)
+	if len(ev) != 0 {
+		t.Fatalf("the other meter made news: %+v", ev)
+	}
+	h := c.Health()
+	if h.OtherDevices != 10 || h.Messages != 11 || h.Runs != 1 || h.Litres != 0 || h.Run.Seq != 1 ||
+		!h.Run.CountingSince.Equal(s.since) {
+		t.Fatalf("health %+v", h)
+	}
+	ev = feedAll(c, s.litre(t0.Add(2*time.Hour), time.Second))
+	if lit := ofType(ev, EventLitre); len(lit) != 1 || lit[0].Litre.Total != 1 {
+		t.Errorf("the configured meter after: %+v", ev)
 	}
 }
 
@@ -78,7 +112,7 @@ func TestOneDraw(t *testing.T) {
 	g := got[0]
 	if !ev[0].At.Equal(last.Add(60*time.Second)) || !g.Ended || g.Litres != 10 || g.Pulses != 10 ||
 		!g.Start.Equal(t0.Add(5*time.Second)) || !g.End.Equal(last) || g.Duration != 54*time.Second ||
-		g.FlowLPerMin == nil || *g.FlowLPerMin != 10 || g.Kind != KindBath {
+		g.FlowLPerMin == nil || *g.FlowLPerMin != 10 || g.Kind != KindTap { // 10 L: too few for a bath
 		t.Errorf("draw %+v at %v", g, ev[0].At)
 	}
 	if g.From.Seq != 2 || g.To.Seq != 20 || !g.From.CountingSince.Equal(s.since) {
@@ -153,16 +187,78 @@ func TestKind(t *testing.T) {
 		want   Kind
 	}{
 		{80, f(10), 300 * time.Second, KindBath},
-		{3, f(10), 12 * time.Second, KindBath}, // flow alone makes a bath
+		{20, f(10), 120 * time.Second, KindBath},
+		{19.9, f(10), 120 * time.Second, KindTap}, // full flow, but too few litres for a bath
+		{3, f(10), 12 * time.Second, KindTap},     // a short full-flow hot tap
 		{80, f(9.999), 600 * time.Second, KindShower},
 		{20, f(6), 180 * time.Second, KindShower},
 		{19.9, f(6), 300 * time.Second, KindTap},
 		{20, f(6), 180*time.Second - time.Millisecond, KindTap},
+		{60, f(3), 1200 * time.Second, KindShower},
+		{60, f(2.999), 1200 * time.Second, KindTap}, // a dribble, not a shower
 		{1, nil, 0, KindTap},
-		{20, nil, 200 * time.Second, KindShower}, // can't happen, but no flow is not a bath
+		{20, nil, 200 * time.Second, KindTap}, // can't happen: no flow is neither a bath nor a shower
 	} {
 		if got := kindOf(cfg, tc.litres, tc.flow, tc.dur); got != tc.want {
 			t.Errorf("%v L at %v over %v: %s, want %s", tc.litres, tc.flow, tc.dur, got, tc.want)
+		}
+	}
+}
+
+// What a steady flow comes out as, across the range from a dribble to a
+// bath: 60 litres at duty 0.24 (the creep/draw split falls at DrawEnd, so a
+// steady flow with litres under 60 s apart is a draw, however slow), and a
+// short full-flow hot tap. Slow steady draws are taps, not showers
+// (ShowerMinFlowLPerMin); they are not folded into continuous flow.
+func TestSteadyFlowOutcomes(t *testing.T) {
+	type outcome struct {
+		kind  Kind // "" for no draw
+		creep bool // every litre creep, in one continuous flow
+	}
+	for _, tc := range []struct {
+		lpm    float64
+		litres int
+		want   outcome
+	}{
+		{0.8, 60, outcome{creep: true}},
+		{1.0, 60, outcome{creep: true}}, // litres exactly DrawEnd apart
+		{1.2, 60, outcome{kind: KindTap}},
+		{1.5, 60, outcome{kind: KindTap}},
+		{2.0, 60, outcome{kind: KindTap}},
+		{3, 60, outcome{kind: KindShower}},
+		{4.9, 60, outcome{kind: KindShower}},
+		{6.3, 60, outcome{kind: KindShower}},
+		{15, 60, outcome{kind: KindBath}},
+		{12, 3, outcome{kind: KindTap}}, // a short full-flow hot tap
+	} {
+		c := newConsumer(t, planConfig())
+		s := newSim(t0)
+		iv := time.Duration(float64(time.Minute) / tc.lpm)
+		start := one(s.sweep(t0))
+		msgs, end := s.run(t0.Add(time.Second), tc.litres, iv, 0.24)
+		ev := feedAll(c, start, msgs)
+		ev = append(ev, c.Tick(end.Add(24*time.Hour))...)
+		var got outcome
+		d := endedDraws(ev)
+		lit := ofType(ev, EventLitre)
+		creep := 0
+		for _, l := range lit {
+			if l.Litre.Creep {
+				creep++
+			}
+		}
+		switch {
+		case len(d) == 1 && d[0].Pulses == tc.litres && creep == 0:
+			got.kind = d[0].Kind
+		case len(d) == 0 && creep == tc.litres && len(ofType(ev, EventContinuousFlowStarted)) == 1 &&
+			len(ofType(ev, EventContinuousFlowEnded)) == 1:
+			got.creep = true
+		default:
+			t.Errorf("%v L/min: %d draws %+v, %d creep litres of %d", tc.lpm, len(d), d, creep, len(lit))
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("%v L/min, %d L: %+v, want %+v", tc.lpm, tc.litres, got, tc.want)
 		}
 	}
 }
@@ -232,7 +328,8 @@ func TestRestartWithAnEarlierCountingSince(t *testing.T) {
 	}
 }
 
-// Joining mid-run, the first message is the baseline: its count isn't news.
+// Joining mid-run on a cold start (no run seen yet), the first message is
+// the baseline: its count isn't news.
 func TestJoiningMidRunIsTheBaseline(t *testing.T) {
 	c := newConsumer(t, planConfig())
 	s := newSim(t0.Add(-time.Hour))
@@ -247,6 +344,35 @@ func TestJoiningMidRunIsTheBaseline(t *testing.T) {
 	lit := ofType(ev, EventLitre)
 	if len(lit) != 1 || lit[0].Litre.Total != 1 {
 		t.Fatalf("got %+v", ev)
+	}
+}
+
+// A restart this consumer lived through, first seen mid-run (the broker or
+// washhouse's connection dropped across it): the baseline rule is for a
+// cold start only, so everything the new run counted is new. Count starts
+// at 0 per run (WIRE.md), so it all arrives as one count jump: the litre
+// at last_pulse_at, timed, and the rest untimed.
+func TestRestartSeenMidRunCountsTheNewRun(t *testing.T) {
+	c := newConsumer(t, planConfig())
+	a := newSim(t0)
+	feedAll(c, one(a.sweep(t0)))
+	b := newSim(t0.Add(time.Minute))
+	b.sweep(t0.Add(time.Minute))                                    // seq 1: lost
+	_, end := b.run(t0.Add(70*time.Second), 5, 6*time.Second, 0.23) // seq 2-11: lost
+	ev := c.Feed(b.sweep(t0.Add(2 * time.Minute)))                  // seq 12, count 5
+	ev = append(ev, c.Tick(end.Add(time.Hour))...)
+	h := c.Health()
+	if h.Litres != 5 || h.Runs != 2 || h.MissingSeq != 11 || h.CountJumps != 1 || h.Skipped != 4 {
+		t.Fatalf("health %+v", h)
+	}
+	lit := ofType(ev, EventLitre)
+	last := t0.Add(70*time.Second + 4*6*time.Second)
+	if len(lit) != 1 || lit[0].Litre.Pulses != 5 || lit[0].Litre.Skipped != 4 || !lit[0].At.Equal(last) ||
+		lit[0].Litre.Total != 5 {
+		t.Fatalf("litres %+v", lit)
+	}
+	if d := endedDraws(ev); len(d) != 1 || d[0].Litres != 5 {
+		t.Errorf("draws %+v", d)
 	}
 }
 
@@ -269,6 +395,115 @@ func TestCountJumpCountsSkippedLitres(t *testing.T) {
 		t.Errorf("litres %+v", lit)
 	}
 	if h := c.Health(); h.CountJumps != 1 || h.Skipped != 1 || h.MissingSeq != 3 {
+		t.Errorf("health %+v", h)
+	}
+}
+
+// A tanktemp restart with a litre still waiting (the usual deploy case: a
+// restart during a draw): the new run's first message settles it, a draw's
+// first litre, since count is the truth for volume. It isn't carried into
+// the new run, where nothing would ever settle it.
+func TestRestartSettlesTheWaitingLitre(t *testing.T) {
+	c := newConsumer(t, planConfig())
+	a := newSim(t0)
+	ev := feedAll(c, one(a.sweep(t0)), one(a.close(t0.Add(5*time.Second)))) // its open never comes
+	if len(ofType(ev, EventLitre)) != 0 {
+		t.Fatalf("decided too soon: %+v", ev)
+	}
+	b := newSim(t0.Add(8 * time.Second))
+	ev = c.Feed(b.sweep(t0.Add(8 * time.Second)))
+	lit := ofType(ev, EventLitre)
+	if len(ofType(ev, EventDrawStarted)) != 1 || len(lit) != 1 || lit[0].Litre.Creep ||
+		lit[0].Litre.Ref.CountingSince != a.since || !lit[0].At.Equal(t0.Add(5*time.Second)) {
+		t.Fatalf("the new run's first message: %+v", ev)
+	}
+	ev = feedAll(c, one(b.sweep(t0.Add(38*time.Second))), one(b.sweep(t0.Add(68*time.Second))))
+	if d := endedDraws(ev); len(d) != 1 || d[0].Litres != 1 || !d[0].End.Equal(t0.Add(5*time.Second)) {
+		t.Errorf("draws %+v", d)
+	}
+}
+
+// After a reboot the Pi has no RTC and runs on the clock saved at
+// shutdown until NTP syncs: tanktemp stamps clock_synced false, with times
+// that can be earlier than the last run's. Those litres are counted (health
+// and Total) but are never timed: not a litre event, not in a draw, and not
+// event time. Once synced, litres are timed again.
+func TestUnsyncedClockIsCountedNotTimed(t *testing.T) {
+	c := newConsumer(t, planConfig())
+	a := newSim(t0)
+	start := one(a.sweep(t0))
+	msgs, end := a.run(t0.Add(time.Second), 5, 6*time.Second, 0.23)
+	feedAll(c, start, msgs) // a draw, still running when tanktemp stops
+	old := t0.Add(-24 * time.Hour)
+	b := newSim(old)
+	b.unsynced = true
+	bstart := one(b.sweep(old))
+	bmsgs, _ := b.run(old.Add(10*time.Second), 3, 6*time.Second, 0.23)
+	ev := feedAll(c, bstart, bmsgs)
+	if len(ev) != 0 {
+		t.Fatalf("unsynced litres made news: %+v", ev)
+	}
+	if d, ok := c.Draw(); !ok || d.Litres != 5 {
+		t.Fatalf("the running draw %+v %v", d, ok)
+	}
+	if h := c.Health(); h.Litres != 8 || h.Unsynced != 3 || h.Unattributed != 0 || h.ClockSynced {
+		t.Fatalf("health %+v", h)
+	}
+	b.unsynced = false // NTP synced: the clock steps to real time
+	real := end.Add(5 * time.Minute)
+	ev = feedAll(c, one(b.sweep(real)))
+	if d := endedDraws(ev); len(d) != 1 || d[0].Litres != 5 || !ev[0].At.Equal(end.Add(-6*time.Second+time.Minute)) {
+		t.Fatalf("the old run's draw: %+v", ev)
+	}
+	more, _ := b.run(real.Add(10*time.Second), 4, 6*time.Second, 0.23)
+	ev = append(feedAll(c, more), c.Tick(real.Add(time.Hour))...)
+	d := endedDraws(ev)
+	if len(d) != 1 || d[0].Litres != 4 || !d[0].Start.Equal(real.Add(10*time.Second)) {
+		t.Fatalf("draws after the sync %+v", d)
+	}
+	if lit := ofType(ev, EventLitre); len(lit) != 4 || lit[3].Litre.Total != 12 {
+		t.Errorf("litres %+v", lit)
+	}
+}
+
+// A cold start on an unsynced message mid-run takes its count as the
+// baseline but not its last_pulse_at: here the clock was an hour ahead, and
+// taking it would leave every synced litre after it untimed.
+func TestUnsyncedBaselineTimesNothing(t *testing.T) {
+	c := newConsumer(t, planConfig())
+	s := newSim(t0.Add(-time.Hour))
+	s.unsynced = true
+	s.litre(t0.Add(time.Hour), time.Second) // seq 1, 2: before this consumer started
+	ev := c.Feed(s.sweep(t0.Add(time.Hour + 30*time.Second)))
+	s.unsynced = false // NTP synced: the clock steps back to real time
+	msgs, end := s.run(t0.Add(time.Minute), 3, 6*time.Second, 0.23)
+	ev = append(ev, feedAll(c, msgs)...)
+	ev = append(ev, c.Tick(end.Add(time.Hour))...)
+	if d := endedDraws(ev); len(d) != 1 || d[0].Litres != 3 || len(ofType(ev, EventLitre)) != 3 {
+		t.Fatalf("got %+v", ev)
+	}
+	if h := c.Health(); h.Litres != 3 || h.Unattributed != 0 || h.Unsynced != 0 {
+		t.Errorf("health %+v", h)
+	}
+}
+
+// A litre with no usable time (here the synced clock stepped back 7 s, and
+// last_pulse_at moved with it, so it is no later than the last litre's)
+// joins the running draw untimed: counted in the draw, its flow untouched.
+func TestUntimedLitreJoinsTheRunningDraw(t *testing.T) {
+	c := newConsumer(t, planConfig())
+	s := newSim(t0)
+	msgs, at := s.run(t0, 3, 6*time.Second, 0.23) // litres at 0, 6, 12 s
+	feedAll(c, msgs)
+	m := s.close(at.Add(-7 * time.Second)) // really at 18 s: stamped 11 s
+	ev := c.Feed(m)
+	d, ok := c.Draw()
+	lit := ofType(ev, EventLitre)
+	if !ok || d.Litres != 4 || d.Pulses != 4 || d.To.Seq != m.Seq || *d.FlowLPerMin != 10 ||
+		len(lit) != 1 || lit[0].Litre.Skipped != 1 || lit[0].Litre.DrawID != d.ID || lit[0].Litre.Total != 4 {
+		t.Fatalf("draw %+v %v, events %+v", d, ok, ev)
+	}
+	if h := c.Health(); h.Unattributed != 0 || h.Skipped != 1 || h.Litres != 4 {
 		t.Errorf("health %+v", h)
 	}
 }
@@ -345,13 +580,23 @@ func TestCreepSettledByAClosedSweep(t *testing.T) {
 }
 
 // A reed closed for DrawEnd or more can't be followed in time: creep at
-// once, on its open.
+// once, on the message that shows it (its open, or a sweep after a lost
+// open), with no Tick needed.
 func TestVeryLongClosedIsCreepAtOnce(t *testing.T) {
-	c := newConsumer(t, planConfig())
-	s := newSim(t0)
-	ev := feedAll(c, s.litre(t0, 60*time.Second))
-	if lit := ofType(ev, EventLitre); len(lit) != 1 || !lit[0].Litre.Creep {
-		t.Fatalf("got %+v", ev)
+	for _, lostOpen := range []bool{false, true} {
+		c := newConsumer(t, planConfig())
+		s := newSim(t0)
+		if ev := c.Feed(s.close(t0)); len(ev) != 0 {
+			t.Fatalf("decided on the pulse: %+v", ev)
+		}
+		m := s.open(t0.Add(60 * time.Second))
+		if lostOpen {
+			m = s.sweep(t0.Add(61 * time.Second))
+		}
+		ev := c.Feed(m)
+		if lit := ofType(ev, EventLitre); len(lit) != 1 || !lit[0].Litre.Creep || !lit[0].At.Equal(t0) {
+			t.Errorf("lost open %v: %+v", lostOpen, ev)
+		}
 	}
 }
 
@@ -410,6 +655,54 @@ func TestNextPulseSettlesALostOpen(t *testing.T) {
 	}
 	if d, _ := c.Draw(); d.Litres != 2 {
 		t.Errorf("draw %+v", d)
+	}
+}
+
+// A pulse's last_closed_ms is the litre before it's: the waiting litre's
+// only when no pulse was skipped between them. After a count jump it is a
+// skipped litre's, so the waiting litre's closed time stays unknown.
+func TestCountJumpLastClosedIsNotTheWaitingLitres(t *testing.T) {
+	c := newConsumer(t, planConfig())
+	s := newSim(t0)
+	p1 := s.close(t0)                            // the waiting litre: closed 20 s ...
+	s.open(t0.Add(20 * time.Second))             // ... but its open is lost
+	s.litre(t0.Add(25*time.Second), time.Second) // a litre closed 1 s: both lost
+	p3 := s.close(t0.Add(30 * time.Second))      // count +2, last_closed_ms 1000
+	if *p3.LastClosedMS != 1000 || p3.Count != 3 {
+		t.Fatalf("sim: %+v", p3)
+	}
+	ev := feedAll(c, []tanktemp.Meter{p1, p3})
+	lit := ofType(ev, EventLitre)
+	if len(lit) != 2 || lit[0].Litre.Creep || lit[1].Litre.Pulses != 2 {
+		t.Fatalf("litres %+v", ev)
+	}
+	if cl := lit[0].Litre.ClosedMS; cl != nil {
+		t.Errorf("the waiting litre took the skipped litre's closed time, %d ms", *cl)
+	}
+}
+
+// The next pulse is the first word on a waiting litre whose open was lost,
+// and its last_closed_ms says the waiting litre was long. Exactly DrawEnd
+// later it was not followed in time: creep. A millisecond sooner it was:
+// the draw's first litre.
+func TestLongClosedFollowedAtExactlyDrawEnd(t *testing.T) {
+	for _, tc := range []struct {
+		gap   time.Duration
+		creep bool
+	}{
+		{60*time.Second - time.Millisecond, false},
+		{60 * time.Second, true},
+	} {
+		c := newConsumer(t, planConfig())
+		s := newSim(t0)
+		p1 := s.close(t0.Add(time.Second))
+		s.open(t0.Add(21 * time.Second)) // lost
+		p2 := s.close(t0.Add(time.Second + tc.gap))
+		ev := feedAll(c, []tanktemp.Meter{p1, p2})
+		lit := ofType(ev, EventLitre)
+		if len(lit) == 0 || lit[0].Litre.Creep != tc.creep || lit[0].Litre.ClosedMS == nil || *lit[0].Litre.ClosedMS != 20000 {
+			t.Errorf("gap %v: %+v, want creep %v", tc.gap, ev, tc.creep)
+		}
 	}
 }
 

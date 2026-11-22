@@ -13,6 +13,9 @@ import (
 // Validate checks every threshold is set and consistent.
 func (c Config) Validate() error {
 	var errs []error
+	if c.DeviceID == "" {
+		errs = append(errs, errors.New("DeviceID: must be set"))
+	}
 	pos := func(name string, d time.Duration) {
 		if d <= 0 {
 			errs = append(errs, fmt.Errorf("%s %v: must be > 0", name, d))
@@ -25,8 +28,10 @@ func (c Config) Validate() error {
 	}
 	pos("DrawEnd", c.DrawEnd)
 	posf("BathFlowLPerMin", c.BathFlowLPerMin)
+	posf("BathMinLitres", c.BathMinLitres)
 	posf("ShowerMinLitres", c.ShowerMinLitres)
 	pos("ShowerMinDuration", c.ShowerMinDuration)
+	posf("ShowerMinFlowLPerMin", c.ShowerMinFlowLPerMin)
 	pos("CreepClosed", c.CreepClosed)
 	pos("CreepWindow", c.CreepWindow)
 	pos("StaleAfter", c.StaleAfter)
@@ -39,12 +44,15 @@ func (c Config) Validate() error {
 	return nil
 }
 
-// kindOf classifies a draw from its litres, median flow and duration.
+// kindOf classifies a draw from its litres, median flow and duration. A
+// draw with no flow (one litre) is a tap.
 func kindOf(cfg Config, litres float64, flow *float64, dur time.Duration) Kind {
 	switch {
-	case flow != nil && *flow >= cfg.BathFlowLPerMin:
+	case flow == nil:
+		return KindTap
+	case *flow >= cfg.BathFlowLPerMin && litres >= cfg.BathMinLitres:
 		return KindBath
-	case litres >= cfg.ShowerMinLitres && dur >= cfg.ShowerMinDuration:
+	case *flow >= cfg.ShowerMinFlowLPerMin && litres >= cfg.ShowerMinLitres && dur >= cfg.ShowerMinDuration:
 		return KindShower
 	}
 	return KindTap
@@ -135,6 +143,10 @@ func msgTime(m tanktemp.Meter) time.Time {
 // events it decided.
 func (c *Consumer) Feed(m tanktemp.Meter) []Event {
 	c.h.Messages++
+	if m.DeviceID != c.cfg.DeviceID {
+		c.h.OtherDevices++
+		return nil
+	}
 	var ev []Event
 	key := m.CountingSince.UnixNano()
 	r := c.runs[key]
@@ -147,11 +159,14 @@ func (c *Consumer) Feed(m tanktemp.Meter) []Event {
 		if c.pend != nil {
 			ev = c.settle(ev, c.pend.long, c.pend.closed)
 		}
-		r = &run{maxSeq: m.Seq - 1}
-		if m.Seq > 1 {
-			// joined mid-run: what was counted before is the baseline
-			r.maxCount = m.Count
-			if m.LastPulseAt != nil && m.LastPulseAt.After(c.lastLitre) {
+		r = &run{}
+		if m.Seq > 1 && c.cur == nil {
+			// A cold start joined mid-run: what was counted before is the
+			// baseline. (After a run this consumer saw, a restart it lived
+			// through: the run counts from 0, so all of it is news, and the
+			// seqs before this one are missing.)
+			r.maxSeq, r.maxCount = m.Seq-1, m.Count
+			if m.ClockSynced && m.LastPulseAt != nil && m.LastPulseAt.After(c.lastLitre) {
 				c.lastLitre = *m.LastPulseAt
 			}
 		}
@@ -170,6 +185,21 @@ func (c *Consumer) Feed(m tanktemp.Meter) []Event {
 	}
 	r.maxSeq = m.Seq
 	c.health(m)
+	if !m.ClockSynced {
+		// The times can't be trusted (a Pi with no RTC, before NTP, runs
+		// on the clock saved at shutdown, which can be earlier than the
+		// last run's): count the litres, but time nothing from them.
+		switch {
+		case m.Count > r.maxCount:
+			delta := int(m.Count - r.maxCount)
+			r.maxCount = m.Count
+			c.h.Litres += float64(delta) * m.LitresPerPulse
+			c.h.Unsynced += delta
+		case m.Count < r.maxCount:
+			c.h.CountFell++
+		}
+		return ev
+	}
 
 	ev = c.evidence(ev, m)
 	ev = c.advance(ev, msgTime(m))
@@ -202,8 +232,10 @@ func (c *Consumer) pulses(ev []Event, m tanktemp.Meter, delta int) []Event {
 	}
 	ref := Ref{CountingSince: m.CountingSince, Seq: m.Seq}
 	if m.LastPulseAt == nil || !m.LastPulseAt.After(c.lastLitre) {
-		// No time for any of them (can't happen within the contract: a
-		// counted litre sets last_pulse_at). Join what's there.
+		// No time for any of them: no last_pulse_at (can't happen within
+		// the contract), or one no later than the last litre's (the synced
+		// wall clock stepped back more than 50 ms, and last_pulse_at moved
+		// with it). Join what's there.
 		c.h.Skipped += delta
 		switch {
 		case c.draw != nil:
@@ -285,23 +317,15 @@ func (c *Consumer) evidence(ev []Event, m tanktemp.Meter) []Event {
 		p.long = true
 	case m.Level == tanktemp.LevelClosed && m.Timestamp.Sub(p.at) >= c.cfg.CreepClosed:
 		p.long = true // still closed CreepClosed after it closed
-	default:
-		return ev
 	}
-	// Long: creep, unless a litre follows within DrawEnd. A reed still
-	// closed DrawEnd after the closing can't be followed in time.
-	if c.closedFor(m, p) >= c.cfg.DrawEnd {
-		return c.settle(ev, true, p.closed)
-	}
+	// Long: creep, unless a litre follows within DrawEnd. advance decides
+	// that, on this same message, once event time is DrawEnd past the
+	// closing. A reed closed DrawEnd or more gets there on the message that
+	// shows it: its open is timed at last_pulse_at + last_closed_ms exactly.
+	// (A sweep after a lost open is timed to the second, so a reed closed
+	// under a second past DrawEnd can wait one message more; the event's
+	// time, the litre's closing, is the same.)
 	return ev
-}
-
-// closedFor is how long m shows the waiting litre's reed closed, at least.
-func (c *Consumer) closedFor(m tanktemp.Meter, p *counted) time.Duration {
-	if p.closed != nil {
-		return time.Duration(*p.closed) * time.Millisecond
-	}
-	return m.Timestamp.Sub(p.at)
 }
 
 // settle decides the waiting litre: creep, or the first litre of a draw.

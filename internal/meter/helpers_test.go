@@ -15,13 +15,16 @@ import (
 // planConfig is PLAN.md's thresholds.
 func planConfig() Config {
 	return Config{
-		DrawEnd:           60 * time.Second,
-		BathFlowLPerMin:   10,
-		ShowerMinLitres:   20,
-		ShowerMinDuration: 180 * time.Second,
-		CreepClosed:       10 * time.Second,
-		CreepWindow:       2700 * time.Second,
-		StaleAfter:        90 * time.Second,
+		DeviceID:             "hot_water_meter",
+		DrawEnd:              60 * time.Second,
+		BathFlowLPerMin:      10,
+		BathMinLitres:        20,
+		ShowerMinLitres:      20,
+		ShowerMinDuration:    180 * time.Second,
+		ShowerMinFlowLPerMin: 3,
+		CreepClosed:          10 * time.Second,
+		CreepWindow:          2700 * time.Second,
+		StaleAfter:           90 * time.Second,
 	}
 }
 
@@ -48,6 +51,7 @@ type sim struct {
 	lastInterval *int64
 	lastClosed   *int64
 	lost         uint64
+	unsynced     bool // stamp clock_synced false
 }
 
 func newSim(since time.Time) *sim {
@@ -57,7 +61,7 @@ func newSim(since time.Time) *sim {
 func (s *sim) emit(tr tanktemp.Trigger, at time.Time) tanktemp.Meter {
 	s.seq++
 	m := tanktemp.Meter{
-		DeviceID: "hot_water_meter", Timestamp: at.Truncate(time.Second), ClockSynced: true,
+		DeviceID: "hot_water_meter", Timestamp: at.Truncate(time.Second), ClockSynced: !s.unsynced,
 		Trigger: tr, Seq: s.seq, LitresPerPulse: s.k, Level: s.level, CountingSince: s.since,
 		Count: s.count, LastIntervalMS: s.lastInterval, LastClosedMS: s.lastClosed, Lost: s.lost,
 	}
