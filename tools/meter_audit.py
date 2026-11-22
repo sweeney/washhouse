@@ -14,11 +14,12 @@ Contract checks (tanktemp docs/WIRE.md ## Meter):
   - noise/short/glitches/lost stay 0; when they rise, the nearest boiler event
   - sweeps at least every ~30 s (gaps > 45 s listed)
 Interpretation (washhouse's, provisional):
-  - draws: litres closer than 36 s apart (plan §6.4), with volume and flow
+  - draws: a draw ends when a minute passes with no litre, so litres less
+    than 60 s apart are one draw (PLAN.md lessons §2), with volume and flow
   - duty: closed ms / interval ms per litre, the early-flow constant (plan §6.2)
   - suspect re-closes: a litre whose reed was open < 300 ms first (chatter)
 
-Usage: meter_audit.py [--json OUT] [--gap-s 36] FILE...
+Usage: meter_audit.py [--json OUT] [--gap-s 60] FILE...
 """
 import argparse
 import json
@@ -66,7 +67,7 @@ def read(paths):
 
 
 class Audit:
-    def __init__(self, gap_s=36.0):
+    def __init__(self, gap_s=60.0):
         self.gap_s = gap_s
         self.problems = []      # (when, what)
         self.notes = []
@@ -161,7 +162,7 @@ class Audit:
                     opened = t(m["last_pulse_at"]) + timedelta(milliseconds=m["last_closed_ms"])
                     if opened.replace(microsecond=0) != when:
                         self.problem(when, f"open seq {m['seq']} timestamp != last_pulse_at + last_closed_ms ({iso(opened)})")
-                if pending_pulse is not None and pending_pulse["last_pulse_at"] != m["last_pulse_at"]:
+                if pending_pulse is not None and pending_pulse["count"] != m["count"]:
                     self.notes.append(f"open seq {m['seq']} closes a pulse whose own message wasn't seen")
                 pending_pulse = None
             prev = m
@@ -195,12 +196,13 @@ class Audit:
 
     def _litres(self, msgs):
         """Each counted litre, from pulse and open messages: closing time,
-        interval to the previous closing, closed ms. A litre seen only as a
-        count jump has no time."""
+        interval to the previous closing, closed ms. A litre is its count:
+        tanktemp can print the same closing a millisecond apart in the pulse
+        and the open. A litre seen only as a count jump has no time."""
         litres = {}
         for m in msgs:
             if m["trigger"] in ("pulse", "open") and m["last_pulse_at"]:
-                L = litres.setdefault(m["last_pulse_at"], {"at": m["last_pulse_at"], "count": m["count"]})
+                L = litres.setdefault(m["count"], {"at": m["last_pulse_at"], "count": m["count"]})
                 if m["trigger"] == "pulse":
                     L["interval_ms"] = m["last_interval_ms"]
                 else:
@@ -222,11 +224,12 @@ class Audit:
         return out
 
     def draws(self, run):
-        """Group litres closer than gap_s into draws (washhouse plan §6.4)."""
+        """Group litres into draws: a draw ends gap_s after its last litre, so
+        a litre less than gap_s after the previous one joins it."""
         out, cur = [], None
         for L in run["litres"]:
             at = t(L["at"])
-            if cur is not None and (at - cur["end"]).total_seconds() <= self.gap_s:
+            if cur is not None and (at - cur["end"]).total_seconds() < self.gap_s:
                 cur["end"] = at
                 cur["litres"] += 1
                 cur["intervals"].append((at - cur["prev"]).total_seconds())
@@ -309,7 +312,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("files", nargs="+")
     ap.add_argument("--json")
-    ap.add_argument("--gap-s", type=float, default=36.0)
+    ap.add_argument("--gap-s", type=float, default=60.0)
     a = ap.parse_args(argv)
     au = Audit(a.gap_s)
     for rx, topic, payload in read(a.files):

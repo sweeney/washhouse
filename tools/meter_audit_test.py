@@ -124,9 +124,43 @@ class Clean(unittest.TestCase):
 
     def test_report_renders(self):
         text, summary = self.au.report()
-        self.assertIn("draws (litres < 36s apart): 2", text)
+        self.assertIn("draws (litres < 60s apart): 2", text)
         self.assertEqual(summary["runs"][0]["litres"], 13)
 
+
+class Rules(unittest.TestCase):
+    def test_a_pause_under_a_minute_is_the_same_draw(self):
+        # A real bath paused 40.7 s mid-fill: one draw, not 5 + 67 L.
+        m = Meter()
+        m.sweep(T0)
+        at = shower(m, T0 + timedelta(seconds=2), 5, 3.0)
+        shower(m, at + timedelta(seconds=40.7 - 3.0), 4, 3.0)
+        d = run_audit(m.lines()).draws(next(iter(run_audit(m.lines()).runs.values())))
+        self.assertEqual([x["litres"] for x in d], [9])
+
+    def test_a_minute_without_a_litre_ends_the_draw(self):
+        m = Meter()
+        m.sweep(T0)
+        at = shower(m, T0 + timedelta(seconds=2), 3, 3.0)
+        shower(m, at + timedelta(seconds=60 - 3.0), 2, 3.0)
+        au = run_audit(m.lines())
+        self.assertEqual([x["litres"] for x in au.draws(next(iter(au.runs.values())))], [3, 2])
+
+    def test_a_litre_is_its_count_not_its_last_pulse_at(self):
+        # tanktemp can print the same closing as .228 in the pulse and .227 in
+        # the open: same count, so one litre, and no "unseen pulse" note.
+        m = Meter()
+        m.sweep(T0)
+        m.litre(T0 + timedelta(seconds=5, milliseconds=228), 1.5)
+        rx, tp, p = m.out[-1]
+        d = json.loads(p)
+        d["last_pulse_at"] = d["last_pulse_at"].replace(".228Z", ".227Z")
+        m.out[-1] = (rx, tp, json.dumps(d, separators=(",", ":")))
+        au = run_audit(m.lines())
+        run = next(iter(au.runs.values()))
+        self.assertEqual(len(run["litres"]), 1)
+        self.assertEqual(run["litres"][0].get("closed_ms"), 1500)
+        self.assertEqual(au.notes, [])
 
 class Broken(unittest.TestCase):
     def test_lost_message_is_a_seq_gap_not_a_problem(self):
