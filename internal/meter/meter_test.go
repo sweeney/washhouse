@@ -449,6 +449,15 @@ func TestUnsyncedClockIsCountedNotTimed(t *testing.T) {
 	if h := c.Health(); h.Litres != 8 || h.Unsynced != 3 || h.Unattributed != 0 || h.ClockSynced {
 		t.Fatalf("health %+v", h)
 	}
+	// A count that falls is a contract breach, unsynced or not; it adds nothing.
+	fell := b.sweep(old.Add(time.Minute))
+	fell.Count = 1
+	if ev := c.Feed(fell); len(ev) != 0 {
+		t.Fatalf("a fallen count made news: %+v", ev)
+	}
+	if h := c.Health(); h.CountFell != 1 || h.Litres != 8 {
+		t.Fatalf("after a fallen count: health %+v", h)
+	}
 	b.unsynced = false // NTP synced: the clock steps to real time
 	real := end.Add(5 * time.Minute)
 	ev = feedAll(c, one(b.sweep(real)))
