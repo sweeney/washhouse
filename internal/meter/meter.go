@@ -39,6 +39,7 @@
 package meter
 
 import (
+	"strconv"
 	"time"
 
 	"github.com/sweeney/washhouse/internal/wire/tanktemp"
@@ -75,6 +76,14 @@ type Config struct {
 type Ref struct {
 	CountingSince time.Time
 	Seq           uint64
+}
+
+// DrawID names the draw whose first litre was seen in message r:
+// counting_since (UTC, to the second) and seq, e.g. "20010101T070000Z-2".
+// It is a fact of the meter, not of this process, so a washhouse restart
+// can't reuse an earlier draw's ID, and the same messages give the same ID.
+func DrawID(r Ref) string {
+	return r.CountingSince.UTC().Format("20060102T150405Z") + "-" + strconv.FormatUint(r.Seq, 10)
 }
 
 // Kind is a draw's kind.
@@ -125,13 +134,13 @@ type Litre struct {
 	// when it was classified.
 	ClosedMS *int64
 	Creep    bool
-	DrawID   uint64 // 0 for a creep litre
+	DrawID   string // "" for a creep litre
 	Ref      Ref    // the message that revealed it
 }
 
 // Draw is a draw, as of the event that carries it.
 type Draw struct {
-	ID          uint64
+	ID          string    // DrawID(From): stable across washhouse restarts
 	Start, End  time.Time // the first and last litres' closings
 	Duration    time.Duration
 	Pulses      int

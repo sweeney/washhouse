@@ -296,7 +296,7 @@ func TestCreepLitreIsNeverADraw(t *testing.T) {
 	ev := feedAll(c, s.litre(t0.Add(time.Second), 5*time.Minute))
 	ev = append(ev, c.Tick(t0.Add(time.Hour))...)
 	lit := ofType(ev, EventLitre)
-	if len(lit) != 1 || !lit[0].Litre.Creep || lit[0].Litre.DrawID != 0 || *lit[0].Litre.ClosedMS != 300000 {
+	if len(lit) != 1 || !lit[0].Litre.Creep || lit[0].Litre.DrawID != "" || *lit[0].Litre.ClosedMS != 300000 {
 		t.Fatalf("got %+v", ev)
 	}
 	if len(ofType(ev, EventDrawStarted))+len(ofType(ev, EventDrawEnded)) != 0 {
@@ -585,5 +585,45 @@ func TestNoWallClock(t *testing.T) {
 				t.Errorf("%s uses %s", e.Name(), bad)
 			}
 		}
+	}
+}
+
+// A draw's ID comes from its first litre's message, (counting_since, seq),
+// not from a per-process counter: statehouse keys a signal and an activity
+// on it, and washhouse restarting must not reuse an earlier draw's ID.
+func TestDrawIDIsItsFirstLitre(t *testing.T) {
+	msgs := func() []tanktemp.Meter {
+		a := newSim(t0)
+		start := one(a.sweep(t0))
+		m1, _ := a.run(t0.Add(time.Second), 3, 6*time.Second, 0.2)
+		m2, _ := a.run(t0.Add(5*time.Minute), 2, 6*time.Second, 0.2)
+		return append(append(start, m1...), m2...)
+	}
+	draws := func() []Draw {
+		c := newConsumer(t, planConfig())
+		ev := feedAll(c, msgs())
+		return endedDraws(append(ev, c.Tick(t0.Add(time.Hour))...))
+	}
+	first, again := draws(), draws()
+	if len(first) != 2 {
+		t.Fatalf("draws %+v", first)
+	}
+	if first[0].ID == first[1].ID {
+		t.Errorf("two draws share ID %q", first[0].ID)
+	}
+	for i, d := range first {
+		if want := DrawID(d.From); d.ID != want {
+			t.Errorf("draw %d ID %q, want %q from its first litre %+v", i, d.ID, want, d.From)
+		}
+		if again[i].ID != d.ID {
+			t.Errorf("draw %d: ID %q, then %q from a fresh consumer on the same messages", i, d.ID, again[i].ID)
+		}
+	}
+	// Same seq in a later counting run is a different draw.
+	if DrawID(Ref{CountingSince: t0, Seq: 2}) == DrawID(Ref{CountingSince: t0.Add(time.Hour), Seq: 2}) {
+		t.Error("the ID ignores counting_since")
+	}
+	if got := DrawID(Ref{CountingSince: t0, Seq: 2}); got != "20010101T070000Z-2" {
+		t.Errorf("DrawID = %q", got)
 	}
 }

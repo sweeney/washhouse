@@ -105,7 +105,6 @@ type Consumer struct {
 	draw      *drawState
 	flow      *flowState
 	lastCreep *counted
-	nextID    uint64
 	h         Health
 }
 
@@ -313,17 +312,16 @@ func (c *Consumer) settle(ev []Event, creep bool, closed *int64) []Event {
 	if creep {
 		return c.creep(ev, *p)
 	}
-	c.nextID++
 	c.draw = &drawState{
-		d: Draw{ID: c.nextID, Start: p.at, End: p.at, Pulses: p.pulses, Litres: p.litres(),
+		d: Draw{ID: DrawID(p.ref), Start: p.at, End: p.at, Pulses: p.pulses, Litres: p.litres(),
 			From: p.ref, To: p.ref},
 		lastUpdate: p.at,
 	}
 	ev = append(ev, Event{Type: EventDrawStarted, At: p.at, Draw: c.drawSnapshot()})
-	return append(ev, c.litreEvent(*p, false, c.nextID))
+	return append(ev, c.litreEvent(*p, false, c.draw.d.ID))
 }
 
-func (c *Consumer) litreEvent(l counted, creep bool, drawID uint64) Event {
+func (c *Consumer) litreEvent(l counted, creep bool, drawID string) Event {
 	return Event{Type: EventLitre, At: l.at, Litre: &Litre{
 		At: l.at, Pulses: l.pulses, Skipped: l.pulses - 1, Litres: l.litres(), Total: l.total,
 		ClosedMS: l.closed, Creep: creep, DrawID: drawID, Ref: l.ref,
@@ -360,7 +358,7 @@ func (c *Consumer) drawSnapshot() *Draw {
 }
 
 func (c *Consumer) creep(ev []Event, l counted) []Event {
-	ev = append(ev, c.litreEvent(l, true, 0))
+	ev = append(ev, c.litreEvent(l, true, ""))
 	switch {
 	case c.flow != nil:
 		fs := c.flow

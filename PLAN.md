@@ -130,7 +130,7 @@ These come from reviewing and smoke-testing tanktemp's meter work, and from abou
     - statehouse's `base_topic` moves with it, as a `statehouse_behaviour` remote-config write.
     - live.html, live.sh and record.sh are updated.
   - statehouse re-reads adapter subscriptions only on restart; SIGHUP isn't enough. That applies to the future `adapters.washhouse` too: write the config, then restart statehouse straight away.
-  - The broker ACL must let statehouse's MQTT user read `water/hot/#`. That covers washhouse's topics too. Owner to check.
+  - statehouse already receives `water/hot/tanktemp/#`, so `water/hot/#` needs no broker change for washhouse (checked with the statehouse session; broker details stay out of the repo).
   - Never publish inside `water/hot/tanktemp/`. statehouse's tanktemp adapter subscribes to `+/state` and `status` there, and would parse washhouse's messages.
 - **washhouse publishes** (base configurable; `test/water/hot` for testing):
   - `water/hot/state`: retained, QoS 0, published on every input sweep and on a heartbeat.
@@ -154,18 +154,20 @@ Draft tank state (field list; finalised in WIRE.md):
 
 The system state carries:
 - the totals, a summary per tank, `boiler{hw,ch}`, and `ambient_c`;
-- `active_draw` (or null), so a consumer that reconnects mid-draw still sees the draw;
+- `active_draw` (or null), with the same `draw_id` and `started_at` as the events, so a consumer that restarts mid-draw (events aren't retained) recovers the draw;
 - a system-level `low_hot_water`;
 - `meter{count, counting_since, continuous_flow}`.
 
+Every retained message carries a real publisher `timestamp` (the source sweep's): statehouse treats a retained message without a usable one as an undated replay.
+
 `draw_ended` carries:
-- `draw_id`, `started_at`, `ended_at`, `duration_s`;
+- `draw_id`, `started_at`, `ended_at`, `duration_s`. `draw_id` is the first litre's meter message, `counting_since` and `seq` (`meter.DrawID`, e.g. `20010101T070000Z-2`): stable across washhouse restarts, never reused. `started_at` is the first litre's closing, `ended_at` the last litre's;
 - `litres` with `volume_kind: "metered"`, `flow_l_min` (the median gap between litres), and `kind` (`tap|shower|bath`);
 - `tanks[{device_id, share}]`, typically right ≈ 0.75;
 - `masked_by_reheat`, plus `heat_balance_l` and `heat_balance_reliable` as the cross-check;
 - `inlet_drop_c`, `outlet_peak_c`, and the meter `seq` range it covers.
 
-There is no `confidence`: every draw is metered water.
+There is no `confidence`: every draw is metered water (statehouse fills its own `Confidence` with 1.0). `kind` is final only in `draw_ended`; `draw_started`/`draw_updated` carry a provisional one.
 
 ## Architecture (Go, statehouse-shaped, with tanktemp's runtime)
 
@@ -181,12 +183,14 @@ The pure core (no OS, network or MQTT, enforced by a `boundaries_test.go` as in 
 | `internal/draw` | **Attribution, not detection.** For each metered draw: each tank's share, in litres from its heat lost over its own outlet's peak temperature; the outlet temperature (P5's peak); and energy used. A heat-balance volume, kept as a cross-check and flagged unreliable when masked by a reheat, under 20 L, or when the cold layer sits between P2 and P3. |
 | `internal/engine` | Wires ingest, estimate, classify and draw. Holds the in-memory state and a ring buffer of recent draws (since boot). |
 | `internal/ingest` | Applies the same freshness rules as statehouse's tanktemp adapter: drop a retained message more than 90 s old or with an unsynced clock, and de-duplicate by timestamp. The meter is the exception: it is de-duplicated on `(counting_since, seq)`, and a retained replay is not news. Also handles boiler events/system: HW/CH come from heartbeats and events, and a retained `RECONNECTED` is not a heartbeat. Ambient comes from `zigbee2mqtt/climate_groundfloor_boiler-room`. |
-| `internal/publish`, `internal/influx`, `internal/httpapi` | Outputs. The Influx writer follows the pattern in `statehouse/internal/influx/writer.go`. |
+| `internal/publish`, `internal/influx`, `internal/httpapi` | Outputs. The Influx writer follows `statehouse/internal/influx/writer.go`: one measurement per domain, fields named with their unit (`stored_kwh`, `temperature_c`), a `site` tag on every point (left out when empty), no room tag, point time = event time. The API has statehouse's path-coverage and two-way field-coverage spec tests from the start. |
 | `cmd/washhouse` | `common/lifecycle` for status and heartbeats, `common/health`, and `mqttpub` for both publishing and subscribing. |
 | `cmd/washreplay` | Replays mosquitto_sub `%I %t %p` recordings through the engine and prints events and states. It is the main tuning and test tool. |
 
 **Config**
-- The local YAML holds connection settings only: site, mqtt, identity, remote_config, http, influx. Boot refuses anything else, as statehouse does.
+- The local YAML holds connection settings only: site, mqtt, identity, remote_config, http, influx. Boot refuses anything else, as statehouse does (remote-only fields are `yaml:"-"` and listed, and a local file setting one is refused).
+- Remote namespaces are decoded strictly: unknown keys and duplicate keys (ignoring case) are refused. Boot refuses to start without remote config; a failed SIGHUP reload keeps the last good config.
+- Publisher timestamps are sanitised as statehouse's `timeutil` does: unparseable, more than 30 days old or more than 24 h ahead is undated.
 - Behaviour comes from config.swee.net:
   - **`devices_home`**: the cylinders and probes. Add a `cylinder` block (capacity_l 200, height_mm 1498, diameter_mm 550); `common/devices` v0.2.0 already decodes it.
   - **A new `washhouse` namespace**: inner diameter, dome depth, z0, T_cold, T_min, T_mix, per-tank probe roles by position, draw thresholds, prior UA per tank, reheat priors, and topics.
@@ -215,17 +219,18 @@ Moving statehouse, greenhouse and countinghouse onto 3 and 4 is a follow-up, not
 ## Statehouse changes (separate PRs in the statehouse repo, coordinated with a statehouse session)
 
 1. **A `washhouse` adapter**, using a narrow Engine interface like the intercom adapter's.
-   - `draw_started` → `IngestSignal{ID:"washhouse:draw:<id>", Type:"hot_water_draw", Location:"house", ExpiresAt: now+30m safety}` plus `RecordActivity`. There's no confidence gate: a draw exists only once a litre is metered.
-   - `draw_ended` → `ClearSignal` plus `UpdateActivity` with EndedAt, the litres and the kind.
-   - `continuous_flow_*` → a warning on the hot-water device. Never an occupancy signal.
+   - `draw_started` → `IngestSignal{ID:"washhouse:draw:<draw_id>", Type:"hot_water_draw", Location:"house", Since: started_at, ExpiresAt: engine clock + 30 m safety}` plus `RecordActivity`. `draw_updated` refreshes ExpiresAt. There's no confidence gate: a draw exists only once a litre is metered.
+   - On startup, a retained `active_draw` on `water/hot/state` is ingested the same way, so a statehouse restart mid-draw recovers it.
+   - `draw_ended` → `ClearSignal(id, ended_at)`, so `quiet_after`/`empty_after` count from the last litre, not from the event 60 s later; plus `UpdateActivity` with EndedAt, the litres and the kind (taken only from `draw_ended`).
+   - `continuous_flow_*`: never an occupancy signal. **Design open:** statehouse has no per-device warning mechanism (the nearest, `divergence_warning`, is energy-specific). Options: a `Reading` field on the hot-water device, or an event statehouse relays without storing. To settle with the statehouse session before the adapter.
    - It uses `wire/washhouse`, and `DeclareAvailabilitySource` through the status topic (from PR #94).
 2. **Cylinders as devices.**
    - Set `telemetry: true`, scheme `washhouse`, primary = the device_id.
-   - Add a class `hot_water_cylinder` to `statehouse_classes` (passive, staleness 90 s).
-   - Add `model.Reading` fields `HotWaterL40 *float64` and `StoredKWh *float64`, and update `HasAnyMeasurement`.
-   - Write them to Influx so greenhouse can chart tank level.
-3. **HW-timer occupancy fix (now first).** Give `hot_water` and `central_heating` a non-occupancy class, such as a new passive `schedule_switch` (or a flag), so the timers no longer count. This was confirmed live: the morning timers alone flipped the house to "day" and "active". AV standby power reading as activity is a separate statehouse issue, worth raising with that session.
-4. **Ordering hazard.** `statehouse_behaviour` is decoded strictly, so an unknown `adapters.washhouse` key makes statehouse refuse the whole document. Deploy statehouse first, then edit the namespace.
+   - A class `hot_water_cylinder` needs Go code in statehouse (`statehouse_classes` can only override existing classes): a constant in `internal/device/profiles.go`, an entry in `IsPassiveSensor` (a passive class missing from it is stuck at `unknown`), and a staleness case (90 s).
+   - Add `model.Reading` fields `HotWaterL40 *float64` and `StoredKWh *float64`: update `HasAnyMeasurement`, the canonical-event mapping, the Influx writer, the API DTO, `openapi.yaml` and `documentedSchemas` in `spec_fields_test.go`.
+   - Write them to Influx so greenhouse can chart tank level. The probes keep their own rooms (`part_of` never passes room down).
+3. **HW-timer occupancy fix (now first).** Give `hot_water` and `central_heating` a new class, such as `schedule_switch`, that keeps the binary-state machine (keyed on `ClassBinaryState` in `statemachine.go`) but is left out of **both** `isOccupancyRelevant` and `activeCount` in `internal/state/house.go`. Leaving out only occupancy would still make the house "active", since `activeCount` drives the activity dimension. This was confirmed live: the morning timers alone flipped the house to "day" and "active". AV standby power reading as activity is a separate statehouse issue, worth raising with that session.
+4. **Ordering hazard.** `statehouse_behaviour` is decoded strictly (unknown keys and case-insensitive duplicates refused). On SIGHUP a refused document keeps the running config, but at **boot** statehouse exits, and under `Restart=always` that is a crash loop. So: deploy the statehouse that knows `adapters.washhouse`, then write the namespace, then restart (adapters subscribe only at startup).
 
 ## Phases
 
