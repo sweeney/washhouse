@@ -1,0 +1,1211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>washhouse explainer</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --surface-2: #f2f1ed;
+  --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,0.10);
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4;
+  --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+  --accent: #2a78d6; --code: #f2f1ed;
+  --hw: rgba(235,104,52,0.22); --ch: rgba(98,80,214,0.18);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232321;
+    --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10);
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181;
+    --accent: #3987e5; --code: #232321;
+    --hw: rgba(217,89,38,0.28); --ch: rgba(144,133,233,0.22);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232321;
+  --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10);
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181;
+  --accent: #3987e5; --code: #232321;
+  --hw: rgba(217,89,38,0.28); --ch: rgba(144,133,233,0.22);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--page); color: var(--ink); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1180px; margin: 0 auto; padding: 24px 16px 80px; }
+h1 { font-size: 34px; line-height: 1.15; margin: 8px 0 6px; letter-spacing: -0.01em; }
+h2 { font-size: 22px; margin: 0 0 4px; }
+h3 { font-size: 16px; margin: 0 0 6px; }
+p { margin: 6px 0 10px; color: var(--ink-2); max-width: 78ch; }
+a { color: var(--accent); }
+code, pre { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+code { background: var(--code); padding: 1px 4px; border-radius: 4px; }
+section { margin-top: 44px; }
+.eyebrow { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.lede { font-size: 17px; color: var(--ink-2); max-width: 80ch; }
+.card { background: var(--surface); border: 1px solid var(--ring); border-radius: 12px; padding: 16px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 18px; }
+.tile { background: var(--surface); border: 1px solid var(--ring); border-radius: 12px; padding: 12px 14px; }
+.tile .k { font-size: 12px; color: var(--muted); }
+.tile .v { font-size: 26px; font-weight: 650; line-height: 1.2; }
+.tile .s { font-size: 12px; color: var(--ink-2); }
+.chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--ring); background: var(--surface-2); color: var(--ink); white-space: nowrap; }
+.chip .dot { width: 8px; height: 8px; border-radius: 50%; }
+.muted { color: var(--muted); }
+.small { font-size: 12.5px; }
+.conf { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--ring); color: var(--ink-2); white-space: nowrap; }
+.sim { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 16px; margin-top: 14px; }
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 14px 0 6px; }
+button, select { font: inherit; font-size: 13px; color: var(--ink); background: var(--surface); border: 1px solid var(--ring); border-radius: 8px; padding: 5px 10px; cursor: pointer; }
+button:hover, select:hover { background: var(--surface-2); }
+button.primary { background: var(--accent); color: #fff; border-color: transparent; min-width: 74px; }
+button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+input[type=range] { accent-color: var(--accent); }
+#scrub { width: 100%; margin: 4px 0 0; }
+.clock { font-variant-numeric: tabular-nums; font-size: 22px; font-weight: 650; min-width: 64px; }
+.jumps { display: flex; flex-wrap: wrap; gap: 6px; }
+.jumps button { font-size: 12px; padding: 3px 8px; }
+svg text { fill: var(--ink-2); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+.log { max-height: 330px; overflow: auto; font-size: 12.5px; border-top: 1px solid var(--grid); margin-top: 8px; }
+.log .row { display: grid; grid-template-columns: 44px 1fr; gap: 8px; padding: 6px 2px; border-bottom: 1px solid var(--grid); }
+.log .row.future { opacity: .35; }
+.log .row.now { background: var(--surface-2); }
+.log .t { font-variant-numeric: tabular-nums; color: var(--muted); }
+.log .sh { color: var(--ink-2); font-size: 12px; }
+.tankcards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 13px; }
+.kv dt { color: var(--muted); } .kv dd { margin: 0; font-variant-numeric: tabular-nums; text-align: right; }
+pre.json { background: var(--code); border-radius: 10px; padding: 12px; overflow: auto; max-height: 420px; margin: 0; color: var(--ink); }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.tablewrap { overflow-x: auto; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12.5px; color: var(--ink-2); margin: 4px 0 2px; }
+.legend .sw { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+.legend .box { display: inline-block; width: 12px; height: 10px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+.chart { width: 100%; display: block; }
+.sim > *, .grid2 > *, .grid3 > *, .tiles > *, .tankcards > * { min-width: 0; }
+#tip { position: fixed; pointer-events: none; z-index: 10; background: var(--surface); color: var(--ink); border: 1px solid var(--ring); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; box-shadow: 0 6px 24px rgba(0,0,0,.18); max-width: 300px; display: none; }
+#tip b { font-weight: 650; }
+.slider { display: grid; grid-template-columns: 112px 1fr 58px; align-items: center; gap: 8px; font-size: 13px; }
+.slider output { font-variant-numeric: tabular-nums; text-align: right; }
+.out { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 10px; }
+.pass { color: var(--good); font-weight: 650; } .fail { color: var(--critical); font-weight: 650; }
+.phase { display: grid; grid-template-columns: 34px 1fr; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--grid); }
+.phase .n { width: 28px; height: 28px; border-radius: 50%; background: var(--surface-2); border: 1px solid var(--ring); display: grid; place-items: center; font-weight: 650; font-size: 13px; }
+ul.tight { margin: 4px 0; padding-left: 18px; color: var(--ink-2); } ul.tight li { margin: 3px 0; }
+.callout { border-left: 3px solid var(--warning); background: var(--surface); padding: 10px 14px; border-radius: 0 10px 10px 0; margin: 12px 0; }
+.themebtn { position: absolute; top: 16px; right: 16px; }
+.toc { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; margin-top: 14px; }
+.toc a { color: var(--ink-2); text-decoration: none; border-bottom: 1px solid var(--grid); }
+@media (max-width: 900px) {
+  .sim, .grid2, .grid3 { grid-template-columns: minmax(0, 1fr); }
+  .tiles { grid-template-columns: 1fr 1fr; }
+  .out { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 520px) {
+  h1 { font-size: 28px; }
+  .tankcards { grid-template-columns: 1fr; }
+  .slider { grid-template-columns: 92px 1fr 50px; }
+}
+</style>
+</head>
+<body>
+<div id="tip" role="tooltip"></div>
+<main>
+<header style="position:relative">
+  <button class="themebtn" id="themeBtn" title="Toggle light/dark">◐ Theme</button>
+  <div class="eyebrow">sweeney · planned service · design explainer</div>
+  <h1>washhouse</h1>
+  <p class="lede">A cousin of <b>tanktemp</b>. It reads the <b>hot-water meter</b>, the cylinder probes, the boiler programmer and the boiler-room air temperature from MQTT. It turns metered litres into <b>draws</b> (how much, how fast, what kind, which tank), works out <b>how much hot water is left</b>, says whether each tank is <b>heating, drawing or cooling</b>, and flags water that never stops (<b>creep</b>). <b>statehouse</b> uses the draws as evidence that someone is home.</p>
+  <div class="tiles" aria-live="polite">
+    <div class="tile"><div class="k">Hot water available (both tanks)</div><div class="v" id="tUsable">–</div><div class="s" id="tUsableS">litres at 40 °C</div></div>
+    <div class="tile"><div class="k">System state</div><div class="v" id="tState">–</div><div class="s" id="tStateS">&nbsp;</div></div>
+    <div class="tile"><div class="k">Stored heat</div><div class="v" id="tKwh">–</div><div class="s">kWh above 10 °C mains</div></div>
+    <div class="tile"><div class="k">Last draw</div><div class="v" id="tLast">–</div><div class="s" id="tLastS">&nbsp;</div></div>
+  </div>
+  <p class="small muted" style="margin-top:10px">Everything on this page runs from a <b>simulated weekday</b> shaped by two weeks of tanktemp recordings and, since 20 Nov, the live hot-water meter. That data gives the real probe heights, loss rates, reheat powers and draw signatures, plus metered flows (taps 3.5–5, showers 4–6.4, baths 12–31 L/min hot), the right tank's three-quarter share of each draw, and a dribbling tap's creep. It is not a replay of the recordings, so it carries no house data. The estimator is a port of the tanktemp session's <code>avail.py</code> and matches it exactly (see <a href="#model">the model</a>).</p>
+  <nav class="toc">
+    <a href="#flow">Where it sits</a><a href="#sim">Simulator</a><a href="#charts">Day timeline</a><a href="#draws">Draws</a><a href="#model">The estimate</a><a href="#wire">On the wire</a><a href="#statehouse">statehouse</a><a href="#plan">Plan</a><a href="#open">Open questions</a>
+  </nav>
+</header>
+
+<!-- ============ ARCHITECTURE ============ -->
+<section id="flow">
+  <div class="eyebrow">1 · Where it sits</div>
+  <h2>A derived layer on top of tanktemp, not a replacement</h2>
+  <p>tanktemp keeps publishing raw probe readings, and statehouse and greenhouse keep consuming them unchanged. washhouse subscribes to the same feeds and publishes <b>derived</b> state under its own prefix. The moving dots show messages; hover a box for details.</p>
+  <div class="card"><svg id="arch" class="chart" viewBox="0 0 1100 430" role="img" aria-label="Data flow diagram"></svg></div>
+  <div class="callout small"><b>One hot-water tree, one owner per subtree.</b> Everything about hot water lives under <code>water/hot/</code>. washhouse owns the four named topics at the top, and tanktemp owns <code>water/hot/tanktemp/…</code>, its raw facts, which moved there from <code>energy/hot_water</code> in Nov 2026. Each publisher has its own status and LWT. statehouse's tanktemp adapter subscribes to <code>water/hot/tanktemp/+/state</code> and <code>…/status</code>, assuming one publisher per prefix. So washhouse never publishes inside tanktemp's subtree: a <code>system/state</code> there would be parsed as a cylinder called "system", and washhouse's LWT would mark all ten probes offline.</div>
+</section>
+
+<!-- ============ SIMULATOR ============ -->
+<section id="sim">
+  <div class="eyebrow">2 · Simulator</div>
+  <h2>A day in the boiler room</h2>
+  <p>Two Ariston STI 210 cylinders, five probes each, every probe on a fitting, and one pulse-per-litre meter on the merged hot outlet. Press play, or jump to a moment. The tanks show the <b>simulated true</b> water temperature; the dots are what <b>tanktemp's probes</b> report; the cards on the right are what <b>washhouse</b> works out from those dots and the meter's litres.</p>
+  <div class="controls">
+    <button class="primary" id="play">▶ Play</button>
+    <span class="clock" id="clock">00:00</span>
+    <label class="small muted">speed
+      <select id="speed"><option value="60">1 min/s</option><option value="300">5 min/s</option><option value="900" selected>15 min/s</option><option value="3600">1 h/s</option></select>
+    </label>
+    <div class="jumps" id="jumps"></div>
+  </div>
+  <input type="range" id="scrub" min="0" max="86399" step="10" value="0" aria-label="Time of day">
+  <div class="sim">
+    <div class="card" style="padding:10px">
+      <svg id="tanks" class="chart" viewBox="0 0 560 600" role="img" aria-label="Cutaway of the two cylinders"></svg>
+      <div class="legend" id="tempLegend"></div>
+    </div>
+    <div>
+      <div class="tankcards" id="tankCards"></div>
+      <div class="card" style="margin-top:10px">
+        <h3>Event stream <span class="muted small">· <code>water/hot/events</code> and boiler-sensor, with what statehouse would do. Click a row to jump there. (<code>draw_updated</code>, published every minute during a draw, is left out here.)</span></h3>
+        <div class="log" id="log"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ CHARTS ============ -->
+<section id="charts">
+  <div class="eyebrow">3 · Day timeline</div>
+  <h2>What washhouse estimates, against the simulated truth</h2>
+  <p>Hover the charts to read values; click to move the simulator there. The shaded lanes are the boiler programmer's HW and CH switches. These are timers only: they say nothing about the tank stats or valves.</p>
+  <div class="card">
+    <h3>Hot water available, both tanks <span class="muted small">· litres of 40 °C water</span></h3>
+    <div class="legend"><span><span class="sw" style="background:var(--s1)"></span>washhouse estimate (<code>usable_l40</code>)</span><span><span class="sw" style="background:var(--muted)"></span>simulated truth</span><span><span class="box" style="background:var(--hw)"></span>HW programmer on</span><span><span class="box" style="background:var(--ch)"></span>CH programmer on</span><span>▼ detected draw</span></div>
+    <svg id="chartUsable" class="chart" height="270"></svg>
+  </div>
+  <div class="card" style="margin-top:14px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+      <h3 style="margin:0">Probe readings <span class="muted small">· as tanktemp publishes them</span></h3>
+      <div><button id="pLeft" aria-pressed="true">Left tank</button> <button id="pRight" aria-pressed="false">Right tank</button></div>
+    </div>
+    <div class="legend" id="probeLegend"></div>
+    <svg id="chartProbes" class="chart" height="270"></svg>
+    <p class="small muted" style="margin:6px 0 0">The bottom lane marks tanktemp's sweep cadence. Dense ticks are its 10 s fast spells, which it enters when any probe moves ≥1.5 °C/min, so fast spells mean a draw or a reheat. On the right tank, <b>P4 sits below P3 all day</b>: it is on the secondary-return fitting and reads cooled return water. <b>P5 drops sharply after every draw</b>: it is on the hot outlet, and the copper pipe draws heat away from it.</p>
+  </div>
+</section>
+
+<!-- ============ DRAWS ============ -->
+<section id="draws">
+  <div class="eyebrow">4 · Draws</div>
+  <h2>Every draw in the day: metered, then explained by the probes</h2>
+  <p><b>The meter decides.</b> A draw starts at its first metered litre and ends after a minute with no litre. Litres less than 36 s apart belong to one draw. Its volume is the litre count, good to about ±1 L because of the partial litres at each end. Its flow is the median gap between litres. Its kind comes from flow and size: a bath runs at 10 L/min or more; a shower is 20 L or more over 3 min or longer; anything else is a tap. <b>The probes then explain it</b>: which tank supplied it, from each tank's heat lost over what a litre from its own outlet carries; the true outlet temperature, from P5's peak; and how much heat is left. The old probe-only <b>heat balance</b> is kept only as a cross-check. On the live data it came within 8 % of the meter for a 50 L shower from a layered tank, was 3–5× too high for small draws, and saw only 4 of 15 L when the cold layer sat between P2 (400 mm) and P3 (825 mm). It is marked unreliable during a reheat and below 20 L.</p>
+  <div class="card tablewrap"><table id="drawTable"></table></div>
+  <div class="grid3" style="margin-top:14px">
+    <div class="card"><h3>Which tank <span class="conf">measured</span></h3><p class="small">Both outlets merge before the meter, but the tanks don't share equally: the <b>right tank supplies about three quarters</b> of every draw (2.26 of 2.95 kWh in a 50 L shower). Its P1 reacts within seconds and its P2 falls 20 °C or more, while the left's barely moves. Combined with its faster standing loss, the right tank runs low first, so <b>"low hot water" is judged for the system</b>, never one tank.</p></div>
+    <div class="card"><h3>Small and masked draws <span class="conf">measured</span></h3><p class="small">A litre at the basin is counted like any other. P1 dips even for 1–2 L, which makes the probe heat balance overshoot, and during a reheat the coil warms the inlet so P1 barely moves. Neither matters now: the meter counts both. A 72 L bath run during a reheat was metered exactly. Two nights of metering showed <b>no 02:15 draw</b>.</p></div>
+    <div class="card"><h3>Creep, not a draw <span class="conf">measured</span></h3><p class="small">In a real draw each litre holds the reed closed for 1–4 s. A tap left dribbling moves the pointer so slowly that a lone litre holds it closed for <b>minutes</b> (2–23 min, about 0.07 L/min, on 21 Nov). washhouse never counts those as draws or as occupancy. Two of them within 45 min raise <code>continuous_flow</code>: a tap left on, a leak, or water circulating through the meter.</p></div>
+  </div>
+</section>
+
+<!-- ============ MODEL ============ -->
+<section id="model">
+  <div class="eyebrow">5 · The estimate</div>
+  <h2>From five temperatures to "litres of 40 °C water"</h2>
+  <p>A port of <code>avail.py</code>. The vessel is a vertical cylinder with shallow spherical domes, solved to hold exactly 200 L. The temperature profile is linear between probe heights and flat beyond the end probes. The <b>stratification correction</b> takes a running maximum from the bottom up, because a still tank can't be colder above than below. That lifts the heat-sunk P5 and the right tank's return-water P4. Water at or above <i>T</i><sub>min</sub> counts as usable, converted to litres at 40 °C when mixed with cold. Plug flow is assumed, so expect about 85–90 % in practice.</p>
+  <div class="grid2">
+    <div class="card">
+      <h3>Probe readings</h3>
+      <div id="sliders"></div>
+      <h3 style="margin-top:12px">Assumptions <span class="conf">guess</span></h3>
+      <div id="geoSliders"></div>
+      <label class="small" style="display:block;margin-top:8px"><input type="checkbox" id="strat" checked> apply stratification correction (running max, bottom-up)</label>
+      <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap" id="presets"></div>
+    </div>
+    <div class="card">
+      <h3>Temperature profile <span class="muted small">· height (mm) against °C</span></h3>
+      <svg id="profile" class="chart" height="330"></svg>
+      <div class="out" id="modelOut"></div>
+    </div>
+  </div>
+  <div class="card tablewrap" style="margin-top:14px">
+    <h3>Parity with <code>avail.py</code> <span class="muted small">· reference values computed by the Python script; this page's port must match to within 0.05</span></h3>
+    <table id="parity"></table>
+  </div>
+</section>
+
+<!-- ============ WIRE ============ -->
+<section id="wire">
+  <div class="eyebrow">6 · On the wire</div>
+  <h2>What washhouse publishes</h2>
+  <p>This is a draft; <code>docs/WIRE.md</code> will be the normative version, with golden fixtures. On the input side, washhouse decodes tanktemp's meter as its WIRE.md defines it. It de-duplicates on <code>(counting_since, seq)</code>, sums litres across counting runs (every tanktemp restart starts a new one), reads a jump in <code>count</code> as skipped messages, not lost litres, and knows the last sweep at shutdown matches no tank states. It keeps the boiler's HW/CH from heartbeats and events, because after a reconnect the retained <code>…/system</code> message can be a <code>RECONNECTED</code> event, not a heartbeat. On the output side it follows tanktemp's conventions: UTC RFC 3339 <code>timestamp</code> taken from the <b>source sweep</b>, every key always present, <code>null</code> for unknown (never 0), fixed key order, a schema id, and <code>clock_synced</code>. The payloads below follow the simulator's clock.</p>
+  <div class="card tablewrap">
+    <table>
+      <tr><th>Topic</th><th>Retained</th><th>QoS</th><th>Content</th></tr>
+      <tr><td><code>water/hot/state</code></td><td>yes</td><td>0</td><td>Totals, a summary per tank, boiler programmer, <code>meter</code> (count, any <code>continuous_flow</code>), <code>active_draw</code>, <code>last_draw</code>, a system-level <code>low_hot_water</code>, and baths and shower-minutes <i>with their assumptions</i>. Published every sweep and on a heartbeat.</td></tr>
+      <tr><td><code>water/hot/tank/{device_id}</code></td><td>yes</td><td>0</td><td>One message per cylinder; the <code>device_id</code> matches tanktemp and <code>devices_home</code>.</td></tr>
+      <tr><td><code>water/hot/events</code></td><td><b>no</b></td><td>1</td><td><code>draw_started</code> (at the first metered litre) / <code>draw_updated</code> / <code>draw_ended</code> sharing a stable <code>draw_id</code>, with <code>litres</code>, <code>volume_kind: "metered"</code>, flow, kind, each tank's share, and the heat balance as a flagged cross-check; <code>continuous_flow_started</code> / <code>_ended</code>; <code>heating_started</code> / <code>heating_ended</code>. Not retained, so a statehouse restart doesn't replay old draws as new activity.</td></tr>
+      <tr><td><code>water/hot/status</code></td><td>yes</td><td>1</td><td>STARTUP / HEARTBEAT / SHUTDOWN, and LWT <code>{"online":false,"event":"LWT"}</code>, in tanktemp's shape. This gives statehouse an explicit availability source, so the #94 silence rule doesn't apply.</td></tr>
+    </table>
+  </div>
+  <div class="grid3" style="margin-top:14px">
+    <div><h3>Tank state <span class="muted small" id="wireTankName"></span></h3><pre class="json" id="wireTank"></pre></div>
+    <div><h3>System state</h3><pre class="json" id="wireSystem"></pre></div>
+    <div><h3>Latest event</h3><pre class="json" id="wireEvent"></pre></div>
+  </div>
+  <p class="small muted">Influx, for history: washhouse writes its own measurements, <code>washhouse_tank</code> (tag <code>tank</code>) and <code>washhouse_draw</code> (stamped at draw <b>start</b> and keyed by <code>draw_id</code>, so a corrected draw replaces the old point instead of duplicating it). It writes <b>nothing</b> to greenhouse's <code>device_environment</code>, which is climate-only and must not mix litres or kWh in among the probe readings.</p>
+</section>
+
+<!-- ============ STATEHOUSE ============ -->
+<section id="statehouse">
+  <div class="eyebrow">7 · statehouse</div>
+  <h2>How the sister service uses it</h2>
+  <p>These recommendations come from the statehouse session and the <code>docs/hot-water-service.md</code> design note on its <code>claude/zen-hawking-ud04lv</code> branch. They are changes to statehouse, each its own PR.</p>
+  <div class="grid3">
+    <div class="card"><h3>① A washhouse adapter</h3><ul class="tight small">
+      <li>Built like the intercom adapter, on the engine clock.</li>
+      <li><code>draw_started</code> → <code>IngestSignal("hot_water_draw")</code> with <code>Since = started_at</code> (not when it was detected), a 30 min safety TTL refreshed by each <code>draw_updated</code>, and an empty Location, because a draw can't be pinned to a room.</li>
+      <li><b>No confidence gate any more.</b> A draw only exists once a litre has been metered, so every draw is real water. (House state ignores signal confidence anyway: any active signal means "occupied, 0.9".) <b>Creep is never a draw</b>: <code>continuous_flow</code> becomes a warning on the hot-water device, not occupancy.</li>
+      <li><code>draw_ended</code> → <code>ClearSignal</code> plus <code>UpdateActivity</code> with the litres and kind.</li></ul></div>
+    <div class="card"><h3>② Tanks as devices</h3><ul class="tight small">
+      <li>The cylinders stay <code>telemetry:false</code> placement entries.</li>
+      <li>washhouse becomes a device per tank: scheme <code>washhouse</code>, <code>part_of</code> the cylinder, the same pattern as the probes.</li>
+      <li>New <code>model.Reading</code> fields: <code>usable_litres_40c</code> and <code>stored_kwh</code>.</li>
+      <li>The new class (e.g. <code>hot_water_system</code>) is <b>not</b> occupancy-relevant; the draw signals carry occupancy.</li></ul></div>
+    <div class="card"><h3>③ Stop counting timers as people</h3><ul class="tight small">
+      <li><code>boiler:hw</code> and <code>boiler:ch</code> are <code>binary_state_device</code>, which counts toward occupancy and activity. So a morning HW timer says "someone's home". <b>Seen live</b>: the morning timers alone switch the house to "day" and "active" before anyone is up.</li>
+      <li>Move both to a scheduled-relay class that is not occupancy-relevant, and exclude them from <code>activeCount</code>.</li>
+      <li>Contact and motion sensors keep <code>binary_state_device</code>.</li></ul></div>
+  </div>
+  <div class="callout small"><b>Order of rollout:</b> <code>statehouse_behaviour</code> is decoded strictly (DisallowUnknownFields). Adding <code>adapters.washhouse</code> before statehouse knows the key would make it refuse the <b>whole</b> namespace. So: deploy statehouse, then add the key, then restart (SIGHUP doesn't start adapters). Note also that per-reading quality (#82) was deferred, so washhouse's <code>quality</code> field will be dropped by statehouse for now.</div>
+</section>
+
+<!-- ============ PLAN ============ -->
+<section id="plan">
+  <div class="eyebrow">8 · Plan</div>
+  <h2>How it gets built</h2>
+  <div class="grid2">
+    <div class="card">
+      <div class="phase"><div class="n">0</div><div><b>Bootstrap.</b> <span class="small muted">Repo, CLAUDE.md, and the tanktemp session's briefing committed as <code>docs/HOT-WATER-SYSTEM.md</code> with its confidence labels. CLAUDE.md carries tanktemp's working rules: gofmt; tests that fail first, with mutants that must fail them; concurrency tests run <code>-race -count=200</code>; an injected clock; no PII; every outside system behind an interface with a shared contract test; everything declared in config; golden files that pin key order; OpenAPI and README in the same change; scripts that enforce rollout order.</span></div></div>
+      <div class="phase"><div class="n">1</div><div><b>Fixtures, the meter decoder, the pure core.</b> <span class="small muted">A tested script slices fixtures out of the live recordings. It fails on any LAN address or SSID, and it shifts every timestamp to a fake date, because draw times are an occupancy pattern. The fixtures carry metered litres: a shower, a short shower straight after it, two baths (one during a reheat), tap draws, a dribbling tap's creep, a quiet night, 06:30 reheats. Then the meter consumer in <code>common/wire</code>, against tanktemp's goldens; then vessel, profile and estimate, with parity tests against <code>avail.py</code>.</span></div></div>
+      <div class="phase"><div class="n">2</div><div><b>Meter draws, attribution, thermal.</b> <span class="small muted"><code>internal/meter</code>: stitch counting runs, segment litres into draws, flow, kind, creep. <code>internal/draw</code>: which tank, outlet temperature, energy used, the heat balance as a flagged cross-check. Per-tank UA·(T−T<sub>room</sub>) against the boiler-room sensor (about 230 W from the right tank, matching 15–19 W/K). A <code>washreplay</code> tool turns recordings into events, with golden tests on the metered fixtures.</span></div></div>
+      <div class="phase"><div class="n">3</div><div><b>Wire contract.</b> <span class="small muted"><code>docs/WIRE.md</code> and goldens, reviewed with the statehouse and tanktemp sessions.</span></div></div>
+      <div class="phase"><div class="n">4</div><div><b>Shared code into <code>sweeney/common</code>.</b> <span class="small muted">See the right-hand card.</span></div></div>
+      <div class="phase"><div class="n">5</div><div><b>Service shell.</b> <span class="small muted">MQTT in and out, <code>common/lifecycle</code>, <code>common/health</code> <code>/healthz</code>, a JWT API (<code>/api/v1/state</code>, <code>/tanks/{id}</code>, <code>/draws</code>, <code>/model</code>), Influx, and a remote <code>washhouse</code> config namespace.</span></div></div>
+      <div class="phase"><div class="n">6</div><div><b>Deploy.</b> <span class="small muted">On the home server. Idempotent scripts with <code>--check</code> and <code>--yes</code>, tested first. Commit dates settled before the build is stamped.</span></div></div>
+      <div class="phase" style="border:0"><div class="n">7</div><div><b>statehouse PRs</b> <span class="small muted">①②③ above, then later: forecasts (time to empty or full), daily usage, a programme advisor, and measuring the pipe-lagging before and after through the UA fit.</span></div></div>
+    </div>
+    <div class="card">
+      <h3>Extractions into <code>sweeney/common</code></h3>
+      <table>
+        <tr><th>Module</th><th>Why now</th></tr>
+        <tr><td><b>mqttpub</b> v0.2: <code>Subscribe(filter, qos, func(Received{Topic, Payload, Retained}))</code></td><td class="small">The existing <code>Watch</code> drops the topic and the retained flag. statehouse, power-monitor and notifications each hand-roll a paho client; washhouse would be the next.</td></tr>
+        <tr><td><b>wire</b>: <code>wire/tanktemp</code>, <code>wire/boiler</code>, <code>wire/washhouse</code></td><td class="small">Shared payload types, decoders and goldens. statehouse's adapters re-declare tanktemp's payload today.</td></tr>
+        <tr><td><b>web/apiauth</b> + <b>web/serve</b></td><td class="small">The JWT middleware (user or service token, 503 on keys unavailable), CORS, writeJSON and server start are copied three times; washhouse would be the fourth. It takes a <code>Verifier</code> interface, so common takes no dependency on identity.</td></tr>
+        <tr><td><b>remoteconfig.Fetcher</b></td><td class="small">Keep-last-good, a cold-boot gate, SIGHUP reload and a <code>/healthz</code> block, repeated in statehouse, greenhouse and countinghouse.</td></tr>
+      </table>
+      <p class="small muted">Later candidates: the shared status/LWT payload, and tanktemp's <code>deploy/lib.sh</code> (washhouse's copy would be the third, PLAN's trigger for sharing it).</p>
+      <h3 style="margin-top:14px">Confidence labels <span class="muted small">used throughout the briefing</span></h3>
+      <p class="small"><span class="conf">measured</span> seen repeatedly in data · <span class="conf">owner said</span> owner's description · <span class="conf">inferred</span> best explanation · <span class="conf">guess</span> assumed to get a number.</p>
+    </div>
+  </div>
+</section>
+
+<section id="open">
+  <div class="eyebrow">9 · Open questions</div>
+  <h2>Things to settle</h2>
+  <div class="grid2">
+    <div class="card"><h3>For the owner</h3><ul class="tight small">
+      <li>Is the right tank's valve open on CH calls because of a manual lever, wiring, or a latch? It gives about 6 kWh/day of free top-up, but only in winter.</li>
+      <li>Is the gravity secondary loop real? Feel the return pipe late in the evening, or tape a spare DS18B20 to it.</li>
+      <li>Is the right tank really an STI 210, and what are its inner diameter and insulation thickness? These are the vessel model's biggest guesses.</li>
+      <li><s>Flow rates per outlet</s>: now metered, at 3.5–5 L/min for taps, 4–6.4 for showers and 12–31 for baths (hot). Which tap is which still needs the owner.</li>
+      <li><s>The briefing's nightly draw</s>: two metered nights showed none.</li>
+      <li>What makes the creep (lone litres every ~14 min, seen once so far)? A hot tap not fully closed, or circulation through the meter?</li>
+      <li>Why does the right tank take about three quarters of every draw: the pipe runs, or the inlet arrangement?</li>
+    </ul></div>
+    <div class="card"><h3>For the design</h3><ul class="tight small">
+      <li>Headline number: usable litres at 40 °C (proposed), percent of full, or baths and showers? The plan publishes all three, with their assumptions.</li>
+      <li>Should draws feed statehouse's activity dimension as well as occupancy?</li>
+      <li>Should <code>continuous_flow</code> notify someone (a tap left running), and after how long?</li>
+      <li>Should the system "low hot water" threshold be litres at 40 °C, or minutes of shower?</li>
+      <li>The boiler-room sensor has only existed since 13 Nov. Until enough nights accumulate, the UA priors (left about 4, right about 15 W/K) come from config.</li>
+      <li>The weather station has been silent since 27 Oct, so outdoor temperature isn't an input for now.</li>
+    </ul></div>
+  </div>
+</section>
+</main>
+
+<!-- ======================= CORE (pure; tested in node) ======================= -->
+<script id="core">
+(function (root) {
+'use strict';
+const KWH_PER_LK = 4.186 / 3600;
+const HEIGHTS = [265, 400, 825, 945, 1215];
+const POS = ['bottom', 'lower', 'middle', 'upper', 'top'];
+const TANKS = ['hot_water_cylinder_left', 'hot_water_cylinder_right'];
+
+// ---- vessel (port of avail.py) ----
+function vessel(o) {
+  o = Object.assign({ capL: 200, innerD: 460, domeH: 60, z0: 150 }, o || {});
+  const A = o.innerD / 2, R = (A * A + o.domeH * o.domeH) / (2 * o.domeH);
+  const cap = y => Math.PI * (2 * R * y - y * y);
+  let domeL = 0; for (let y = 0; y < Math.floor(o.domeH); y++) domeL += cap(y + 0.5) / 1e6;
+  const cylA = Math.PI * A * A;
+  const lCyl = (o.capL - 2 * domeL) * 1e6 / cylA;
+  const zc0 = o.z0 + o.domeH, zc1 = zc0 + lCyl, zTop = zc1 + o.domeH;
+  const area = z => (z < o.z0 || z > zTop) ? 0 : z < zc0 ? cap(z - o.z0) : z <= zc1 ? cylA : cap(zTop - z);
+  const slices = [];
+  for (let z = Math.floor(o.z0); z <= Math.floor(zTop); z++) slices.push([z + 0.5, area(z + 0.5) / 1e6]);
+  return Object.assign({}, o, { domeL, lCyl, zTop, litresPerCm: cylA / 1e5, slices, area });
+}
+
+function profile(temps, heights, strat) {
+  let pts = [];
+  heights.forEach((h, i) => { if (temps[i] != null && isFinite(temps[i])) pts.push([h, temps[i]]); });
+  if (pts.length < 2) return null;
+  if (strat) { let m = -1e9; pts = pts.map(([h, t]) => { m = Math.max(m, t); return [h, m]; }); }
+  return z => {
+    if (z <= pts[0][0]) return pts[0][1];
+    if (z >= pts[pts.length - 1][0]) return pts[pts.length - 1][1];
+    for (let i = 0; i < pts.length - 1; i++) {
+      const [h0, t0] = pts[i], [h1, t1] = pts[i + 1];
+      if (h0 <= z && z <= h1) return t0 + (t1 - t0) * (z - h0) / (h1 - h0);
+    }
+  };
+}
+
+function assess(v, temps, o) {
+  o = Object.assign({ heights: HEIGHTS, strat: true, tCold: 10, tMin: 40, tMix: 40 }, o || {});
+  const T = profile(temps, o.heights, o.strat);
+  if (!T) return null;
+  let kwh = 0, hot = 0, mix = 0, mean = 0;
+  for (const [z, dl] of v.slices) {
+    const t = T(z); mean += t * dl;
+    kwh += dl * (t - o.tCold) * KWH_PER_LK;
+    if (t >= o.tMin) { hot += dl; mix += dl * (t - o.tCold) / (o.tMix - o.tCold); }
+  }
+  return { kwh, hot_l: hot, mix40: mix, mean: mean / v.capL, top: T(v.zTop), T };
+}
+
+// ---- equal-volume layers for the physical simulation ----
+function layers(v, litres) {
+  const out = []; let acc = 0, zs = 0, lo = v.slices[0][0] - 0.5;
+  for (const [z, dl] of v.slices) {
+    if (dl <= 0) continue;
+    acc += dl; zs += z * dl;
+    if (acc >= litres) { out.push({ vol: acc, z: zs / acc, lo, hi: z + 0.5 }); lo = z + 0.5; acc = 0; zs = 0; }
+  }
+  if (acc > 0) out.push({ vol: acc, z: zs / acc, lo, hi: v.zTop });
+  return out;
+}
+
+function stabilise(T, V) { // pool-adjacent-violators: non-decreasing upward
+  const bt = [], bv = [], bn = [];
+  for (let i = 0; i < T.length; i++) {
+    bt.push(T[i]); bv.push(V[i]); bn.push(1);
+    while (bt.length > 1 && bt[bt.length - 2] > bt[bt.length - 1] + 1e-9) {
+      const t2 = bt.pop(), v2 = bv.pop(), n2 = bn.pop();
+      const k = bt.length - 1;
+      bt[k] = (bt[k] * bv[k] + t2 * v2) / (bv[k] + v2); bv[k] += v2; bn[k] += n2;
+    }
+  }
+  let i = 0;
+  for (let b = 0; b < bt.length; b++) for (let j = 0; j < bn[b]; j++) T[i++] = bt[b];
+}
+
+function advect(T, V, vol, tIn) { // plug flow: vol litres leave the top, cold enters bottom
+  const minV = Math.min.apply(null, V);
+  const n = Math.max(1, Math.ceil(vol / (0.7 * minV)));
+  const dv = vol / n;
+  for (let s = 0; s < n; s++) {
+    for (let i = T.length - 1; i > 0; i--) T[i] += (dv / V[i]) * (T[i - 1] - T[i]);
+    T[0] += (dv / V[0]) * (tIn - T[0]);
+  }
+}
+
+const hm = s => { const [h, m] = s.split(':').map(Number); return h * 3600 + m * 60; };
+const fmt = sec => { sec = ((Math.round(sec) % 86400) + 86400) % 86400; const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60); return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0'); };
+
+// Draw flows are HOT litres per minute, as the meter measures them (measured
+// 20-22 Nov: taps 3.5-5, showers 4-6.4, baths 12-31 L/min). share is the
+// right tank's part of each draw (measured: about three quarters).
+const SCENARIO = {
+  date: '2026-11-09',
+  draws: [
+    { at: '07:15', min: 8, lpm: 6.3, label: 'Shower, boiler idle', kind: 'shower' },
+    { at: '08:30', min: 7, lpm: 6, label: 'Shower during reheat', kind: 'shower' },
+    { at: '09:05', min: 1.2, lpm: 4.9, label: 'Kitchen tap', kind: 'tap' },
+    { at: '14:05', min: 0.5, lpm: 4, label: 'Hand wash', kind: 'tap' },
+    { at: '19:15', min: 5, lpm: 15, label: 'Bath during HW + CH', kind: 'bath' },
+    { at: '23:05', min: 6, lpm: 6.3, label: 'Shower', kind: 'shower' },
+    { at: '23:55', min: 1, lpm: 4.9, label: 'Kitchen tap', kind: 'tap' },
+  ],
+  // A tap not quite shut: the meter's pointer creeps, one litre every ~14 min,
+  // each holding the reed closed for minutes (measured 21 Nov).
+  creep: [{ from: '20:25', to: '22:10', lpm: 0.07, label: 'Hot tap left dribbling' }],
+  rightShare: 0.75,
+  hw: [['07:40', '08:40'], ['18:25', '19:40']],
+  ch: [['07:55', '08:40'], ['18:55', '22:25']],
+};
+
+function onAt(spans, t) { for (const [a, b] of spans) if (t >= hm(a) && t < hm(b)) return true; return false; }
+
+function rng(seed) { return () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; }; }
+
+// ---- physical simulation (the "truth" behind the probes) ----
+function simulate(opt) {
+  opt = opt || {};
+  const v = vessel();
+  const L = layers(v, 2.0);
+  const V = L.map(l => l.vol);
+  const nL = L.length;
+  const idxAt = z => { for (let i = 0; i < nL; i++) if (z < L[i].hi) return i; return nL - 1; };
+  const coil = L.map(l => l.z >= 241 && l.z <= 781);
+  const coilV = L.reduce((s, l, i) => s + (coil[i] ? l.vol : 0), 0);
+  const upper = L.map(l => l.z >= 800);
+  const upperV = L.reduce((s, l, i) => s + (upper[i] ? l.vol : 0), 0);
+  const tanks = [0, 1].map(k => ({
+    T: new Float64Array(nL).fill(k ? 40 : 48),
+    ua: 4.5, uaLoop: k ? 11 : 0, calling: true,
+    f1: 30, f5: 45, pipe: 30,
+  }));
+  const rnd = rng(42);
+  const dt = 10, days = 2, N = days * 8640;
+  const frames = []; const sweeps = []; const truth = [];
+  let lastSweep = -1e9, fastUntil = -1, lastProbe = null;
+  const drawAt = t => { for (const d of SCENARIO.draws) { const a = hm(d.at); if (t >= a && t < a + d.min * 60) return d; } return null; };
+  const creepAt = t => { for (const c of SCENARIO.creep) if (t >= hm(c.from) && t < hm(c.to)) return c; return null; };
+  // the meter: K = 1, one pulse per litre through the hot outlet; each litre
+  // holds the reed closed for about a quarter of its interval (duty 0.25)
+  let metered = 0; const pulses = [], warmPulses = [];
+  for (let n = 0; n < N; n++) {
+    const tAbs = n * dt, t = tAbs % 86400, day = Math.floor(tAbs / 86400);
+    const hw = onAt(SCENARIO.hw, t), ch = onAt(SCENARIO.ch, t);
+    const firing = hw || ch;
+    const amb = 21 + (firing ? 1.2 : 0);
+    // stats (sensing at 600 mm), hysteresis 57/63
+    tanks.forEach(tk => { const ts = tk.T[idxAt(600)]; if (ts >= 63) tk.calling = false; else if (ts <= 57) tk.calling = true; });
+    // coil demand
+    const zone = tk => { let s = 0; for (let i = 0; i < nL; i++) if (coil[i]) s += tk.T[i] * V[i]; return s / coilV; };
+    const P = [0, 0];
+    const flow = 80, kCoil = 520;
+    const dem = tanks.map(tk => Math.max(0, kCoil * (flow - zone(tk))));
+    if (hw) {
+      const avail = ch ? 5300 : 12100;
+      const open = [0, 1].filter(k => tanks[k].calling);
+      const sum = open.reduce((s, k) => s + dem[k], 0);
+      open.forEach(k => { P[k] = sum <= avail ? dem[k] : avail * dem[k] / sum; });
+    } else if (ch && tanks[1].calling) {
+      P[1] = Math.min(dem[1], 2500); // right valve opens on CH calls (measured; cause inferred)
+    }
+    // draw
+    const d = drawAt(t), cr = d ? null : creepAt(t);
+    const hotLpm = d ? d.lpm : cr ? cr.lpm : 0;
+    const shares = [1 - SCENARIO.rightShare, SCENARIO.rightShare];
+    if (hotLpm > 0) {
+      const before = metered; metered += hotLpm * dt / 60;
+      for (let c = Math.floor(before) + 1; c <= Math.floor(metered); c++) {
+        const at = t + dt * (c - before) / (metered - before);
+        const p = { t: at, count: c, closed_s: 0.25 * 60 / hotLpm };
+        if (day === days - 1) pulses.push(p); else warmPulses.push(Object.assign(p, { t: at - 86400 }));
+      }
+    }
+    tanks.forEach((tk, k) => {
+      const perTank = hotLpm * shares[k];
+      const T = tk.T;
+      for (let i = 0; i < nL; i++) {
+        let q = -tk.ua * (V[i] / 200) * (T[i] - amb);
+        if (upper[i]) q -= tk.uaLoop * (V[i] / upperV) * (T[i] - amb);
+        if (coil[i]) q += P[k] * V[i] / coilV;
+        T[i] += q * dt / (4186 * V[i]);
+      }
+      if (perTank > 0) advect(T, V, perTank * dt / 60, 10);
+      const drawing = perTank > 0.2; // creep is too slow to move the fittings
+      if (P[k] > 0) { // convection stirs the coil zone while the coil is hot
+        let s = 0; for (let i = 0; i < nL; i++) if (coil[i]) s += T[i] * V[i];
+        const m = s / coilV; for (let i = 0; i < nL; i++) if (coil[i]) T[i] += (m - T[i]) * 0.08;
+      }
+      for (let i = 1; i < nL - 1; i++) T[i] += 0.004 * (T[i + 1] - 2 * T[i] + T[i - 1]); // wall conduction slowly blurs layers
+      stabilise(T, V);
+      // fittings
+      const heating = P[k] > 300;
+      const l265 = T[idxAt(265)], l1215 = T[idxAt(1215)];
+      let f1Target = l265;
+      if (drawing) { let drop = Math.min(1, perTank / 3.2) * 0.85; if (heating) drop *= 0.22; f1Target = l265 - (l265 - 10) * drop; }
+      tk.f1 += (f1Target - tk.f1) * (1 - Math.exp(-dt / 40));
+      if (drawing) { tk.pipe = T[nL - 1]; tk.f5 += (T[nL - 1] - tk.f5) * (1 - Math.exp(-dt / 18)); }
+      else { tk.pipe += (amb - tk.pipe) * (1 - Math.exp(-dt / 300)); tk.f5 += ((0.8 * l1215 + 0.2 * tk.pipe) - tk.f5) * (1 - Math.exp(-dt / 55)); }
+      tk.P = P[k];
+    });
+    // probes
+    const q16 = x => Math.round(x * 16) / 16;
+    const probes = tanks.map((tk, k) => {
+      const T = tk.T;
+      const p4 = T[idxAt(945)] - (k ? 0.17 * (T[idxAt(945)] - amb) : 0); // right P4 on the secondary return
+      return [tk.f1, T[idxAt(400)], T[idxAt(825)], p4, tk.f5].map(x => q16(x + (rnd() - 0.5) * 0.08));
+    });
+    // tanktemp cadence: 30 s, 10 s while a probe moves >=1.5 C/min, held 2 min
+    const interval = tAbs < fastUntil ? 10 : 30;
+    if (tAbs - lastSweep >= interval) {
+      if (lastProbe) {
+        const mins = (tAbs - lastSweep) / 60;
+        let fast = false;
+        for (let k = 0; k < 2; k++) for (let i = 0; i < 5; i++) if (Math.abs(probes[k][i] - lastProbe[k][i]) / mins >= 1.5) fast = true;
+        if (fast) fastUntil = tAbs + 120;
+      }
+      if (day === days - 1) sweeps.push({ t, probes, hw, ch, amb, fast: tAbs < fastUntil, interval: tAbs - lastSweep });
+      else if (opt.warmSweeps) opt.warmSweeps.push({ t: t - 86400, probes, hw, ch, amb });
+      lastSweep = tAbs; lastProbe = probes;
+    }
+    if (day === days - 1) {
+      if (n % 3 === 0) frames.push({ t, T: tanks.map(tk => Float32Array.from(tk.T)), P: tanks.map(tk => tk.P), hw, ch, amb, draw: d, hotLpm, probes });
+      if (n % 6 === 0) {
+        const tr = tanks.map(tk => { let mix = 0, kwh = 0; for (let i = 0; i < nL; i++) { kwh += V[i] * (tk.T[i] - 10) * KWH_PER_LK; if (tk.T[i] >= 40) mix += V[i] * (tk.T[i] - 10) / 30; } return { mix, kwh }; });
+        truth.push({ t, mix: tr[0].mix + tr[1].mix, kwh: tr[0].kwh + tr[1].kwh, tanks: tr });
+      }
+    }
+  }
+  return { v, L, frames, sweeps, truth, warm: opt.warmSweeps, pulses, warmPulses };
+}
+
+// ---- washhouse engine: runs on sweeps only (what the service would see) ----
+function engine(sweeps, opt) {
+  opt = Object.assign({ ua: [4, 15], warm: [] }, opt || {});
+  const v = vessel();
+  const LPK = 30 * KWH_PER_LK; // kWh per litre of 40 C water mixed from 10 C
+  const all = opt.warm.concat(sweeps);
+  const pulses = (opt.warmPulses || []).concat(opt.pulses || []);
+  const hist = [[], []];
+  const snaps = [], events = [];
+  let draw = null, lastDraw = null, seq = 0, lastHW = null, lastCH = null;
+  let pq = 0, flowing = null; const creep = [];
+  const heat = [{ on: false }, { on: false }];
+  let prev = null;
+  const evt = (t, type, body) => { if (t >= 0) events.push(Object.assign({ t, type }, body)); };
+  for (const sw of all) {
+    const t = sw.t;
+    if (lastHW !== null && sw.hw !== lastHW) evt(t, sw.hw ? 'HW_ON' : 'HW_OFF', { source: 'boiler' });
+    if (lastCH !== null && sw.ch !== lastCH) evt(t, sw.ch ? 'CH_ON' : 'CH_OFF', { source: 'boiler' });
+    lastHW = sw.hw; lastCH = sw.ch;
+    const est = sw.probes.map(p => assess(v, p));
+    const tanks = est.map((e, k) => {
+      const h = hist[k];
+      h.push({ t, E: e.kwh, mix: e.mix40, p: sw.probes[k] });
+      while (h.length && t - h[0].t > 400) h.shift();
+      let ref = h[0]; for (const x of h) if (t - x.t >= 180) ref = x;
+      const dtH = (t - ref.t) / 3600;
+      const power = dtH > 0.02 ? (e.kwh - ref.E) / dtH : 0;
+      const pr = prev ? prev.probes[k] : sw.probes[k];
+      const mins = prev ? (t - prev.t) / 60 : 1;
+      const r1 = (sw.probes[k][0] - pr[0]) / mins, r5 = (sw.probes[k][4] - pr[4]) / mins;
+      const loss = opt.ua[k] * (e.mean - sw.amb) / 1000;
+      return { e, power, net: power + loss, r1, r5, trig: r1 <= -1.5 || r5 >= 2.0, loss };
+    });
+    // heating spells per tank (gain beyond expected loss)
+    tanks.forEach((tk, k) => {
+      const hs = heat[k];
+      const src = sw.hw ? 'hw' : sw.ch ? 'ch' : null; // no immersion modelled: heat needs a programmer call
+            if (draw || tk.trig) return; // a draw distorts the balance; hold the heating state through it
+      if (!hs.on && src && tk.net > 0.8) { hs.on = true; hs.start = t; hs.E0 = tk.e.kwh; hs.src = src; evt(t, 'heating_started', { tank: k, heat_source: src }); }
+      else if (hs.on && (tk.net < 0.25 || !src)) { hs.on = false; evt(t, 'heating_ended', { tank: k, heat_source: hs.src, energy_added_kwh: Math.max(0, tk.e.kwh - hs.E0), duration_s: t - hs.start }); }
+    });
+    // ---- draws come from the meter; the probes attribute and cross-check them ----
+    // A litre whose reed stayed closed under 10 s is water flowing; a lone
+    // litre closed for minutes is the pointer creeping (a dribbling tap, or
+    // circulation), which is never a draw (measured 21 Nov).
+    while (pq < pulses.length && pulses[pq].t <= t) {
+      const p = pulses[pq++];
+      if (!draw && p.closed_s >= 10) {
+        creep.push(p.t);
+        while (creep.length && p.t - creep[0] > 2700) creep.shift();
+        if (!flowing && creep.length >= 2) {
+          flowing = { since: creep[0], lpm: (creep.length - 1) / ((p.t - creep[0]) / 60) };
+          evt(p.t + p.closed_s, 'continuous_flow_started', { since: flowing.since, flow_l_min: flowing.lpm });
+        }
+        if (flowing) { flowing.last = p.t; flowing.lpm = (creep.length - 1) / ((p.t - creep[0]) / 60); }
+        continue;
+      }
+      if (!draw) {
+        seq++;
+        const base = prev || { t, probes: sw.probes, E: est.map(e => e.kwh) };
+        draw = { id: 'dr-' + SCENARIO.date.replace(/-/g, '') + '-' + fmt(p.t).replace(':', '') + '-' + seq, startedAt: p.t, detectedAt: p.t, litres: 0, times: [], E0: base.E, p1start: base.probes.map(q => q[0]), p1min: [99, 99], p5max: [0, 0], masked: !!(heat[0].on || heat[1].on || sw.hw), lossKwh: 0, updated: p.t };
+        evt(p.t, 'draw_started', { draw: draw.id, started_at: p.t, masked: draw.masked });
+      }
+      draw.litres++; draw.times.push(p.t); draw.last = p.t;
+    }
+    if (flowing && t - flowing.last > 2700) { evt(t, 'continuous_flow_ended', { since: flowing.since, ended_at: flowing.last, flow_l_min: flowing.lpm }); flowing = null; creep.length = 0; }
+    if (draw) {
+      if (heat[0].on || heat[1].on || sw.hw) draw.masked = true;
+      sw.probes.forEach((q, k) => { draw.p1min[k] = Math.min(draw.p1min[k], q[0]); draw.p5max[k] = Math.max(draw.p5max[k], q[4]); });
+      draw.lossKwh += prev ? (tanks[0].loss + tanks[1].loss) * (t - prev.t) / 3600 : 0;
+      if (t - draw.updated >= 60 && t - draw.last < 60) { draw.updated = t; evt(t, 'draw_updated', { draw: draw.id, litres: draw.litres }); }
+      if (t - draw.last >= 60) { // a minute with no litre ends it (washhouse groups litres < 36 s apart)
+        const iv = draw.times.slice(1).map((x, i) => x - draw.times[i]).sort((a, b) => a - b);
+        const flow = iv.length ? 60 / iv[iv.length >> 1] : null;
+        const dur = draw.last - draw.startedAt;
+        const kind = flow != null && flow >= 10 ? 'bath' : draw.litres >= 20 && dur >= 180 ? 'shower' : 'tap';
+        // which tank supplied it: each tank's heat lost, beyond its standing loss
+        // (as litres: each tank's heat lost over what a litre from its own outlet carries)
+        const lost = [0, 1].map(k => Math.max(0, draw.E0[k] - est[k].kwh));
+        const sum = lost[0] + lost[1];
+        const lk = lost.map((x, k) => x / Math.max(1, draw.p5max[k] - 10));
+        const share = lk[0] + lk[1] > 0 ? lk.map(x => x / (lk[0] + lk[1])) : [0.5, 0.5];
+        // the probe heat balance, kept only as a cross-check of the meter
+        const tOut = Math.max(draw.p5max[0], draw.p5max[1]);
+        const hb = Math.max(0, (sum - draw.lossKwh) / (KWH_PER_LK * Math.max(1, tOut - 10)));
+        const hbOk = !draw.masked && draw.litres >= 20;
+        const inletDrop = Math.max(draw.p1start[0] - draw.p1min[0], draw.p1start[1] - draw.p1min[1]);
+        lastDraw = { id: draw.id, started_at: draw.startedAt, ended_at: draw.last, duration_s: dur, litres: draw.litres, flow_l_min: flow, kind, masked: draw.masked, share, tanks: [0, 1].filter(k => share[k] >= 0.15), heat_balance_l: hb, heat_balance_ok: hbOk, inlet_drop_c: inletDrop, outlet_peak_c: tOut };
+        evt(t, 'draw_ended', Object.assign({ draw: draw.id }, lastDraw));
+        draw = null;
+      }
+    }
+    prev = { t, probes: sw.probes, E: est.map(e => e.kwh), hw: sw.hw };
+    if (t >= 0) snaps.push({
+      t, hw: sw.hw, ch: sw.ch, amb: sw.amb, fast: sw.fast,
+      tanks: tanks.map((x, k) => ({ usable: x.e.mix40, low: x.e.mix40 * 0.85, hot: x.e.hot_l, kwh: x.e.kwh, mean: x.e.mean, top: x.e.top, power: x.power,
+        state: draw ? 'drawing' : heat[k].on ? 'heating' : 'cooling', src: heat[k].on ? (sw.hw ? 'hw' : sw.ch ? 'ch' : heat[k].src) : null })),
+      draw: draw ? { id: draw.id, started_at: draw.startedAt, detected_at: draw.detectedAt, litres: draw.litres, masked: draw.masked } : null,
+      lastDraw, flowing: flowing ? Object.assign({}, flowing) : null,
+      meterCount: pq ? pulses[pq - 1].count : 0,
+    });
+  }
+  events.sort((a, b) => a.t - b.t);
+  return { snaps, events };
+}
+
+root.WH = { KWH_PER_LK, HEIGHTS, POS, TANKS, vessel, profile, assess, layers, stabilise, advect, simulate, engine, SCENARIO, hm, fmt, onAt };
+})(typeof window !== 'undefined' ? window : globalThis);
+</script>
+
+<!-- ======================= UI ======================= -->
+<script>
+(function () {
+'use strict';
+const { vessel, assess, simulate, engine, SCENARIO, hm, fmt, HEIGHTS, POS, TANKS } = WH;
+const $ = s => document.querySelector(s);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const NS = 'http://www.w3.org/2000/svg';
+const el = (tag, attrs, parent) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
+const r1 = x => x == null ? null : Math.round(x * 10) / 10;
+const r2 = x => x == null ? null : Math.round(x * 100) / 100;
+const iso = t => SCENARIO.date + 'T' + fmt(t) + ':' + String(Math.floor(t % 60)).padStart(2, '0') + 'Z';
+const TANKNAME = ['Left', 'Right'];
+
+// ---------- theme ----------
+let forced = null;
+try { forced = localStorage.getItem('wh-theme'); } catch (e) {}
+if (forced) document.documentElement.setAttribute('data-theme', forced);
+const isDark = () => { const a = document.documentElement.getAttribute('data-theme'); return a ? a === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches; };
+$('#themeBtn').onclick = () => {
+  const next = isDark() ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  try { localStorage.setItem('wh-theme', next); } catch (e) {}
+  redrawAll();
+};
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => redrawAll());
+
+// temperature colour: diverging blue <-> red, neutral at 40 C (the usable threshold)
+function tempColor(t) {
+  const stops = isDark()
+    ? [[10, [42, 94, 168]], [25, [85, 152, 231]], [40, [74, 74, 70]], [52, [230, 103, 103]], [66, [196, 59, 59]]]
+    : [[10, [24, 79, 149]], [25, [109, 167, 236]], [40, [230, 228, 222]], [52, [239, 143, 142]], [66, [181, 43, 43]]];
+  if (t <= stops[0][0]) return 'rgb(' + stops[0][1] + ')';
+  for (let i = 0; i < stops.length - 1; i++) {
+    const [a, ca] = stops[i], [b, cb] = stops[i + 1];
+    if (t <= b) { const f = (t - a) / (b - a); return 'rgb(' + ca.map((c, j) => Math.round(c + (cb[j] - c) * f)).join(',') + ')'; }
+  }
+  return 'rgb(' + stops[stops.length - 1][1] + ')';
+}
+
+// ---------- tooltip ----------
+const tip = $('#tip');
+function showTip(html, x, y) { tip.innerHTML = html; tip.style.display = 'block'; const w = tip.offsetWidth, h = tip.offsetHeight; tip.style.left = Math.min(innerWidth - w - 8, x + 14) + 'px'; tip.style.top = Math.max(8, Math.min(innerHeight - h - 8, y + 14)) + 'px'; }
+function hideTip() { tip.style.display = 'none'; }
+
+// ---------- run the model ----------
+const warm = [];
+const SIM = simulate({ warmSweeps: warm });
+const ENG = engine(SIM.sweeps, { warm, pulses: SIM.pulses, warmPulses: SIM.warmPulses });
+const V = SIM.v;
+const frameAt = t => SIM.frames[Math.max(0, Math.min(SIM.frames.length - 1, Math.round(t / 30)))];
+function snapAt(t) { let lo = 0, hi = ENG.snaps.length - 1; if (t < ENG.snaps[0].t) return ENG.snaps[0]; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (ENG.snaps[m].t <= t) lo = m; else hi = m - 1; } return ENG.snaps[lo]; }
+let cursor = hm('07:05');
+
+// ---------- architecture diagram ----------
+function drawArch() {
+  const svg = $('#arch'); svg.innerHTML = '';
+  const ink = css('--ink'), ink2 = css('--ink-2'), surf = css('--surface-2'), ring = css('--axis'), acc = css('--accent');
+  const box = (x, y, w, h, title, sub, tipHtml, strong) => {
+    const g = el('g', { tabindex: 0 }, svg);
+    el('rect', { x, y, width: w, height: h, rx: 10, fill: strong ? acc : surf, stroke: strong ? acc : ring }, g);
+    const t1 = el('text', { x: x + w / 2, y: y + (sub ? h / 2 - 3 : h / 2 + 5), 'text-anchor': 'middle', 'font-size': 15, 'font-weight': 650 }, g); t1.textContent = title; t1.style.fill = strong ? '#fff' : ink;
+    if (sub) { const t2 = el('text', { x: x + w / 2, y: y + h / 2 + 15, 'text-anchor': 'middle', 'font-size': 11.5 }, g); t2.textContent = sub; if (strong) t2.style.fill = '#fff'; }
+    g.addEventListener('mousemove', e => showTip(tipHtml, e.clientX, e.clientY)); g.addEventListener('mouseleave', hideTip);
+    g.addEventListener('focus', e => { const r = g.getBoundingClientRect(); showTip(tipHtml, r.right, r.top); }); g.addEventListener('blur', hideTip);
+    return g;
+  };
+  const link = (d, label, lx, ly, dashed, dur) => {
+    const p = el('path', { d, fill: 'none', stroke: ring, 'stroke-width': 2, 'stroke-dasharray': dashed ? '5 5' : '' }, svg);
+    if (label) { const t = el('text', { x: lx, y: ly, 'font-size': 11, 'text-anchor': 'middle' }, svg); t.textContent = label; t.style.fill = ink2; t.style.fontFamily = 'ui-monospace, Menlo, monospace'; }
+    const c = el('circle', { r: 4, fill: acc }, svg);
+    const am = el('animateMotion', { dur: (dur || 3) + 's', repeatCount: 'indefinite', path: d }, c);
+    return p;
+  };
+  // sources
+  box(20, 30, 200, 62, 'tanktemp', 'Pi · 10 probes · hot meter', '<b>tanktemp</b><br>Reads the 10 probes every 30 s, or every 10 s while they change. Publishes retained <code>water/hot/tanktemp/{tank}/state</code> (QoS 0) and <code>water/hot/tanktemp/status</code> (QoS 1, LWT). Since 20 Nov it also counts the <b>hot-water meter</b> (1 pulse per litre, reed on GPIO 27): retained <code>water/hot/tanktemp/meter</code>, one message per litre, per opening and per sweep, with <code>count</code>, <code>seq</code>, the last interval and how long the reed stayed closed.');
+  box(20, 150, 200, 62, 'boiler-sensor', 'programmer HW / CH', '<b>boiler-sensor</b><br>Opto-isolated GPIO reading of the programmer outputs. <code>energy/boiler/sensor/events</code> carries HW_ON/OFF and CH_ON/OFF (not retained); <code>…/system</code> carries a retained heartbeat with the current ch/hw. These are timers only: they know nothing about the tank stats or valves.');
+  box(20, 270, 200, 62, 'zigbee2mqtt', 'boiler-room climate', '<b>climate_groundfloor_boiler-room</b><br>The cupboard air temperature, the ambient for loss estimates. It runs about 5 °C warmer than the hall, and has only existed since 13 Nov. Coarse: steps of about 1 °C.');
+  box(20, 360, 200, 50, 'config.swee.net', 'devices_home · washhouse', '<b>Remote config</b><br><code>devices_home</code>: the cylinders and probes (<code>part_of</code>, plus a <code>cylinder</code> block to add). A new <code>washhouse</code> namespace: geometry guesses, probe roles, thresholds and UA priors.');
+  // washhouse
+  box(420, 110, 260, 210, '', '', '<b>washhouse</b><br>Pure, event-time core: ingest → meter (litres, draws, creep) → vessel/profile → estimate → thermal → draw attribution. The meter decides when a draw happened and how big it was; the probes say which tank supplied it, how hot it was and how much heat is left. MQTT in and out through <code>common/mqttpub</code>, <code>common/lifecycle</code> heartbeats, <code>/healthz</code> and a JWT API.', true);
+  const wt = el('text', { x: 550, y: 136, 'text-anchor': 'middle', 'font-size': 17, 'font-weight': 700 }, svg); wt.textContent = 'washhouse'; wt.style.fill = '#fff';
+  ['ingest · freshness, runs, dedupe', 'meter · draws, flow, kind, creep', 'estimate · litres at 40 °C, kWh', 'thermal · heating / cooling', 'attribute · which tank, cross-check', 'publish · MQTT + Influx + API'].forEach((s, i) => { const t = el('text', { x: 440, y: 160 + i * 26, 'font-size': 12.5 }, svg); t.textContent = '▸ ' + s; t.style.fill = '#fff'; });
+  // sinks
+  box(880, 30, 200, 62, 'statehouse', 'occupancy · mode', '<b>statehouse</b><br>A new washhouse adapter turns a draw into an <code>ActivitySignal</code> (evidence that someone is home) and each tank into a device with litres and kWh. It keeps its existing tanktemp adapter for the raw probes.');
+  box(880, 150, 200, 62, 'Influx', 'washhouse_tank · _draw', '<b>Influx</b><br>washhouse\'s own measurements; nothing goes into greenhouse\'s climate-only <code>device_environment</code>. Draws are stamped at start and keyed by <code>draw_id</code>.');
+  box(880, 270, 200, 62, 'API clients', '/api/v1 · /healthz', '<b>HTTP API</b><br><code>/healthz</code> (public, <code>common/health</code>), <code>/openapi.json</code>, <code>/api/v1/state</code>, <code>/tanks/{id}</code>, <code>/draws</code>, <code>/model</code>. Bearer JWT from id.swee.net.');
+  box(880, 360, 200, 50, 'greenhouse', 'raw probes only', '<b>greenhouse</b><br>Charts climate only: it keeps charting the 10 raw probes and the boiler-room sensor, and shows no litres or draws (no energy concepts by design).');
+  link('M220,61 C320,61 330,150 420,160', 'water/hot/tanktemp/{+/state,meter}', 318, 92, false, 2.2);
+  link('M220,181 C320,181 330,215 420,215', 'energy/boiler/sensor/#', 318, 172, false, 4);
+  link('M220,301 C320,301 330,270 420,270', 'zigbee2mqtt/climate_…', 318, 318, false, 6);
+  link('M220,385 C330,385 340,320 430,320', '', 0, 0, true, 9);
+  link('M680,160 C780,160 790,61 880,61', 'water/hot/{state,tank,events}', 780, 92, false, 2.6);
+  link('M680,215 C780,215 790,181 880,181', 'line protocol', 780, 172, false, 3.5);
+  link('M680,270 C780,270 790,301 880,301', 'HTTPS', 780, 318, false, 5);
+  // tanktemp direct to statehouse/greenhouse (unchanged)
+  const d0 = 'M220,45 C500,-10 700,-10 880,45';
+  el('path', { d: d0, fill: 'none', stroke: ring, 'stroke-width': 1.5, 'stroke-dasharray': '3 6' }, svg);
+  const tt = el('text', { x: 550, y: 16, 'text-anchor': 'middle', 'font-size': 11 }, svg); tt.textContent = 'unchanged: statehouse\'s tanktemp adapter keeps reading the raw probes';
+}
+
+// ---------- tank cutaway ----------
+const TX = [70, 330], TW = 150, YB = 560, YS = 0.34; // x of each tank, width, floor y, px per mm
+const ymm = mm => YB - mm * YS;
+const FITTINGS = [
+  { mm: 241, code: 'H', name: 'coil return' }, { mm: 281, code: 'G', name: 'cold inlet' }, { mm: 380, code: '', name: 'immersion boss (guess)' },
+  { mm: 781, code: 'D', name: 'coil flow' }, { mm: 956, code: 'A', name: 'secondary return' }, { mm: 1237, code: 'B', name: 'hot outlet' },
+];
+const PROBE_NOTES = [
+  ['P1 · bottom · 265 mm', 'On the <b>cold inlet</b> fitting (G). It shows <b>which tank</b> a draw came from: it dips within 1–43 s of the first metered litre, much more on the right tank, which supplies about three quarters of every draw. It dips for any draw, even a litre, so it is no use for sizing one. During a reheat the coil warms incoming water, so it barely moves.', 'measured'],
+  ['P2 · lower · 400 mm', 'On what looks like an anode or immersion boss, inside the coil zone (241–781 mm).', 'owner said'],
+  ['P3 · middle · 825 mm', 'Just above the top of the coil. The best "bulk hot water" probe.', 'owner said'],
+  ['P4 · upper · 945 mm', ['On a <b>blanked</b> fitting: a normal tank probe.', 'On the <b>secondary return</b> (A). It reads cooled return water, 5–9 °C below its neighbours, all night. washhouse\'s running max corrects for it.'], 'measured'],
+  ['P5 · top · 1215 mm', 'On the <b>hot outlet</b> (B), heat-sunk by the copper pipe. During a draw it reads the true top temperature (about 63 °C). At rest it falls fast (62.9 → 48.8 °C in 3 min) and settles several °C low. Never treat its resting value as the top of the tank.', 'measured'],
+];
+function drawTanks() {
+  const svg = $('#tanks'); svg.innerHTML = '';
+  const f = frameAt(cursor), s = snapAt(cursor);
+  const ink = css('--ink'), ink2 = css('--ink-2'), axis = css('--axis'), muted = css('--muted');
+  const defs = el('defs', {}, svg);
+  // pipes: merged hot outlet to house, cold feed
+  const pipeHot = isDark() ? '#e66767' : '#d03b3b', pipeCold = isDark() ? '#5598e7' : '#2a78d6';
+  const flowing = !!f.draw;
+  const yB = ymm(1237), yG = ymm(281);
+  const hotPath = `M${TX[0]},${yB} L${TX[0] - 30},${yB} L${TX[0] - 30},28 L${TX[1] + TW + 30},28 L${TX[1] + TW + 30},${yB} L${TX[1] + TW},${yB}`;
+  el('path', { d: hotPath, fill: 'none', stroke: pipeHot, 'stroke-width': 5, 'stroke-linejoin': 'round', opacity: flowing ? 0.9 : 0.35 }, svg);
+  const coldPath = `M${TX[0] - 50},${yG} L${TX[0]},${yG} M${TX[1] + TW + 50},${yG} L${TX[1] + TW},${yG} M${TX[0] - 50},${yG} L${TX[0] - 50},${YB + 22} L${TX[1] + TW + 50},${YB + 22} L${TX[1] + TW + 50},${yG}`;
+  el('path', { d: coldPath, fill: 'none', stroke: pipeCold, 'stroke-width': 5, 'stroke-linejoin': 'round', opacity: flowing ? 0.9 : 0.35 }, svg);
+  if (flowing) {
+    for (const [p, col, durS] of [[hotPath, pipeHot, 2.5], [coldPath, pipeCold, 3]]) {
+      const fl = el('path', { d: p, fill: 'none', stroke: '#fff', 'stroke-width': 2, 'stroke-dasharray': '4 14', opacity: 0.8 }, svg);
+      el('animate', { attributeName: 'stroke-dashoffset', from: 36, to: 0, dur: '0.9s', repeatCount: 'indefinite' }, fl);
+    }
+  }
+  const lbl = (x, y, txt, anchor, size, color, weight) => { const t = el('text', { x, y, 'text-anchor': anchor || 'start', 'font-size': size || 11 }, svg); t.textContent = txt; if (color) t.style.fill = color; if (weight) t.setAttribute('font-weight', weight); return t; };
+  lbl((TX[0] + TX[1] + TW) / 2, 20, flowing ? `▲ through the meter · ${r1(f.hotLpm)} L/min hot (${f.draw.label}) · ${s.draw ? s.draw.litres + ' L counted' : 'first litre coming'}` : `▲ through the meter to the house · count ${s.meterCount}${s.flowing ? ' · creeping' : ''}`, 'middle', 11.5, flowing ? ink : muted, flowing ? 650 : 400);
+  lbl((TX[0] + TX[1] + TW) / 2, YB + 38, '◀ cold mains feeds both bottoms ▶', 'middle', 11, muted);
+  // secondary return loop (right tank) — gravity, always on
+  const yA = ymm(956);
+  const loop = `M${TX[1] + TW + 30},${yB - 8} C${TX[1] + TW + 70},${yB - 40} ${TX[1] + TW + 70},${yA + 40} ${TX[1] + TW},${yA}`;
+  const lp = el('path', { d: loop, fill: 'none', stroke: muted, 'stroke-width': 2.5, 'stroke-dasharray': '3 5' }, svg);
+  el('animate', { attributeName: 'stroke-dashoffset', from: 16, to: 0, dur: '2.5s', repeatCount: 'indefinite' }, lp);
+  lbl(TX[1] + TW + 36, yA + 24, 'gravity', 'start', 10, muted); lbl(TX[1] + TW + 36, yA + 36, 'loop', 'start', 10, muted);
+
+  for (let k = 0; k < 2; k++) {
+    const x = TX[k], T = f.T[k];
+    const clip = el('clipPath', { id: 'clip' + k }, defs);
+    el('rect', { x: x + 6, y: ymm(V.zTop), width: TW - 12, height: ymm(V.z0) - ymm(V.zTop), rx: 34 }, clip);
+    // outer shell (insulation)
+    el('rect', { x, y: ymm(1498), width: TW, height: 1498 * YS, rx: 40, fill: css('--surface-2'), stroke: axis, 'stroke-width': 1.5 }, svg);
+    const g = el('g', { 'clip-path': `url(#clip${k})` }, svg);
+    SIM.L.forEach((l, i) => { el('rect', { x: x + 6, y: ymm(l.hi), width: TW - 12, height: (l.hi - l.lo) * YS + 0.6, fill: tempColor(T[i]) }, g); });
+    // coil
+    const heating = f.P[k] > 300;
+    let d = ''; const cx0 = x + 28, cx1 = x + TW - 28;
+    for (let i = 0, mm = 251; mm <= 771; mm += 26, i++) d += (i ? 'L' : 'M') + (i % 2 ? cx1 : cx0) + ',' + ymm(mm) + ' ';
+    el('path', { d, fill: 'none', stroke: heating ? (isDark() ? '#ffb199' : '#8a1c1c') : 'rgba(128,128,128,.55)', 'stroke-width': heating ? 3 : 2, 'stroke-linejoin': 'round', opacity: heating ? 0.95 : 0.6 }, g);
+    if (heating) lbl(x + TW / 2, ymm(520), `coil ${r1(f.P[k] / 1000)} kW`, 'middle', 11, '#fff', 650);
+    // fittings on the outer side
+    const side = k ? x + TW : x, dir = k ? 1 : -1;
+    FITTINGS.forEach(ft => {
+      el('line', { x1: side, y1: ymm(ft.mm), x2: side + dir * 9, y2: ymm(ft.mm), stroke: axis, 'stroke-width': 3 }, svg);
+      if (ft.code && !(k === 1 && ft.code === 'B')) { const t = lbl(side + dir * 12, ymm(ft.mm) + 4, ft.code, k ? 'start' : 'end', 10, muted); }
+    });
+    // probes
+    const p = f.probes[k];
+    HEIGHTS.forEach((h, i) => {
+      const py = ymm(h), px = k ? x + 14 : x + TW - 14;
+      const gp = el('g', { tabindex: 0, style: 'cursor:help' }, svg);
+      el('circle', { cx: px, cy: py, r: 7, fill: tempColor(p[i]), stroke: ink, 'stroke-width': 2 }, gp);
+      const tx = k ? x + TW + 14 : x - 14;
+      const t = el('text', { x: k ? px + 12 : px - 12, y: py + 4, 'text-anchor': k ? 'start' : 'end', 'font-size': 11.5, 'font-weight': 650 }, gp);
+      t.textContent = 'P' + (i + 1) + ' ' + p[i].toFixed(1) + '°'; t.style.fill = ink;
+      t.setAttribute('paint-order', 'stroke'); t.setAttribute('stroke', css('--surface')); t.setAttribute('stroke-width', 3);
+      const note = PROBE_NOTES[i]; const body = Array.isArray(note[1]) ? note[1][k] : note[1];
+      const html = `<b>${TANKNAME[k]} ${note[0]}</b><br>${body}<br><span class="conf">${note[2]}</span><br><span class="muted">reading ${p[i].toFixed(2)} °C</span>`;
+      gp.addEventListener('mousemove', e => showTip(html, e.clientX, e.clientY)); gp.addEventListener('mouseleave', hideTip);
+      gp.addEventListener('focus', () => { const r = gp.getBoundingClientRect(); showTip(html, r.right, r.top); }); gp.addEventListener('blur', hideTip);
+    });
+    lbl(x + TW / 2, YB + 14, TANKS[k], 'middle', 10.5, ink, 650);
+    // state chip
+    const st = s.tanks[k];
+    lbl(x + TW / 2, ymm(1498) - 8, stateLabel(st), 'middle', 12, ink, 650);
+  }
+  // fittings legend
+  lbl(280 - 5, ymm(1100), '', 'middle', 10, muted);
+}
+const STATE_ICON = { heating: '▲', drawing: '◆', cooling: '▼', idle: '■', unknown: '?' };
+const stateLabel = st => `${STATE_ICON[st.state]} ${st.state}${st.src ? ' (' + st.src.toUpperCase() + ')' : ''}`;
+
+function drawTempLegend() {
+  const host = $('#tempLegend'); host.innerHTML = '';
+  const span = document.createElement('span'); span.style.display = 'inline-flex'; span.style.alignItems = 'center'; span.style.gap = '6px';
+  const bar = document.createElement('span'); bar.style.cssText = 'display:inline-block;width:180px;height:10px;border-radius:3px;border:1px solid var(--ring)';
+  const stops = []; for (let t = 10; t <= 66; t += 4) stops.push(tempColor(t) + ' ' + ((t - 10) / 56 * 100) + '%');
+  bar.style.background = 'linear-gradient(90deg,' + stops.join(',') + ')';
+  span.append('10 °C', bar, '66 °C'); host.append(span);
+  const n = document.createElement('span'); n.innerHTML = 'neutral grey = 40 °C, the usable threshold · <b>H G D A B</b> are fittings (coil return, cold in, coil flow, secondary return, hot out) · hover a probe for its notes'; host.append(n);
+}
+
+// ---------- tank cards ----------
+function drawCards() {
+  const s = snapAt(cursor);
+  const host = $('#tankCards'); host.innerHTML = '';
+  s.tanks.forEach((st, k) => {
+    const c = document.createElement('div'); c.className = 'card'; c.style.padding = '12px';
+    const dotc = st.state === 'heating' ? 'var(--serious)' : st.state === 'drawing' ? 'var(--s1)' : 'var(--muted)';
+    c.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><b>${TANKNAME[k]} tank</b><span class="chip"><span class="dot" style="background:${dotc}"></span>${stateLabel(st)}</span></div>
+      <div style="font-size:26px;font-weight:650;margin-top:6px">${Math.round(st.usable)} <span class="small muted" style="font-weight:400">L at 40 °C</span></div>
+      <dl class="kv"><dt>realistic (×0.85)</dt><dd>${Math.round(st.low)} L</dd><dt>water ≥ 40 °C</dt><dd>${Math.round(st.hot)} L</dd><dt>stored</dt><dd>${st.kwh.toFixed(1)} kWh</dd><dt>mean</dt><dd>${st.mean.toFixed(1)} °C</dd><dt>net power</dt><dd>${st.power >= 0 ? '+' : ''}${st.power.toFixed(2)} kW</dd></dl>`;
+    host.appendChild(c);
+  });
+  // headline tiles
+  const tot = s.tanks[0].usable + s.tanks[1].usable;
+  $('#tUsable').textContent = Math.round(tot) + ' L';
+  $('#tUsableS').textContent = `≈ ${Math.round(tot * 0.85 / 10.5)} min of shower (6.3 L/min hot, metered), ${(tot * 0.85 / 100).toFixed(1)} baths at 100 L`;
+  const sysState = s.draw ? 'drawing' : s.tanks.some(t => t.state === 'heating') ? 'heating' : 'idle';
+  $('#tState').textContent = STATE_ICON[sysState] + ' ' + sysState;
+  $('#tStateS').textContent = `programmer HW ${s.hw ? 'ON' : 'off'} · CH ${s.ch ? 'ON' : 'off'}${s.flowing ? ' · slow creep ' + s.flowing.lpm.toFixed(2) + ' L/min' : ''}`;
+  $('#tKwh').textContent = (s.tanks[0].kwh + s.tanks[1].kwh).toFixed(1);
+  const ld = s.draw ? null : s.lastDraw;
+  if (s.draw) { $('#tLast').textContent = 'now'; $('#tLastS').textContent = `${s.draw.litres} L metered since ${fmt(s.draw.started_at)}`; }
+  else if (ld) { $('#tLast').textContent = Math.round((cursor - ld.ended_at) / 60) + ' min ago'; $('#tLastS').textContent = `${ld.kind}, ${ld.litres} L metered, ${Math.round(ld.share[1] * 100)}% from the right tank`; }
+  else { $('#tLast').textContent = '–'; $('#tLastS').textContent = 'none yet today'; }
+  $('#clock').textContent = fmt(cursor);
+}
+
+// ---------- event log ----------
+function statehouseSays(e) {
+  switch (e.type) {
+    case 'draw_started': return `IngestSignal hot_water_draw (Since ${fmt(e.started_at)}, TTL 30 min) → house <b>occupied</b>: a metered litre is real water`;
+    case 'draw_updated': return 'refresh TTL · UpdateActivity(litres so far)';
+    case 'draw_ended': return 'ClearSignal · UpdateActivity(ended, litres, kind) · quiet_after window runs from here';
+    case 'continuous_flow_started': return 'not a draw, not occupancy · a warning on the hot-water device (a tap left running, or a leak)';
+    case 'continuous_flow_ended': return 'warning cleared';
+    case 'heating_started': case 'heating_ended': return `reading on device washhouse:${TANKS[e.tank]} · not occupancy-relevant`;
+    case 'HW_ON': case 'CH_ON': return 'today: counts as occupancy ✗ · proposed: scheduled relay, ignored';
+    default: return '';
+  }
+}
+function eventText(e) {
+  switch (e.type) {
+    case 'draw_started': return `<b>draw_started</b> · first litre metered${e.masked ? ' · during reheat' : ''}`;
+    case 'draw_updated': return `<b>draw_updated</b> · ${e.litres} L so far`;
+    case 'draw_ended': return `<b>draw_ended</b> · ${e.kind} · <b>${e.litres} L</b> metered${e.flow_l_min ? ' at ' + e.flow_l_min.toFixed(1) + ' L/min' : ''} · ${Math.max(1, Math.round(e.duration_s / 60))} min · left ${Math.round(e.share[0] * 100)}% / right ${Math.round(e.share[1] * 100)}%`;
+    case 'continuous_flow_started': return `<b>continuous_flow_started</b> · lone slow litres, about ${e.flow_l_min.toFixed(2)} L/min`;
+    case 'continuous_flow_ended': return `<b>continuous_flow_ended</b> · no creep litre for 45 min`;
+    case 'heating_started': return `<b>heating_started</b> · ${TANKNAME[e.tank]} · source ${e.heat_source ? e.heat_source.toUpperCase() : 'unknown'}${e.tank === 1 && e.heat_source === 'ch' ? ' (CH-only charging of the right tank)' : ''}`;
+    case 'heating_ended': return `<b>heating_ended</b> · ${TANKNAME[e.tank]} · +${e.energy_added_kwh.toFixed(1)} kWh in ${Math.round(e.duration_s / 60)} min`;
+    default: return `<span class="muted">boiler-sensor</span> <b>${e.type}</b>`;
+  }
+}
+let lastLogKey = '';
+function drawLog() {
+  const host = $('#log');
+  const evs = ENG.events;
+  let nowIdx = -1; evs.forEach((e, i) => { if (e.t <= cursor && e.type !== 'draw_updated') nowIdx = i; });
+  const key = nowIdx + '|' + isDark();
+  if (key === lastLogKey) return; lastLogKey = key;
+  host.innerHTML = '';
+  for (let i = 0; i < evs.length; i++) {
+    const e = evs[i]; if (e.type === 'draw_updated') continue; // published once a minute during a draw; see the wire section
+    const row = document.createElement('div'); row.className = 'row' + (e.t > cursor ? ' future' : i === nowIdx ? ' now' : '');
+    row.innerHTML = `<div class="t">${fmt(e.t)}</div><div>${eventText(e)}<div class="sh">statehouse: ${statehouseSays(e)}</div></div>`;
+    row.style.cursor = 'pointer'; row.onclick = () => setCursor(e.t);
+    host.appendChild(row);
+  }
+  const cur = host.querySelector('.now'); host.scrollTop = cur ? Math.max(0, cur.offsetTop - host.offsetTop - 120) : 0;
+}
+
+// ---------- charts ----------
+function axisTime(svg, x, y0, w) {
+  for (let h = 0; h <= 24; h += 3) { const xx = x(h * 3600); el('line', { x1: xx, x2: xx, y1: 8, y2: y0, stroke: css('--grid') }, svg); const t = el('text', { x: xx, y: y0 + 16, 'text-anchor': 'middle', 'font-size': 11 }, svg); t.textContent = String(h).padStart(2, '0') + ':00'; t.style.fill = css('--muted'); }
+}
+function lanes(svg, x, y, h, spans, fill, label) {
+  for (const [a, b] of spans) el('rect', { x: x(hm(a)), y, width: x(hm(b)) - x(hm(a)), height: h, fill, rx: 2 }, svg);
+  const t = el('text', { x: 4, y: y + h - 2, 'font-size': 10 }, svg); t.textContent = label; t.style.fill = css('--muted');
+}
+function chartUsable() {
+  const svg = $('#chartUsable'); svg.innerHTML = '';
+  const W = svg.clientWidth || 800, H = 270, L = 44, R = 12, top = 18, bot = 52;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  const x = t => L + (W - L - R) * t / 86400;
+  const maxV = 800, y = v => top + (H - top - bot) * (1 - v / maxV);
+  for (let v = 0; v <= maxV; v += 200) { el('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: css('--grid') }, svg); const t = el('text', { x: L - 6, y: y(v) + 4, 'text-anchor': 'end', 'font-size': 11 }, svg); t.textContent = v; t.style.fill = css('--muted'); }
+  axisTime(svg, x, H - bot + 4, W);
+  lanes(svg, x, H - bot + 22, 7, SCENARIO.hw, css('--hw'), 'HW');
+  lanes(svg, x, H - bot + 31, 7, SCENARIO.ch, css('--ch'), 'CH');
+  const line = (pts, col, w, dash) => el('path', { d: pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(''), fill: 'none', stroke: col, 'stroke-width': w, 'stroke-dasharray': dash || '', 'stroke-linejoin': 'round' }, svg);
+  line(SIM.truth.map(p => [x(p.t), y(p.mix)]), css('--muted'), 1.5, '4 3');
+  const step = Math.max(1, Math.floor(ENG.snaps.length / 1200));
+  line(ENG.snaps.filter((_, i) => i % step === 0).map(s => [x(s.t), y(s.tanks[0].usable + s.tanks[1].usable)]), css('--s1'), 2);
+  ENG.events.filter(e => e.type === 'draw_started').forEach(e => { const t = el('text', { x: x(e.started_at), y: top - 4, 'text-anchor': 'middle', 'font-size': 11 }, svg); t.textContent = '▼'; t.style.fill = css('--ink'); });
+  const cur = el('line', { x1: x(cursor), x2: x(cursor), y1: top, y2: H - bot + 4, stroke: css('--ink'), 'stroke-width': 1.5 }, svg);
+  const hover = el('line', { x1: 0, x2: 0, y1: top, y2: H - bot + 4, stroke: css('--axis'), 'stroke-width': 1, visibility: 'hidden' }, svg);
+  const hit = el('rect', { x: L, y: 0, width: W - L - R, height: H, fill: 'transparent', style: 'cursor:crosshair' }, svg);
+  const tAt = ev => { const r = svg.getBoundingClientRect(); return Math.max(0, Math.min(86399, (ev.clientX - r.left - L) / (r.width - L - R) * 86400)); };
+  hit.addEventListener('mousemove', ev => {
+    const t = tAt(ev), s = snapAt(t), tr = SIM.truth[Math.min(SIM.truth.length - 1, Math.round(t / 60))];
+    hover.setAttribute('x1', x(t)); hover.setAttribute('x2', x(t)); hover.setAttribute('visibility', 'visible');
+    showTip(`<b>${fmt(t)}</b><br>washhouse estimate <b>${Math.round(s.tanks[0].usable + s.tanks[1].usable)} L</b> (left ${Math.round(s.tanks[0].usable)} + right ${Math.round(s.tanks[1].usable)})<br>simulated truth ${Math.round(tr.mix)} L<br>HW ${s.hw ? 'ON' : 'off'} · CH ${s.ch ? 'ON' : 'off'}${s.draw ? '<br>◆ draw in progress' : ''}`, ev.clientX, ev.clientY);
+  });
+  hit.addEventListener('mouseleave', () => { hover.setAttribute('visibility', 'hidden'); hideTip(); });
+  hit.addEventListener('click', ev => setCursor(tAt(ev)));
+  chartUsable.cur = { cur, x };
+}
+let probeTank = 0;
+const PCOL = ['--s1', '--s2', '--s3', '--s4', '--s5'];
+function chartProbes() {
+  const svg = $('#chartProbes'); svg.innerHTML = '';
+  const W = svg.clientWidth || 800, H = 270, L = 44, R = 70, top = 10, bot = 46;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  const x = t => L + (W - L - R) * t / 86400;
+  const lo = 0, hi = 70, y = v => top + (H - top - bot) * (1 - (v - lo) / (hi - lo));
+  for (let v = 0; v <= 70; v += 10) { el('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: css('--grid') }, svg); const t = el('text', { x: L - 6, y: y(v) + 4, 'text-anchor': 'end', 'font-size': 11 }, svg); t.textContent = v + '°'; t.style.fill = css('--muted'); }
+  axisTime(svg, x, H - bot + 4, W);
+  // cadence lane
+  const cy = H - bot + 24;
+  const tl = el('text', { x: 4, y: cy + 8, 'font-size': 10 }, svg); tl.textContent = 'sweeps'; tl.style.fill = css('--muted');
+  let path = ''; SIM.sweeps.forEach(s => { if (s.fast) path += `M${x(s.t).toFixed(1)},${cy}v9`; });
+  el('path', { d: path, stroke: css('--ink-2'), 'stroke-width': 1 }, svg);
+  el('line', { x1: L, x2: W - R, y1: cy + 9.5, y2: cy + 9.5, stroke: css('--axis') }, svg);
+  const sw = SIM.sweeps; const step = Math.max(1, Math.floor(sw.length / 1500));
+  for (let i = 4; i >= 0; i--) {
+    const pts = sw.filter((_, j) => j % step === 0).map(s => [x(s.t), y(s.probes[probeTank][i])]);
+    el('path', { d: pts.map((p, j) => (j ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(''), fill: 'none', stroke: css(PCOL[i]), 'stroke-width': 1.6, 'stroke-linejoin': 'round' }, svg);
+  }
+  // direct labels at right end (sorted to avoid collisions)
+  const last = sw[sw.length - 1].probes[probeTank];
+  const lab = last.map((v, i) => ({ i, y: y(v) })).sort((a, b) => a.y - b.y);
+  for (let j = 1; j < lab.length; j++) if (lab[j].y - lab[j - 1].y < 12) lab[j].y = lab[j - 1].y + 12;
+  lab.forEach(o => { const t = el('text', { x: W - R + 6, y: o.y + 4, 'font-size': 11 }, svg); t.textContent = 'P' + (o.i + 1) + ' ' + POS[o.i]; t.style.fill = css('--ink-2'); });
+  const cur = el('line', { x1: x(cursor), x2: x(cursor), y1: top, y2: H - bot + 4, stroke: css('--ink'), 'stroke-width': 1.5 }, svg);
+  const hover = el('line', { x1: 0, x2: 0, y1: top, y2: H - bot + 4, stroke: css('--axis'), visibility: 'hidden' }, svg);
+  const hit = el('rect', { x: L, y: 0, width: W - L - R, height: H, fill: 'transparent', style: 'cursor:crosshair' }, svg);
+  const tAt = ev => { const r = svg.getBoundingClientRect(); return Math.max(0, Math.min(86399, (ev.clientX - r.left - L) / (r.width - L - R) * 86400)); };
+  hit.addEventListener('mousemove', ev => {
+    const t = tAt(ev); let s = sw[0]; for (const q of sw) { if (q.t > t) break; s = q; }
+    hover.setAttribute('x1', x(t)); hover.setAttribute('x2', x(t)); hover.setAttribute('visibility', 'visible');
+    showTip(`<b>${TANKNAME[probeTank]} tank · ${fmt(s.t)}</b>${s.fast ? ' <span class="conf">10 s cadence</span>' : ''}<br>` + [4, 3, 2, 1, 0].map(i => `P${i + 1} ${POS[i]}: <b>${s.probes[probeTank][i].toFixed(2)} °C</b>`).join('<br>'), ev.clientX, ev.clientY);
+  });
+  hit.addEventListener('mouseleave', () => { hover.setAttribute('visibility', 'hidden'); hideTip(); });
+  hit.addEventListener('click', ev => setCursor(tAt(ev)));
+  chartProbes.cur = { cur, x };
+  $('#probeLegend').innerHTML = [0, 1, 2, 3, 4].map(i => `<span><span class="sw" style="background:var(${PCOL[i]})"></span>P${i + 1} ${POS[i]} · ${HEIGHTS[i]} mm</span>`).join('');
+}
+$('#pLeft').onclick = () => { probeTank = 0; $('#pLeft').setAttribute('aria-pressed', 'true'); $('#pRight').setAttribute('aria-pressed', 'false'); chartProbes(); };
+$('#pRight').onclick = () => { probeTank = 1; $('#pRight').setAttribute('aria-pressed', 'true'); $('#pLeft').setAttribute('aria-pressed', 'false'); chartProbes(); };
+
+// ---------- draw table ----------
+function drawTable() {
+  const ended = ENG.events.filter(e => e.type === 'draw_ended');
+  const rows = SCENARIO.draws.map(d => {
+    const a = hm(d.at), b = a + d.min * 60;
+    const m = ended.find(e => e.started_at <= b + 60 && e.ended_at >= a - 60);
+    return { d, a, m, trueL: d.min * d.lpm };
+  });
+  const extra = ended.filter(e => !rows.some(r => r.m === e));
+  const hbCell = m => {
+    const off = m.litres ? Math.round((m.heat_balance_l / m.litres - 1) * 100) : 0;
+    const txt = `≈ ${Math.round(m.heat_balance_l)} L <span class="muted">(${off >= 0 ? '+' : ''}${off}%)</span>`;
+    return m.heat_balance_ok ? txt : `<span class="muted">${txt}<br>${m.masked ? 'reheat: not trusted' : 'too small: not trusted'}</span>`;
+  };
+  let h = `<tr><th>Time</th><th>What happened (simulated)</th><th class="num">True hot litres</th><th>Seen</th><th class="num">Metered</th><th>Kind · flow</th><th class="num">Left / right</th><th class="num">Probe heat balance (cross-check)</th><th>statehouse</th></tr>`;
+  for (const r of rows) {
+    const m = r.m;
+    h += `<tr style="cursor:pointer" data-t="${r.a}"><td>${r.d.at}</td><td>${r.d.label}</td><td class="num">${Math.round(r.trueL)}</td>`;
+    if (!m) h += `<td><span class="chip"><span class="dot" style="background:var(--warning)"></span>missed</span></td><td class="num muted">–</td><td class="muted">–</td><td class="num muted">–</td><td class="num muted">–</td><td class="small muted">nothing</td></tr>`;
+    else h += `<td><span class="chip"><span class="dot" style="background:var(--good)"></span>${fmt(m.started_at)}–${fmt(m.ended_at)}</span></td><td class="num"><b>${m.litres} L</b></td><td>${m.kind}${m.flow_l_min ? ' · ' + m.flow_l_min.toFixed(1) + ' L/min' : ''}</td><td class="num">${Math.round(m.share[0] * 100)} / ${Math.round(m.share[1] * 100)}%</td><td class="num small">${hbCell(m)}</td><td class="small">signal → occupied</td></tr>`;
+  }
+  for (const e of extra) h += `<tr><td>${fmt(e.started_at)}</td><td class="muted">unexpected draw</td><td class="num">0</td><td>seen</td><td class="num">${e.litres} L</td><td>${e.kind}</td><td class="num">–</td><td class="num">–</td><td class="small">signal</td></tr>`;
+  for (const c of SCENARIO.creep) {
+    const s = ENG.events.find(e => e.type === 'continuous_flow_started' && e.since >= hm(c.from) - 60);
+    const trueL = (hm(c.to) - hm(c.from)) / 60 * c.lpm;
+    h += `<tr style="cursor:pointer" data-t="${hm(c.from) + 1800}"><td>${c.from}–${c.to}</td><td>${c.label}</td><td class="num">${trueL.toFixed(1)}</td><td>${s ? `<span class="chip"><span class="dot" style="background:var(--warning)"></span>creep from ${fmt(s.t)}</span>` : '<span class="muted">not seen</span>'}</td><td class="num">${s ? 'lone litres' : '–'}</td><td>${s ? s.flow_l_min.toFixed(2) + ' L/min' : '–'}</td><td class="num muted">–</td><td class="num muted">invisible</td><td class="small">a warning, not occupancy</td></tr>`;
+  }
+  const t = $('#drawTable'); t.innerHTML = h;
+  t.querySelectorAll('tr[data-t]').forEach(tr => tr.onclick = () => { setCursor(+tr.dataset.t + 60); document.getElementById('sim').scrollIntoView({ behavior: 'smooth' }); });
+}
+
+// ---------- model playground ----------
+const PG = { temps: [18, 38, 58, 52, 50], innerD: 460, domeH: 60, z0: 150, tCold: 10, tMin: 40, strat: true };
+function sliderRow(host, label, min, max, step, get, set, unit) {
+  const row = document.createElement('div'); row.className = 'slider';
+  const id = 'sl' + Math.random().toString(36).slice(2, 8);
+  row.innerHTML = `<label for="${id}">${label}</label><input id="${id}" type="range" min="${min}" max="${max}" step="${step}" value="${get()}"><output>${get()}${unit}</output>`;
+  const inp = row.querySelector('input'), out = row.querySelector('output');
+  inp.oninput = () => { set(+inp.value); out.textContent = inp.value + unit; drawProfile(); };
+  row.sync = () => { inp.value = get(); out.textContent = get() + unit; };
+  host.appendChild(row); return row;
+}
+const rows = [];
+function buildPlayground() {
+  const s = $('#sliders');
+  for (let i = 4; i >= 0; i--) rows.push(sliderRow(s, `P${i + 1} ${POS[i]}`, 5, 70, 0.5, () => PG.temps[i], v => PG.temps[i] = v, ' °C'));
+  const g = $('#geoSliders');
+  rows.push(sliderRow(g, 'inner diameter', 400, 520, 5, () => PG.innerD, v => PG.innerD = v, ' mm'));
+  rows.push(sliderRow(g, 'dome depth', 20, 120, 5, () => PG.domeH, v => PG.domeH = v, ' mm'));
+  rows.push(sliderRow(g, 'mains (T cold)', 4, 16, 0.5, () => PG.tCold, v => PG.tCold = v, ' °C'));
+  rows.push(sliderRow(g, 'usable ≥ (T min)', 35, 50, 1, () => PG.tMin, v => PG.tMin = v, ' °C'));
+  $('#strat').onchange = e => { PG.strat = e.target.checked; drawProfile(); };
+  const presets = [
+    ['Right tank, quiet night', [22, 41, 54, 48, 50]],
+    ['Just after a shower', [14, 33, 57, 59, 62]],
+    ['Fully heated', [44, 60, 61, 61, 56]],
+    ['Mid reheat', [52, 55, 50, 47, 46]],
+    ['Cold', [14, 15, 16, 16, 15]],
+  ];
+  presets.forEach(([n, t]) => { const b = document.createElement('button'); b.textContent = n; b.onclick = () => { PG.temps = t.slice(); rows.forEach(r => r.sync()); drawProfile(); }; $('#presets').appendChild(b); });
+}
+function drawProfile() {
+  const v = vessel({ innerD: PG.innerD, domeH: PG.domeH, z0: PG.z0 });
+  const a = assess(v, PG.temps, { strat: PG.strat, tCold: PG.tCold, tMin: PG.tMin, tMix: 40 });
+  const raw = assess(v, PG.temps, { strat: false, tCold: PG.tCold, tMin: PG.tMin, tMix: 40 });
+  const svg = $('#profile'); svg.innerHTML = '';
+  const W = svg.clientWidth || 500, H = 330, L = 46, R = 14, top = 10, bot = 30;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  const x = t => L + (W - L - R) * (t - 0) / 75, y = mm => top + (H - top - bot) * (1 - mm / 1500);
+  for (let t = 0; t <= 75; t += 10) { el('line', { x1: x(t), x2: x(t), y1: top, y2: H - bot, stroke: css('--grid') }, svg); const tt = el('text', { x: x(t), y: H - bot + 16, 'text-anchor': 'middle', 'font-size': 11 }, svg); tt.textContent = t + '°'; tt.style.fill = css('--muted'); }
+  for (let mm = 0; mm <= 1500; mm += 250) { const tt = el('text', { x: L - 6, y: y(mm) + 4, 'text-anchor': 'end', 'font-size': 11 }, svg); tt.textContent = mm; tt.style.fill = css('--muted'); }
+  // usable region shading
+  el('rect', { x: x(PG.tMin), y: top, width: x(75) - x(PG.tMin), height: H - top - bot, fill: isDark() ? 'rgba(230,103,103,.08)' : 'rgba(208,59,59,.06)' }, svg);
+  const tl = el('text', { x: x(PG.tMin) + 4, y: top + 12, 'font-size': 11 }, svg); tl.textContent = 'usable ≥ ' + PG.tMin + ' °C'; tl.style.fill = css('--ink-2');
+  // vessel water extent
+  el('line', { x1: L, x2: L, y1: y(v.z0), y2: y(v.zTop), stroke: css('--s1'), 'stroke-width': 4, opacity: .35 }, svg);
+  if (a) {
+    let d = ''; for (let z = v.z0; z <= v.zTop; z += 4) d += (z === v.z0 ? 'M' : 'L') + x(a.T(z)).toFixed(1) + ',' + y(z).toFixed(1);
+    el('path', { d, fill: 'none', stroke: css('--s1'), 'stroke-width': 2.5 }, svg);
+    if (PG.strat) { let d2 = ''; for (let z = v.z0; z <= v.zTop; z += 4) d2 += (z === v.z0 ? 'M' : 'L') + x(raw.T(z)).toFixed(1) + ',' + y(z).toFixed(1); el('path', { d: d2, fill: 'none', stroke: css('--muted'), 'stroke-width': 1.5, 'stroke-dasharray': '4 3' }, svg); }
+  }
+  HEIGHTS.forEach((h, i) => { el('circle', { cx: x(PG.temps[i]), cy: y(h), r: 5.5, fill: css('--surface'), stroke: css('--ink'), 'stroke-width': 2 }, svg); const t = el('text', { x: x(PG.temps[i]) + 9, y: y(h) + 4, 'font-size': 11 }, svg); t.textContent = 'P' + (i + 1); t.style.fill = css('--ink'); });
+  const out = $('#modelOut');
+  if (!a) { out.innerHTML = '<div class="muted">too few probes</div>'; return; }
+  const tile = (k, v2, s) => `<div class="tile"><div class="k">${k}</div><div class="v" style="font-size:22px">${v2}</div><div class="s">${s}</div></div>`;
+  out.innerHTML = tile('usable, 40 °C mix', Math.round(a.mix40) + ' L', `raw ${Math.round(raw.mix40)} · realistic ${Math.round(a.mix40 * 0.85)}–${Math.round(a.mix40 * 0.9)}`) +
+    tile('stored heat', a.kwh.toFixed(2) + ' kWh', `above ${PG.tCold} °C mains`) +
+    tile('water ≥ T min', Math.round(a.hot_l) + ' L', `mean ${a.mean.toFixed(1)} °C · vessel ${v.lCyl.toFixed(0)} mm straight`);
+}
+function drawParity() {
+  const v = vessel();
+  const ref = [
+    [[12, 30, 55, 58, 50], 8.13, 135.07, 200.29, 44.95, 186.9],
+    [[40, 52, 60, 61, 57], 10.70, 200.0, 306.71, 56.01, 300.0],
+    [[60, 60, 60, 60, 60], 11.63, 200.0, 333.33, 60.0, 333.3],
+    [[15, 40, 58, 50, 55], 8.92, 163.33, 240.13, 48.34, 226.5],
+  ];
+  let h = '<tr><th>Probes P1→P5 (°C)</th><th class="num">kWh</th><th class="num">hot L</th><th class="num">mix40</th><th class="num">mean</th><th class="num">raw mix40</th><th>match</th></tr>';
+  for (const [t, kwh, hot, mix, mean, rawMix] of ref) {
+    const a = assess(v, t), r = assess(v, t, { strat: false });
+    const ok = Math.abs(a.kwh - kwh) < 0.05 && Math.abs(a.hot_l - hot) < 0.05 && Math.abs(a.mix40 - mix) < 0.05 && Math.abs(a.mean - mean) < 0.05 && Math.abs(r.mix40 - rawMix) < 0.05;
+    h += `<tr><td>${t.join(' · ')}</td><td class="num">${a.kwh.toFixed(2)} <span class="muted">/ ${kwh}</span></td><td class="num">${a.hot_l.toFixed(2)} <span class="muted">/ ${hot}</span></td><td class="num">${a.mix40.toFixed(2)} <span class="muted">/ ${mix}</span></td><td class="num">${a.mean.toFixed(2)} <span class="muted">/ ${mean}</span></td><td class="num">${r.mix40.toFixed(1)} <span class="muted">/ ${rawMix}</span></td><td>${ok ? '<span class="pass">✓ match</span>' : '<span class="fail">✗ differs</span>'}</td></tr>`;
+  }
+  h += `<tr><td colspan="7" class="small muted">Geometry: inner Ø ${v.innerD} mm, domes ${v.domeH} mm (${v.domeL.toFixed(1)} L each), straight ${v.lCyl.toFixed(0)} mm at ${v.litresPerCm.toFixed(2)} L/cm, water from ${v.z0} to ${v.zTop.toFixed(0)} mm. <code>avail.py --geometry</code> prints: straight 1142 mm at 1.66 L/cm; water from 150 to 1412 mm.</td></tr>`;
+  $('#parity').innerHTML = h;
+}
+
+// ---------- wire payloads ----------
+function wire() {
+  const s = snapAt(cursor), k = probeTank;
+  const st = s.tanks[k];
+  const lastEnded = [...ENG.events].reverse().find(e => e.t <= cursor && e.type === 'draw_ended');
+  const lastDraw = s.lastDraw ? { draw_id: s.lastDraw.id, started_at: iso(s.lastDraw.started_at), ended_at: iso(s.lastDraw.ended_at), litres: s.lastDraw.litres, kind: s.lastDraw.kind } : null;
+  const tank = {
+    schema: 'net.swee.washhouse.tank.v1', device_id: TANKS[k], timestamp: iso(s.t), clock_synced: true,
+    state: st.state, heat_source: st.src,
+    usable_l40: r1(st.usable), usable_l40_low: r1(st.low), hot_l: r1(st.hot), stored_kwh: r2(st.kwh),
+    mean_c: r1(st.mean), top_c: r1(st.top), power_kw: r2(st.power), ua_w_per_k: k ? 15 : 4,
+    quality: 'ok', probes_used: POS, corrections: ['stratification'],
+  };
+  const sys = {
+    schema: 'net.swee.washhouse.system.v1', timestamp: iso(s.t), clock_synced: true,
+    state: s.draw ? 'drawing' : s.tanks.some(t => t.state === 'heating') ? 'heating' : 'idle',
+    usable_l40: r1(s.tanks[0].usable + s.tanks[1].usable), stored_kwh: r2(s.tanks[0].kwh + s.tanks[1].kwh),
+    low_hot_water: (s.tanks[0].low + s.tanks[1].low) < 60, // judged for the system, never one tank
+    baths_available: r1((s.tanks[0].low + s.tanks[1].low) / 100), shower_minutes: Math.round((s.tanks[0].low + s.tanks[1].low) / 10.5),
+    assumptions: { delivery_c: 40, cold_inlet_c: 10, usable_min_c: 40, mixing_factor: 0.85, litres_per_bath: 100, shower_hot_l_per_min: 6.3 },
+    boiler: { hw: s.hw ? 'ON' : 'OFF', ch: s.ch ? 'ON' : 'OFF' }, ambient_c: r1(s.amb),
+    tanks: Object.fromEntries(TANKS.map((id, j) => [id, { state: s.tanks[j].state, usable_l40: r1(s.tanks[j].usable) }])),
+    meter: { device_id: 'hot_water_meter', count: s.meterCount, continuous_flow: s.flowing ? { since: iso(s.flowing.since), flow_l_min: r2(s.flowing.lpm) } : null },
+    active_draw: s.draw ? { draw_id: s.draw.id, started_at: iso(s.draw.started_at), litres_so_far: s.draw.litres, masked_by_reheat: s.draw.masked } : null,
+    last_draw: lastDraw,
+  };
+  const ev = [...ENG.events].reverse().find(e => e.t <= cursor && (e.type.startsWith('draw_') || e.type.startsWith('continuous_flow')));
+  let evj = null;
+  if (ev) {
+    const head = { schema: 'net.swee.washhouse.event.v1', type: ev.type };
+    if (ev.type === 'draw_ended') evj = Object.assign(head, { draw_id: ev.draw, timestamp: iso(ev.t), started_at: iso(ev.started_at), ended_at: iso(ev.ended_at), duration_s: Math.round(ev.duration_s), litres: ev.litres, volume_kind: 'metered', flow_l_min: r1(ev.flow_l_min), kind: ev.kind, tanks: TANKS.map((id, j) => ({ device_id: id, share: r2(ev.share[j]) })), masked_by_reheat: ev.masked, heat_balance_l: r1(ev.heat_balance_l), heat_balance_reliable: ev.heat_balance_ok, inlet_drop_c: r1(ev.inlet_drop_c), outlet_peak_c: r1(ev.outlet_peak_c) });
+    else if (ev.type === 'draw_started') evj = Object.assign(head, { draw_id: ev.draw, timestamp: iso(ev.t), started_at: iso(ev.started_at), masked_by_reheat: ev.masked });
+    else if (ev.type === 'draw_updated') evj = Object.assign(head, { draw_id: ev.draw, timestamp: iso(ev.t), litres_so_far: ev.litres });
+    else evj = Object.assign(head, { timestamp: iso(ev.t), since: iso(ev.since), flow_l_min: r2(ev.flow_l_min) }, ev.ended_at != null ? { last_litre_at: iso(ev.ended_at) } : {});
+  }
+  $('#wireTankName').textContent = '· ' + TANKS[k] + ' (switch with the probe chart buttons)';
+  $('#wireTank').textContent = JSON.stringify(tank, null, 2);
+  $('#wireSystem').textContent = JSON.stringify(sys, null, 2);
+  $('#wireEvent').textContent = evj ? JSON.stringify(evj, null, 2) : '// no draw events yet at ' + fmt(cursor);
+}
+
+// ---------- playback ----------
+function setCursor(t) {
+  cursor = Math.max(0, Math.min(86399, t));
+  $('#scrub').value = cursor;
+  render();
+}
+function moveCursorLines() {
+  for (const c of [chartUsable.cur, chartProbes.cur]) if (c) { c.cur.setAttribute('x1', c.x(cursor)); c.cur.setAttribute('x2', c.x(cursor)); }
+}
+function render() { drawTanks(); drawCards(); drawLog(); wire(); moveCursorLines(); }
+function redrawAll() { lastLogKey = ''; drawArch(); drawTempLegend(); chartUsable(); chartProbes(); drawProfile(); render(); }
+let playing = false, lastTs = 0;
+$('#play').onclick = () => { playing = !playing; $('#play').textContent = playing ? '❚❚ Pause' : '▶ Play'; lastTs = 0; if (playing) requestAnimationFrame(tick); };
+function tick(ts) {
+  if (!playing) return;
+  if (lastTs) { const dtS = (ts - lastTs) / 1000; let t = cursor + dtS * +$('#speed').value; if (t >= 86399) t = 0; setCursor(t); }
+  lastTs = ts; requestAnimationFrame(tick);
+}
+$('#scrub').oninput = e => setCursor(+e.target.value);
+[['07:14', '07:15 shower'], ['07:45', '07:40 HW reheat'], ['08:29', '08:30 shower in reheat'], ['19:17', '19:15 bath, HW+CH'], ['19:55', '19:40 CH-only charging'], ['21:15', '20:25 dribbling tap'], ['23:06', '23:05 shower'], ['04:55', 'quiet night']].forEach(([t, n]) => {
+  const b = document.createElement('button'); b.textContent = n; b.onclick = () => setCursor(hm(t)); $('#jumps').appendChild(b);
+});
+document.addEventListener('keydown', e => { if (e.target.tagName === 'INPUT') return; if (e.key === ' ') { e.preventDefault(); $('#play').click(); } if (e.key === 'ArrowRight') setCursor(cursor + 300); if (e.key === 'ArrowLeft') setCursor(cursor - 300); });
+let rt; addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { chartUsable(); chartProbes(); drawProfile(); moveCursorLines(); }, 150); });
+
+buildPlayground(); drawParity(); drawTable(); redrawAll(); setCursor(cursor);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,292 @@
+# washhouse: plan
+
+## Context
+
+tanktemp publishes raw probe temperatures for the two cylinders: 5 DS18B20 probes per tank on `water/hot/tanktemp/{device_id}/state` (formerly `energy/hot_water/…`). boiler-sensor publishes the programmer's HW and CH switch states. Nothing turns these into what a person or statehouse cares about: how much hot water is available, whether the tanks are heating or cooling, and when someone is drawing water. tanktemp's own docs (WIRE.md, PLAN.md) say explicitly that draw detection and litres belong downstream. **washhouse is that downstream service.**
+
+What it does:
+- consumes MQTT;
+- estimates hot water available per tank and for the whole system;
+- classifies each tank's state;
+- detects and measures draws;
+- publishes its own retained state and draw/heat events;
+- serves an authenticated API, `/healthz`, and writes to Influx.
+
+statehouse then consumes washhouse to improve occupancy. A real draw is far better evidence than the HW timer, which counts as occupancy today. The cylinders also become devices in statehouse.
+
+Decided with the user:
+- **Stateless + Influx**: state is in memory, and history goes to Influx. No SQLite.
+- **Statehouse scope**: draws as activity, cylinders as devices, and fixing HW-timer occupancy.
+- **Common extractions**: all four (MQTT subscriber, wire decoders, httpapi auth/serve, remote-config fetcher).
+- **Host**: the home server; the real host stays in a gitignored `deploy/host`. Deploy is deferred.
+- **Repo**: `sweeney/washhouse`, public, so every committed file is checked for house details. The vendor's meter datasheet and photos are committed under `meter/` (owner's choice).
+
+Domain knowledge comes from the tanktemp session's briefing (2026-11-13, with its §7 correction). It is committed as `docs/HOT-WATER-SYSTEM.md` with its confidence labels (measured / owner said / inferred / guess), **edited, not verbatim**: the house's usual draw times and programme windows are removed (an occupancy pattern), local paths are dropped, and what changed since is marked _Update (Nov 2026)_. Facts that drive the design:
+- **Probes sit on fittings.**
+  - P1 (265 mm) is on the cold inlet. It is the big-draw detector.
+  - P5 (1215 mm) is on the hot outlet. It is heat-sunk, so it under-reads at rest; its peak during a draw is the true top temperature.
+  - **Right P4** is on the secondary return. It reads 5–9 °C low, and the left P4 is a normal probe.
+- **Left and right tanks behave differently.**
+  - Right tank loss was about 15–19 W/K (a gravity secondary loop), against 3–4 W/K for the left. **It isn't constant**: from 19 Nov (after an engineer's visit) it fell to about 5 W/K, then came back during two large draws on 21 Nov. The cause is open with the owner. So UA is fitted online per tank and never a constant.
+  - The right tank used to heat on CH-only calls (about 3 kW). Not seen since 19 Nov: every CH-only spell since has put about 0 kW in. So the heat source is inferred from observed gain, never assumed from CH.
+- **HW/CH are only the programmer.** They tell us nothing about the stats or valves.
+- **Draws:**
+  - Small draws are nearly invisible to a heat balance (now superseded: volumes come from the meter).
+  - Draws are masked during a reheat, because the cold inlet sits inside the coil zone. This now affects only the heat-balance cross-check.
+  - A recurring small nightly draw was in the briefing; two metered nights showed none.
+- **Fitted values (from hwplan):**
+  - reheat: HW 12.1 kW, HW+CH 5.3 kW, CH-only 2.5 kW (before 19 Nov; about 0 since);
+  - full ≈ 24.6 kWh;
+  - usable ≈ 45·(E − 8.4) L.
+  - The linear E-loss fit has a negative intercept, so **use per-tank UA·(T_mean − T_room)** instead, with the new `climate_groundfloor_boiler-room` sensor.
+
+## Hot-water meter
+
+The meter design lives in **tanktemp's repo**, moved there 20 Nov 2026:
+`docs/WATER-METER-PLAN.md`, `docs/WATER-METER-WALKTHROUGH.md` and
+`docs/water-meter-explainer.html`. The plan's §6–7 are washhouse's
+requirements. They come back into this repo when washhouse is bootstrapped.
+
+**The meter is live** (tanktemp PRs #9, #11, #12, deployed 21 Nov 2026; `water/hot/tanktemp/meter`, K = 1, one pulse per litre on the merged hot outlet). Two days of recordings with it changed this plan; see **Lessons from tanktemp and the live meter** below.
+
+**Split agreed with the tanktemp session (20 Nov 2026).** tanktemp owns raw facts, and washhouse owns interpretation.
+
+- **tanktemp owns:**
+  - the meter docs as files;
+  - all meter code: `internal/meter` is done on branch `meter-core`;
+  - `gpioedge`, payload, goldens, config, cmd, health, `pulsewatch`, `setup-pi`, and the unit. The owner chose to keep the meter inside tanktemp: `DeviceAllow=/dev/gpiochip0` and `SupplementaryGroups=gpio`, replacing `PrivateDevices`;
+  - `WIRE.md`, which is normative for `water/hot/tanktemp/meter`;
+  - the rig and its fixtures;
+  - the `devices_home` draft.
+- **washhouse owns:**
+  - the consumer requirements: §6–7 of the meter plan;
+  - reviewing tanktemp's `WIRE.md` diff before goldens, and each meter PR;
+  - all interpretation: flow and the closed-time duty, draws, kind, circulation, noise attribution, calibration, `meter_suspect`, `continuous_flow`, and the `water/hot/*` outputs;
+  - the statehouse washhouse adapter;
+  - creating `common/wire` with the `tanktemp` Meter decoder, tested against copies of tanktemp's goldens, which tanktemp reviews.
+- **Process:**
+  - neither session edits the other's repo;
+  - washhouse changes to the shared docs go to tanktemp as patches, with one writer per file;
+  - each session asks the owner for its own commit dates;
+  - owner decisions go to the owner.
+
+## Lessons from tanktemp and the live meter (21–22 Nov 2026)
+
+These come from reviewing and smoke-testing tanktemp's meter work, and from about 40 hours of live recordings under `~/washhouse-recordings/`: `live-*.log` for hot water, and `full-*.log` for the whole broker over 21–22 Nov. The recordings include two showers, two baths (one during a reheat), dozens of tap draws, an evening of creep, two quiet nights, and four reheats.
+
+1. **The meter is the source of truth for draws.** The probe heat balance was measured against it:
+   - **Large draw from a layered tank:** within 8% (46 L estimated against 50 L metered).
+   - **Small draws (1–6 L):** 3–5× too high, because P1, on the inlet fitting, dips for any draw.
+   - **A draw soon after another:** almost invisible. One 15 L draw showed as 4 L; the cold layer sat in a gap of about 57 L between P2 (400 mm) and P3 (825 mm).
+   - **During a reheat:** masked. Yet a 72 L bath during a reheat was metered exactly.
+   - **At night:** three draw-like dips (inlet falls, outlet rises) came with zero litres.
+
+   So: draws are segmented from metered litres. The probes only **attribute** them (which tank supplied it, the outlet temperature, energy used and energy left) and give a heat-balance **cross-check**, marked unreliable during a reheat and below 20 L. Volume is whole metered litres, good to ±1 L (partial litres at each end). The `lower_bound` volume type goes.
+2. **Flow and kind come from the meter.** Measured hot flows:
+   - taps 3.5–5 L/min;
+   - showers 4–6.4 L/min, at 34–51 L;
+   - baths 12–31 L/min, at 72–87 L.
+
+   Kind follows from flow and size: a bath runs at 10 L/min or more; a shower is 20 L or more over 3 min or longer; anything else is a tap. Litres less than 36 s apart are one draw, and a draw ends after a minute with no litre.
+3. **Creep is a separate signal.** `last_closed_ms` tells real flow from creep: real flow holds the reed closed for 1–4 s, creep for minutes. On 21 Nov, lone litres came about every 14 min, closed for 2–23 min each, at about 0.07 L/min (about 100 L/day if left). Two such litres within 45 min raise `continuous_flow_started` / `_ended`. That is never a draw and never occupancy. Cause unknown: a tap not fully closed, or circulation through the meter.
+4. **Two tanks need a system view.**
+   - The right tank supplies about 75% of every draw: 2.26 of 2.95 kWh in a 50 L shower. Its P1 reacts within 4 s against the left's 24 s, and its P2 falls 20 °C or more.
+   - It can also lose heat much faster: on the night of 21→22 Nov about 230–370 W, back to its old 15–19 W/K after two days at about 5 W/K. It fell below 45 °C while the left was at 66 °C.
+   - So `low_hot_water` and availability are judged for the **system**, never one tank. Attribution is computed in litres: each tank's heat lost, divided by what a litre from its own outlet carries.
+5. **Confirmed from the briefing:**
+   - P5 at rest under-reads by 3–8 °C, and its peak during a draw is the true top: about 65 °C on the left, 62 °C on the right.
+   - P1 shows a draw within 1–43 s, depending on the sweep phase.
+   - Right tank loss is high.
+   - Two metered nights showed **no nightly draw**.
+6. **Ingest rules for tanktemp's meter wire** (tanktemp's WIRE.md is normative):
+   - de-duplicate on `(counting_since, seq)`;
+   - each restart starts a new counting run, and litres are summed across runs;
+   - a jump in `count` is skipped messages, not lost litres;
+   - the last `sweep` at shutdown matches no tank states;
+   - a sweep's `timestamp` may move forward to the latest litre it includes;
+   - de-dup by timestamp alone is wrong for the meter.
+
+   `meter_audit.py` in `tools/` already does all of this and is the reference. Separately, for boiler-sensor: after a reconnect blip (one on 22 Nov, 4 s, process uptime unchanged), the retained `energy/boiler/sensor/system` can be a `RECONNECTED` event, not a heartbeat. So keep the last known HW/CH from heartbeats and events, and don't assume the retained message is a heartbeat. (`tools/smoke.py` has the same weakness; fix it.)
+7. **statehouse's occupancy issue is confirmed live.**
+   - The morning programmer timers alone switched the house to "day" and "active".
+   - AV gear drawing power reads as activity all day.
+   - A real tap-rate draw showed presence while the owner was out.
+
+   That moves statehouse PR 3 (timers aren't people) up the list, and drops the draw confidence gate: a metered draw is real water.
+8. **How tanktemp was built, adopted for washhouse:**
+   - hardware and outside services behind small interfaces, with a shared contract test run against fakes, so the core is testable on a laptop;
+   - everything declared in config, with strict validation (for example, integer-only pins: yaml.v3 silently truncates 4.5 to 4);
+   - tests that fail first, with deliberate mutants that must fail them;
+   - concurrency tests run `-race -count=200`, which caught a flaky sweep-ordering test that hid a real ordering bug;
+   - goldens that pin key order;
+   - scripts that enforce rollout order: setup checked a new config with the installed build, since an older build rejects an unknown key.
+9. **Fixture privacy:** draw times are an occupancy pattern. tanktemp shifted its first-night fixture to a fake epoch, and washhouse fixtures do the same.
+
+## Topic and coexistence decisions
+
+- **One hot-water tree, `water/hot/`, with one owner per subtree** (decided 20 Nov 2026).
+  - tanktemp's prefix moves from `energy/hot_water` to `water/hot/tanktemp`: probes at `…/{device_id}/state`, `…/status`, and the meter at `…/meter`.
+    - This is a config-only, clean-cut migration owned by the tanktemp session: a script with `--check`, then clearing the old retained topics.
+    - statehouse's `base_topic` moves with it, as a `statehouse_behaviour` remote-config write.
+    - live.html, live.sh and record.sh are updated.
+  - statehouse re-reads adapter subscriptions only on restart; SIGHUP isn't enough. That applies to the future `adapters.washhouse` too: write the config, then restart statehouse straight away.
+  - The broker ACL must let statehouse's MQTT user read `water/hot/#`. That covers washhouse's topics too. Owner to check.
+  - Never publish inside `water/hot/tanktemp/`. statehouse's tanktemp adapter subscribes to `+/state` and `status` there, and would parse washhouse's messages.
+- **washhouse publishes** (base configurable; `test/water/hot` for testing):
+  - `water/hot/state`: retained, QoS 0, published on every input sweep and on a heartbeat.
+  - `water/hot/tank/{device_id}`: retained, QoS 0.
+  - `water/hot/events`: not retained, QoS 1. Carries `draw_started` (at the first metered litre), `draw_updated`, `draw_ended`, `continuous_flow_started`, `continuous_flow_ended`, `heating_started`, `heating_ended`, `tank_state_changed`.
+  - `water/hot/status`: retained, QoS 1. Carries STARTUP, HEARTBEAT and SHUTDOWN, with LWT `{"online":false,"event":"LWT"}`. This is tanktemp's shape.
+- **Envelope conventions** follow tanktemp's WIRE.md:
+  - `timestamp` is UTC RFC 3339, taken from the **source sweep**, never the wall clock;
+  - an unknown value is `null`, never 0;
+  - key order is fixed and pinned by goldens;
+  - a `schema` field such as `net.swee.washhouse.tank.v1`.
+- **Normative contract**: `docs/WIRE.md`. It is reviewed with the statehouse and tanktemp sessions before statehouse's adapter is built.
+
+Draft tank state (field list; finalised in WIRE.md):
+- `device_id`, `timestamp`, `state`, `heat_source`, `stored_kwh`, `mean_c`, `top_c`, `power_kw`, `ua_w_per_k`, `probes_ok`, `inputs`, `schema`, `model`;
+- `state` is `heating|drawing|cooling|unknown`, and `heat_source` is `hw|ch|null`;
+- `hot_l` is the litres at ≥40 °C;
+- `usable_l40` is the litres of 40 °C mix (plug-flow upper bound), with `usable_l40_low` at ×0.85;
+- `power_kw` is the smoothed dE/dt;
+- `inputs` records the freshness of each source.
+
+The system state carries:
+- the totals, a summary per tank, `boiler{hw,ch}`, and `ambient_c`;
+- `active_draw` (or null), so a consumer that reconnects mid-draw still sees the draw;
+- a system-level `low_hot_water`;
+- `meter{count, counting_since, continuous_flow}`.
+
+`draw_ended` carries:
+- `draw_id`, `started_at`, `ended_at`, `duration_s`;
+- `litres` with `volume_kind: "metered"`, `flow_l_min` (the median gap between litres), and `kind` (`tap|shower|bath`);
+- `tanks[{device_id, share}]`, typically right ≈ 0.75;
+- `masked_by_reheat`, plus `heat_balance_l` and `heat_balance_reliable` as the cross-check;
+- `inlet_drop_c`, `outlet_peak_c`, and the meter `seq` range it covers.
+
+There is no `confidence`: every draw is metered water.
+
+## Architecture (Go, statehouse-shaped, with tanktemp's runtime)
+
+The pure core (no OS, network or MQTT, enforced by a `boundaries_test.go` as in tanktemp) is **driven by event time** from message timestamps, with an injected clock.
+
+| Package | Role |
+|---|---|
+| `internal/vessel` | Port of `avail.py`'s geometry: spherical-cap domes, slices, and the straight length solved to hold the capacity. Every constant is config. |
+| `internal/profile` | Linear interpolation between probe heights, flat beyond the end probes. The `strat` running max from the bottom up is the default. Probe **roles** (inlet, outlet, return, bulk) decide which probes are excluded or treated as heat-sunk. |
+| `internal/estimate` | E above T_cold, `hot_l`, mix40, mean, top. The top temperature uses the last P5 draw peak, decayed, rather than P5's resting value. |
+| `internal/thermal` | Per-tank power dE/dt from the timestamps; online UA fit against ambient over draw-free stretches; classifier for heating, cooling, drawing and unknown, with heat source inferred from programmer state plus observed gain (e.g. right tank on CH). |
+| `internal/meter` | The meter consumer, built on `common/wire/tanktemp`'s Meter decoder. Stitches counting runs and de-duplicates on `(counting_since, seq)`. Segments litres into draws: litres under 36 s apart are one draw, and a draw ends after 60 s with no litre. Computes flow (median interval) and kind. Detects creep: lone litres with `last_closed_ms` ≥ 10 s, two within 45 min, give `continuous_flow`. Tracks meter health (noise, short, glitches, lost, freshness). |
+| `internal/draw` | **Attribution, not detection.** For each metered draw: each tank's share, in litres from its heat lost over its own outlet's peak temperature; the outlet temperature (P5's peak); and energy used. A heat-balance volume, kept as a cross-check and flagged unreliable when masked by a reheat, under 20 L, or when the cold layer sits between P2 and P3. |
+| `internal/engine` | Wires ingest, estimate, classify and draw. Holds the in-memory state and a ring buffer of recent draws (since boot). |
+| `internal/ingest` | Applies the same freshness rules as statehouse's tanktemp adapter: drop a retained message more than 90 s old or with an unsynced clock, and de-duplicate by timestamp. The meter is the exception: it is de-duplicated on `(counting_since, seq)`, and a retained replay is not news. Also handles boiler events/system: HW/CH come from heartbeats and events, and a retained `RECONNECTED` is not a heartbeat. Ambient comes from `zigbee2mqtt/climate_groundfloor_boiler-room`. |
+| `internal/publish`, `internal/influx`, `internal/httpapi` | Outputs. The Influx writer follows the pattern in `statehouse/internal/influx/writer.go`. |
+| `cmd/washhouse` | `common/lifecycle` for status and heartbeats, `common/health`, and `mqttpub` for both publishing and subscribing. |
+| `cmd/washreplay` | Replays mosquitto_sub `%I %t %p` recordings through the engine and prints events and states. It is the main tuning and test tool. |
+
+**Config**
+- The local YAML holds connection settings only: site, mqtt, identity, remote_config, http, influx. Boot refuses anything else, as statehouse does.
+- Behaviour comes from config.swee.net:
+  - **`devices_home`**: the cylinders and probes. Add a `cylinder` block (capacity_l 200, height_mm 1498, diameter_mm 550); `common/devices` v0.2.0 already decodes it.
+  - **A new `washhouse` namespace**: inner diameter, dome depth, z0, T_cold, T_min, T_mix, per-tank probe roles by position, draw thresholds, prior UA per tank, reheat priors, and topics.
+  - The user makes the admin writes; I supply the JSON.
+
+**Probe heights** come from tanktemp's own payload (`height_mm`), with the config as fallback.
+
+**API** (stdlib mux; JWT through the extracted common auth; spec in `internal/httpapi/openapi.yaml` with a spec test):
+- `GET /healthz`: public, `common/health` shape. Adds `mqtt_connected`, the age of each input, `remote_config`, and `influx`.
+- `GET /openapi.json`: public.
+- `GET /api/v1/state`, `GET /api/v1/tanks/{id}`
+- `GET /api/v1/draws`: recent draws since boot, from memory. Longer history is in Influx and greenhouse.
+- `GET /api/v1/model`: geometry, parameters, and the live UA fit.
+
+## Common extractions (in `sweeney/common`; each tried through a gitignored repo-local `go.work`, then tagged and pinned)
+
+1. **`mqttpub` v0.2.0: `Subscribe(filter string, qos byte, h func(Received))`**, with `Received{Topic string; Payload []byte; Retained bool}`. It resubscribes on reconnect and is tested with `mqtttest` against a real broker. This replaces statehouse-style hand-written paho clients.
+2. **A new `wire` module**: `wire/tanktemp` (state and status), `wire/boiler` (events and system), and `wire/washhouse` (washhouse's own contract), each with types, decoders and the publisher's goldens. statehouse's adapters and washhouse share them.
+3. **`web/apiauth` and `web/serve`**:
+   - `apiauth` provides a RequireAuth middleware for user or service tokens that returns 503 + Retry-After on keys-unavailable. It takes a small `Verifier` interface, so common/web takes **no** dependency on identity.
+   - `serve` provides the Server with timeouts and graceful shutdown, `WriteJSON`/`WriteError`, and CORS.
+4. **`remoteconfig.Fetcher`**: keep-last-good, a `Cold()` boot gate, a SIGHUP reload hook, and a `/healthz` block.
+
+Moving statehouse, greenhouse and countinghouse onto 3 and 4 is a follow-up, not in scope; I'll list it in PLAN.md. Later candidates: the shared status/LWT payloads, and tanktemp's `deploy/lib.sh` (washhouse would be its 3rd copy, which is PLAN's trigger).
+
+## Statehouse changes (separate PRs in the statehouse repo, coordinated with a statehouse session)
+
+1. **A `washhouse` adapter**, using a narrow Engine interface like the intercom adapter's.
+   - `draw_started` → `IngestSignal{ID:"washhouse:draw:<id>", Type:"hot_water_draw", Location:"house", ExpiresAt: now+30m safety}` plus `RecordActivity`. There's no confidence gate: a draw exists only once a litre is metered.
+   - `draw_ended` → `ClearSignal` plus `UpdateActivity` with EndedAt, the litres and the kind.
+   - `continuous_flow_*` → a warning on the hot-water device. Never an occupancy signal.
+   - It uses `wire/washhouse`, and `DeclareAvailabilitySource` through the status topic (from PR #94).
+2. **Cylinders as devices.**
+   - Set `telemetry: true`, scheme `washhouse`, primary = the device_id.
+   - Add a class `hot_water_cylinder` to `statehouse_classes` (passive, staleness 90 s).
+   - Add `model.Reading` fields `HotWaterL40 *float64` and `StoredKWh *float64`, and update `HasAnyMeasurement`.
+   - Write them to Influx so greenhouse can chart tank level.
+3. **HW-timer occupancy fix (now first).** Give `hot_water` and `central_heating` a non-occupancy class, such as a new passive `schedule_switch` (or a flag), so the timers no longer count. This was confirmed live: the morning timers alone flipped the house to "day" and "active". AV standby power reading as activity is a separate statehouse issue, worth raising with that session.
+4. **Ordering hazard.** `statehouse_behaviour` is decoded strictly, so an unknown `adapters.washhouse` key makes statehouse refuse the whole document. Deploy statehouse first, then edit the namespace.
+
+## Phases
+
+0. **Bootstrap.**
+   - `git init`, create the GitHub repo (confirm first).
+   - Add `docs/HOT-WATER-SYSTEM.md` (the briefing), `PLAN.md`, `README.md`, Makefile, CI (`statehouse/.github/workflows/ci.yml` pattern), and `CLAUDE.md`. CLAUDE.md carries the conventions from statehouse and tanktemp:
+     - gofmt; TDD with failing tests first, and mutants that must fail them;
+     - `-race -count=200` on anything concurrent;
+     - an injected clock;
+     - no PII, and fixtures shifted to a fake epoch;
+     - outside systems behind interfaces with contract tests;
+     - config-declared, strictly validated settings;
+     - OpenAPI and README in the same change;
+     - pin common tags;
+     - scripts enforce rollout order.
+   - Move `tools/` (the recorder, smoke test and meter audit, with their tests) and `docs/washhouse-explainer.html` into the repo, checking both for house details first. The explainer's simulated day is shifted by 85 min so it shows no real routine; the smoke fixtures are tanktemp's published WIRE.md examples plus one resting snapshot.
+   - A Go module with a placeholder `cmd/washhouse` and `boundaries_test.go`, so CI has something to build from the start.
+   - **Done 22 Nov 2026** (first commit dated at commit time, as the owner asked).
+   - **Ask for commit dates before committing.**
+1. **Fixtures, meter decoder, pure core.**
+   - `scripts/make-fixture.sh`:
+     - keep only `water/hot/tanktemp/#` (and `energy/hot_water/#` in recordings made before the move), `energy/boiler/sensor/events`, the ch/hw/timestamp fields of the system heartbeat, and the boiler-room climate;
+     - strip the network block;
+     - de-duplicate retained replays;
+     - **shift every timestamp by a whole number of seconds to a fake epoch** (as tanktemp's first-night fixture did), keeping every interval;
+     - fail if `192.168.` or `ssid` remains, or if any real date survives.
+     - It has a `--check` mode and its own test.
+   - **Metered slices from `~/washhouse-recordings/` (21–22 Nov)** replace the probe-only slices:
+     - a 50 L shower from a layered tank;
+     - the 15 L draw straight after it (the thermocline blind spot);
+     - the 72 L bath during a reheat and the 87 L bath;
+     - tap draws of 1–6 L;
+     - the evening creep;
+     - a quiet night;
+     - the morning reheats;
+     - the right tank's loss changing (about 5 W/K on 20 Nov, back to 15–19 W/K on 21→22 Nov).
+
+     Keep one probe-only slice from tanktemp's `watch48b` recording of a CH-only right reheat (8 Nov, 20 min), and one CH-only spell from 20–22 Nov that heats neither tank.
+   - The meter consumer in `common/wire/tanktemp` (decoder), tested against copies of tanktemp's goldens and reviewed by the tanktemp session. Then `internal/meter`, whose golden draws must match `tools/meter_audit.py`'s output on the same fixtures.
+   - Port vessel, profile and estimate, with **parity tests against `avail.py --geometry` and its per-sweep output.**
+2. **Attribution, thermal, cross-check.** Assertions from the metered fixtures:
+   - every draw's litres equal the meter's, and its kind is right (shower, bath, tap);
+   - the right tank's share is about 0.75;
+   - the heat balance is within 10% on the layered shower, and flagged unreliable on the reheat bath, the small draws and the draw straight after the shower;
+   - creep raises `continuous_flow` and makes no draw;
+   - no draws on the quiet night;
+   - the right P4 gap is corrected by strat;
+   - CH-only heating is attributed to the right tank when it happens (8 Nov), and no heating is claimed when it doesn't (20–22 Nov);
+   - the online UA fit follows the right tank's loss from about 5 to 15–19 W/K;
+   - system `low_hot_water` stays false overnight while the right tank alone is below 45 °C.
+3. **Wire contract.** `docs/WIRE.md`, the `wire/washhouse` goldens, and a review with the statehouse and tanktemp sessions.
+4. **Common extractions 1–4.**
+5. **Service shell.** Ingest, publish, lifecycle, health, API, Influx, config, plus the remote-config namespace JSON for the user to write.
+6. **Deploy.** Use the swee:deploy-service skill: idempotent `deploy.sh` and `bootstrap.sh` with `--check` and `--yes`, tested before use. Host: the home server (named only in gitignored `deploy/host`); settle commit dates before deploying.
+7. **Statehouse PRs** (1→4 above).
+8. **Later:** time-to-empty and time-to-full forecasts, a daily usage summary, a hwplan-style programme advisor, and watching the before/after lagging protocol through the UA fit.
+
+## Verification
+
+- `make test` (`-race`), `go vet`, staticcheck, spectral on the OpenAPI, and gofmt in CI.
+- `washreplay` over each fixture prints the expected events, and golden files pin them.
+- Run against a local Mosquitto (`mqtttest`) with recorded messages replayed onto `test/water/hot/tanktemp/...`. Check the retained `test/water/hot/*` outputs and `/healthz`.
+- Live shadow: run locally against the real broker, publishing to the `test/` prefix, for a day. Every published draw must match `tools/meter_audit.py` on the same day's recording, litre for litre. Compare `usable_l40` with `avail.py --live`, and check `tools/smoke.sh` passes throughout.
+- statehouse: adapter unit tests with a fake engine. After deploy, `/state/activity` shows `hot_water_draw` signals and the cylinder devices carry litres.

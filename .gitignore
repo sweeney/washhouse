@@ -1,0 +1,10 @@
+/bin/
+/go.work
+/go.work.sum
+/deploy/host
+/deploy/config.local.yaml
+/*.local.json
+/scratchpad/
+__pycache__/
+*.pyc
+.DS_Store
