@@ -26,9 +26,10 @@ expect() { local what="$1"; shift; if "$@"; then ok "$what"; else bad "$what"; f
 printf 'listener %s 127.0.0.1\nallow_anonymous true\n' "$PORT" >"$T/mosq.conf"
 "$MOSQ" -c "$T/mosq.conf" >"$T/mosq.log" 2>&1 &
 BPID=$!
-for _ in $(seq 50); do mosquitto_pub -p "$PORT" -t ping -m x 2>/dev/null && break; sleep 0.1; done
+for _ in $(seq 50); do mosquitto_pub -h 127.0.0.1 -p "$PORT" -t ping -m x 2>/dev/null && break; sleep 0.1; done
+mosquitto_pub -h 127.0.0.1 -p "$PORT" -t ping -m x 2>/dev/null || { echo "test broker never came up:" >&2; cat "$T/mosq.log" >&2; exit 1; }
 
-pub() { mosquitto_pub -p "$PORT" "$@"; }
+pub() { mosquitto_pub -h 127.0.0.1 -p "$PORT" "$@"; }
 
 # no broker anywhere: refuses, names the fixes
 out=$(env -u WASHHOUSE_BROKER "$REC" --dir "$T/nobroker" start 2>&1) && bad "start with no broker refuses" || ok "start with no broker refuses"

@@ -20,7 +20,8 @@ expect_rc() { local want="$1" what="$2"; shift 2; local rc=0; "$@" >"$T/out" 2>&
 
 printf 'listener %s 127.0.0.1\nallow_anonymous true\n' "$PORT" >"$T/mosq.conf"
 "$MOSQ" -c "$T/mosq.conf" >"$T/mosq.log" 2>&1 & BPID=$!
-for _ in $(seq 50); do mosquitto_pub -p "$PORT" -t ping -m x 2>/dev/null && break; sleep 0.1; done
+for _ in $(seq 50); do mosquitto_pub -h 127.0.0.1 -p "$PORT" -t ping -m x 2>/dev/null && break; sleep 0.1; done
+mosquitto_pub -h 127.0.0.1 -p "$PORT" -t ping -m x 2>/dev/null || { echo "test broker never came up:" >&2; cat "$T/mosq.log" >&2; exit 1; }
 B="127.0.0.1:$PORT"
 
 expect_rc 3 "no broker refuses" "$SMOKE"
@@ -40,7 +41,7 @@ for line in open(src).read().splitlines() + ["water/hot/tanktemp/meter " + open(
         d = json.loads(p); d["meters"] = ["hot_water_meter"]; p = json.dumps(d, separators=(",", ":"))
     print(t, p)
 PY
-while read -r t p; do mosquitto_pub -p "$PORT" -r -t "$t" -m "$p"; done <"$T/fresh"
+while read -r t p; do mosquitto_pub -h 127.0.0.1 -p "$PORT" -r -t "$t" -m "$p"; done <"$T/fresh"
 
 expect_rc 0 "--check fetches nothing and passes" "$SMOKE" --check --broker "$B"
 expect_rc 0 "fresh snapshot with a meter passes" "$SMOKE" --broker "$B" --expect-meter
@@ -56,7 +57,7 @@ expect_rc 1 "/healthz meter failed is a FAIL" "$SMOKE" --broker "$B" --healthz "
 ls "$T/saved"/smoke-*.retained >/dev/null 2>&1 && ls "$T/saved"/smoke-*.healthz.json >/dev/null 2>&1 \
     && { pass=$((pass+1)); echo "ok   --save keeps the snapshot"; } || { fail=$((fail+1)); echo "FAIL --save"; }
 
-mosquitto_pub -p "$PORT" -r -t water/hot/tanktemp/meter -m "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["lost"]=2; print(json.dumps(d))' "$HERE/testdata/smoke/meter-pulse.golden")"
+mosquitto_pub -h 127.0.0.1 -p "$PORT" -r -t water/hot/tanktemp/meter -m "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["lost"]=2; print(json.dumps(d))' "$HERE/testdata/smoke/meter-pulse.golden")"
 expect_rc 1 "a meter that lost edges fails" "$SMOKE" --broker "$B" --expect-meter
 
 echo "smoke_sh_test: $pass passed, $fail failed"
