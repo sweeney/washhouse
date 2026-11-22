@@ -25,6 +25,7 @@ const module = "github.com/sweeney/washhouse"
 // exist fails the test, so the list can't silently go stale.
 var core = []string{
 	"internal/draw",
+	"internal/engine",
 	"internal/estimate",
 	"internal/meter",
 	"internal/profile",
@@ -42,6 +43,7 @@ var forbiddenDirect = []string{
 
 var forbiddenDeps = []string{
 	module + "/internal/ingest",
+	module + "/internal/replay", // reads files; the core takes decoded messages
 	module + "/internal/publish",
 	module + "/internal/influx",
 	module + "/internal/httpapi",

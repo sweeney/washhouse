@@ -277,10 +277,12 @@ Moving statehouse, greenhouse and countinghouse onto 3 and 4 is a follow-up, not
    - the heat balance is within 10% on the layered shower, and flagged unreliable on the reheat bath, the small draws and the draw straight after the shower;
    - creep raises `continuous_flow` and makes no draw;
    - no draws on the quiet night;
-   - the right P4 gap is corrected by strat;
+   - the right P4 gap is corrected by strat: measured, strat removes P4's dip below P3 but leaves the profile up to 2.4 °C under the P3–P5 line (P5 at rest still reads above P3); the energy effect is ≤ 0.06 kWh;
    - CH-only heating is attributed to the right tank when it happens (8 Nov), and no heating is claimed when it doesn't (20–22 Nov);
    - the online UA fit follows the right tank's loss from about 5 W/K (loop stopped) to its loop-running value. **Measured against the boiler room, that is about 30–39 W/K, not 15–19:** the loop sheds its heat into the house's pipework, not the room. Hour by hour the loss fits 18 W/K × (T − 14.4 °C), the old slope with a reference about 10 °C below the boiler room; the 15–19 was measured against the colder hall. The fit stays against the room for now; fitting the reference temperature too (loss = UA·(T − T_ref)) is a later option;
-   - system `low_hot_water` stays false overnight while the right tank alone is below 45 °C.
+   - system `low_hot_water` stays false overnight while the right tank alone is below 45 °C (measured: right top 35.8 °C and usable 0 L by morning, system minimum 198 L from the left tank).
+
+   Built in phase 2: `internal/tank` (sweeps, with bulk-probe energy for comparisons across draws), `internal/thermal`, `internal/draw`, `internal/engine` and `cmd/washreplay`. Decisions from the data: a tank's power is unknown while its window holds a draw or the 12 min after it (the bulk probes keep falling as the drawn cold water reaches them); `low_hot_water` uses 60 L of total usable_l40_low, **provisional, for the owner to confirm**. **For phase 3 (WIRE.md):** `draw_ended` waits for the heat balance (about 8 min after the last litre) while `active_draw` clears about a minute after it, so a consumer sees neither in between; consider emitting `draw_ended` at the meter's end, with shares (known at +60 s), and the heat balance in a later event.
 3. **Wire contract.** `docs/WIRE.md`, the `wire/washhouse` goldens, and a review with the statehouse and tanktemp sessions.
 4. **Common extractions 1–4.**
 5. **Service shell.** Ingest, publish, lifecycle, health, API, Influx, config, plus the remote-config namespace JSON for the user to write.

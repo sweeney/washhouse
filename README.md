@@ -23,6 +23,8 @@ service itself (`cmd/washhouse`) only reports its version so far.
 | `docs/washhouse-explainer.html` | Open in a browser. A simulated day (fictional times) through the planned engine. |
 | `tools/` | Live-data tools used before washhouse exists: a recorder, a smoke test for tanktemp and boiler-sensor, and a meter audit. See [`tools/README.md`](tools/README.md). |
 | `meter/` | The hot-water meter's datasheet and photos. |
+| `internal/` | The pure core: decoders, the meter consumer, the cylinder model, thermal tracking, draw attribution, and `engine`, which wires them into the system's state and events. |
+| `cmd/washreplay` | Replays recordings through the engine and prints its events and states. |
 | `cmd/washhouse` | The service, a placeholder until phase 5. |
 
 ## Development
@@ -30,6 +32,14 @@ service itself (`cmd/washhouse`) only reports its version so far.
 ```
 make check     # vet, gofmt, staticcheck, go test -race, and the tools tests
 make build     # bin/washhouse, stamped with the commit
+```
+
+Replay a recording (gzipped or plain) through the engine; the config holds
+every threshold and the cylinders' geometry:
+
+```
+go run ./cmd/washreplay -config testdata/washreplay-config.example.json \
+    [-state-every 10m] [-json] testdata/fixtures/shower-layered.log.gz
 ```
 
 The tools tests need `python3`, `mosquitto`, `mosquitto_sub`/`mosquitto_pub`

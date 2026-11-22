@@ -1,0 +1,178 @@
+package engine
+
+import (
+	"time"
+
+	"github.com/sweeney/washhouse/internal/draw"
+	"github.com/sweeney/washhouse/internal/meter"
+	"github.com/sweeney/washhouse/internal/thermal"
+)
+
+// State is the system as of the latest input. Unknown is nil, never 0.
+type State struct {
+	// At is the engine's event time: the latest time any input carried.
+	// Zero only before the first input.
+	At    time.Time
+	Tanks []TankState // in Config.Tanks order
+	// Totals are summed over every tank; unknown unless every tank's
+	// estimate is known.
+	StoredKWh    *float64
+	UsableL40    *float64
+	UsableL40Low *float64
+	// LowHotWater: UsableL40Low below Config.LowHotWaterL. Judged for the
+	// system, never one tank; unknown when the total is.
+	LowHotWater *bool
+	Boiler      Boiler
+	// AmbientC is the boiler room's latest reading, unknown once older
+	// than Thermal.AmbientStale.
+	AmbientC   *float64
+	ActiveDraw *ActiveDraw // nil: no draw running
+	Meter      MeterState
+	Tanktemp   TanktempStatus
+}
+
+// TankState is one cylinder.
+type TankState struct {
+	DeviceID string
+	// At is the tank's latest sweep (tanktemp's time); nil before the
+	// first.
+	At *time.Time
+	// State is the thermal tracker's: heating, drawing, cooling or
+	// unknown.
+	State thermal.State
+	// HeatSource is hw or ch while heating, else nil.
+	HeatSource *thermal.Source
+	// The estimate of the latest sweep; nil before one, once it is older
+	// than Thermal.StaleAfter, or when it couldn't be estimated.
+	StoredKWh    *float64
+	MeanC        *float64
+	TopC         *float64
+	HotL         *float64
+	UsableL40    *float64
+	UsableL40Low *float64
+	// PowerKW is the smoothed dE/dt; nil when unknown.
+	PowerKW *float64
+	// UAWPerK is the loss fit against the boiler room (the prior until
+	// evidence comes).
+	UAWPerK *float64
+	// ProbesOK is how many probes the latest sweep's profile used, of
+	// ProbesTotal; nil before the first sweep.
+	ProbesOK    *int
+	ProbesTotal *int
+}
+
+// Boiler is the programmer: true on, false off, nil unknown.
+type Boiler struct {
+	HW, CH *bool
+}
+
+// ActiveDraw is the running draw, with the same DrawID and StartedAt as
+// its draw_started, so a consumer restarting mid-draw can recover it.
+type ActiveDraw struct {
+	DrawID      string
+	StartedAt   time.Time // the first litre's closing
+	LastLitreAt time.Time
+	LitresSoFar float64
+	FlowLPerMin *float64   // nil until the draw has two litres
+	Kind        meter.Kind // provisional
+}
+
+// MeterState is the water meter as the engine last heard it.
+type MeterState struct {
+	At            *time.Time // the latest meter message's timestamp; nil before one
+	Count         *uint64    // the current run's count
+	CountingSince *time.Time // the current run
+	// Litres is metered since the engine started, over every run.
+	Litres *float64
+	// ContinuousFlow is the running creep, or nil when there is none.
+	ContinuousFlow *Flow
+}
+
+// TanktempStatus is tanktemp's latest status message.
+type TanktempStatus struct {
+	At      *time.Time // nil before one, and for the last will
+	Online  *bool
+	Version *string // nil before a status, and for the last will
+}
+
+// Flow is a continuous flow (creep): lone litres, never a draw.
+type Flow struct {
+	Since       time.Time // the first creep litre's closing
+	Last        time.Time // the latest
+	Litres      float64
+	FlowLPerMin float64
+}
+
+// DrawEnded is an ended draw with its attribution.
+type DrawEnded struct {
+	DrawID    string
+	StartedAt time.Time // the first litre's closing
+	EndedAt   time.Time // the last litre's closing
+	DurationS float64
+	// Litres are the meter's, whole litres: the volume. VolumeKind is
+	// always "metered".
+	Litres      float64
+	VolumeKind  string
+	FlowLPerMin *float64
+	Kind        meter.Kind // final
+	Tanks       []TankShare
+	// OutletPeakC is the share-weighted outlet peak (the delivered
+	// temperature); InletDropC the largest inlet drop; EnergyKWh the heat
+	// the tanks lost by the balance sweep.
+	OutletPeakC *float64
+	InletDropC  *float64
+	EnergyKWh   *float64
+	// HeatBalanceL is the probes' cross-check of Litres, never the volume.
+	HeatBalanceL        *float64
+	HeatBalanceReliable bool
+	Reasons             []draw.Reason
+	MaskedByReheat      bool
+	// The meter messages the draw covers.
+	From, To meter.Ref
+}
+
+// TankShare is one tank's part in a draw.
+type TankShare struct {
+	DeviceID    string
+	Share       *float64
+	Litres      *float64
+	OutletPeakC *float64
+	InletDropC  *float64
+}
+
+// EventType says what an Event reports.
+type EventType string
+
+// The event types: washhouse's water/hot/events names (PLAN.md).
+const (
+	EventDrawStarted           EventType = "draw_started"
+	EventDrawUpdated           EventType = "draw_updated"
+	EventDrawEnded             EventType = "draw_ended"
+	EventContinuousFlowStarted EventType = "continuous_flow_started"
+	EventContinuousFlowEnded   EventType = "continuous_flow_ended"
+	EventHeatingStarted        EventType = "heating_started"
+	EventHeatingEnded          EventType = "heating_ended"
+	EventTankStateChanged      EventType = "tank_state_changed"
+)
+
+// Event is one thing the engine decided, at its event time. Exactly one
+// of Draw, Ended, Flow and Tank is set, by Type.
+type Event struct {
+	Type  EventType
+	At    time.Time
+	Draw  *ActiveDraw // draw_started, draw_updated
+	Ended *DrawEnded  // draw_ended
+	Flow  *Flow       // continuous_flow_*
+	Tank  *TankEvent  // heating_*, tank_state_changed
+}
+
+// TankEvent is a thermal change in one tank.
+type TankEvent struct {
+	DeviceID string
+	State    thermal.State // after the change
+	Prev     thermal.State
+	// Source is the new heat source (for heating_ended, the episode's
+	// last), or nil.
+	Source  *thermal.Source
+	PowerKW *float64
+}

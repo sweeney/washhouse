@@ -1,0 +1,89 @@
+{
+  "ambient_topic": "zigbee2mqtt/climate_groundfloor_boiler-room",
+  "low_hot_water_l": 60,
+  "recent_draws": 50,
+  "cold_c": 10,
+  "heat_capacity_kwh_per_litre_k": 0.0011627777777777778,
+  "vessel": {
+    "capacity_l": 200,
+    "inner_diameter_mm": 460,
+    "dome_depth_mm": 60,
+    "z0_mm": 150,
+    "slice_mm": 1
+  },
+  "estimate": {
+    "min_c": 40,
+    "mix_c": 40,
+    "low_factor": 0.85,
+    "draw_from_mm": 281,
+    "draw_to_mm": 1237
+  },
+  "tanks": [
+    {
+      "device_id": "hot_water_cylinder_left",
+      "trust_suspect": false,
+      "prior_ua_w_per_k": 4,
+      "prior_hours": 1,
+      "probes": [
+        {"position": "bottom", "role": "inlet", "height_mm": 265},
+        {"position": "lower", "role": "bulk", "height_mm": 400},
+        {"position": "middle", "role": "bulk", "height_mm": 825},
+        {"position": "upper", "role": "bulk", "height_mm": 945},
+        {"position": "top", "role": "outlet", "height_mm": 1215}
+      ]
+    },
+    {
+      "device_id": "hot_water_cylinder_right",
+      "trust_suspect": false,
+      "prior_ua_w_per_k": 17,
+      "prior_hours": 1,
+      "probes": [
+        {"position": "bottom", "role": "inlet", "height_mm": 265},
+        {"position": "lower", "role": "bulk", "height_mm": 400},
+        {"position": "middle", "role": "bulk", "height_mm": 825},
+        {"position": "upper", "role": "return", "height_mm": 945},
+        {"position": "top", "role": "outlet", "height_mm": 1215}
+      ]
+    }
+  ],
+  "meter": {
+    "device_id": "hot_water_meter",
+    "draw_end": "60s",
+    "bath_flow_l_per_min": 10,
+    "bath_min_litres": 20,
+    "shower_min_litres": 20,
+    "shower_min_duration": "180s",
+    "shower_min_flow_l_per_min": 3,
+    "creep_closed": "10s",
+    "creep_window": "2700s",
+    "stale_after": "90s",
+    "update_every": "60s"
+  },
+  "thermal": {
+    "power_window": "10m",
+    "power_min_span": "5m",
+    "power_min_samples": 3,
+    "power_exclude": ["inlet", "outlet"],
+    "min_probes": 2,
+    "stale_after": "2m",
+    "heating_on_kw": 0.5,
+    "heating_off_kw": 0.3,
+    "draw_settle": "60s",
+    "power_settle": "12m",
+    "source_hold": "30m",
+    "ua_tau": "24h",
+    "ua_quiet": "60m",
+    "ua_min_delta_k": 5,
+    "ambient_stale": "40m"
+  },
+  "draw": {
+    "share_settle": "60s",
+    "balance_settle": "8m",
+    "max_sweep_gap": "2m",
+    "min_reliable_litres": 20,
+    "gain_kwh": 0.05,
+    "thermocline_c": 40,
+    "gap_low_mm": 400,
+    "gap_high_mm": 825
+  }
+}
