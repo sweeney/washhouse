@@ -68,6 +68,9 @@ need_broker() {
     command -v mosquitto_sub >/dev/null || die "mosquitto_sub not found (brew install mosquitto)"
 }
 
+# mtime FILE: modification time in epoch seconds, GNU stat (Linux) or BSD (macOS).
+mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"; }
+
 # secs_to_utc_midnight: seconds left in today's UTC day (at least 1).
 secs_to_utc_midnight() {
     local now; now=$(date -u +%s)
@@ -99,7 +102,7 @@ case "$CMD" in
     status)
         if p=$(running_pid); then
             f=$(ls -t "$DIR"/live-*.log 2>/dev/null | head -1)
-            age=$(( $(date +%s) - $(stat -f %m "$f") ))
+            age=$(( $(date +%s) - $(mtime "$f") ))
             echo "recording (pid $p) to $f: $(wc -l <"$f" | tr -d ' ') lines, last write ${age}s ago"
             [ "$age" -lt 120 ] || { echo "record.sh: nothing written for ${age}s" >&2; exit 1; }
         else

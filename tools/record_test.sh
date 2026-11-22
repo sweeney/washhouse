@@ -45,6 +45,19 @@ expect "--check starts nothing" test ! -e "$T/rec/record.pid"
 pub -r -t water/hot/tanktemp/meter -m '{"seq":1}'
 "$REC" --dir "$T/rec" --broker "127.0.0.1:$PORT" start >/dev/null
 expect "status says recording" "$REC" --dir "$T/rec" status
+# Linux: GNU stat has no BSD '-f %m'. A shim that behaves like GNU stat stands in.
+mkdir -p "$T/gnubin"
+cat >"$T/gnubin/stat" <<'SHIM'
+#!/usr/bin/env python3
+import os, sys
+a = sys.argv[1:]
+if len(a) == 3 and a[0] == "-c" and a[1] == "%Y":
+    print(int(os.stat(a[2]).st_mtime)); sys.exit(0)
+sys.stderr.write("stat: cannot read file system information for '%s': No such file or directory\n" % a[-1])
+sys.exit(1)
+SHIM
+chmod +x "$T/gnubin/stat"
+expect "status works with GNU stat" env PATH="$T/gnubin:$PATH" "$REC" --dir "$T/rec" status
 out=$("$REC" --dir "$T/rec" --broker "127.0.0.1:$PORT" start)
 expect "second start is a no-op" grep -q 'already recording' <<<"$out"
 
@@ -74,7 +87,13 @@ expect "records again after a broker restart" grep -q after-restart "$f"
 
 "$REC" --dir "$T/rec" stop >/dev/null
 expect "stop stops it" bash -c "! '$REC' --dir '$T/rec' status >/dev/null"
-expect "no mosquitto_sub left behind" bash -c "! pgrep -f 'mosquitto_sub -h 127.0.0.1 -p $PORT' >/dev/null"
+# pgrep from this script, not inside 'bash -c "...pattern..."': Linux pgrep
+# would match that shell's own command line. Give the kill a moment to land.
+sub_gone() {
+    for _ in $(seq 20); do pgrep -f "mosquitto_sub -h 127.0.0.1 -p $PORT" >/dev/null || return 0; sleep 0.1; done
+    return 1
+}
+expect "no mosquitto_sub left behind" sub_gone
 
 echo "record_test: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
