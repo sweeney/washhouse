@@ -10,7 +10,8 @@ one-line files in `~/washhouse-recordings/` (`broker`, `tanktemp-healthz`).
 |---|---|
 | `record.sh start\|stop\|status` | Records tanktemp (`water/hot/#`), boiler-sensor (`energy/boiler/#`), boiler-room ambient and statehouse's hot-water devices to `~/washhouse-recordings/live-YYYYMMDD.log`, one file per UTC day, each starting with the retained messages. Reconnects after broker restarts. |
 | `smoke.sh [--expect-meter] [--healthz URL] [--save DIR]` | One PASS/WARN/FAIL line per check: tanktemp online, fresh, all probes OK; tank states fresh; the meter's retained message against WIRE.md (field order, vocabulary, freshness, counters 0); `/healthz` meter `counting` and agreeing with MQTT; boiler-sensor heartbeat. Exit 0 / 1 FAIL / 2 WARN / 3 couldn't fetch. |
-| `meter_audit.py FILE...` | Post-hoc audit of a recording: seq gaps and duplicates, count monotonic, pulse/open pairing and timing, sweep cadence, counter rises with the nearest boiler event, then washhouse's provisional reading: draws (litres < 36 s apart), flow, and the reed's duty. Exit 1 on a contract problem. |
+| `meter_audit.py FILE...` | Post-hoc audit of a recording: seq gaps and duplicates, count monotonic, pulse/open pairing and timing, sweep cadence, counter rises with the nearest boiler event, then washhouse's provisional reading: draws (a draw ends after a minute with no litre), flow, and the reed's duty. Exit 1 on a contract problem. |
+| `meter_scenarios.py [OUTDIR]` | Writes the synthetic meter scenarios (built with `meter_audit_test.py`'s emitter) and `meter_audit.py`'s draws for each to `internal/meter/testdata/audit/`, where the Go meter consumer's parity test replays them. `test.sh` fails if they are stale. |
 | `test.sh` | Runs every test (unit, then local-broker tests for the shell tools). |
 
 After a tanktemp deploy: `tools/smoke.sh --expect-meter`, then later

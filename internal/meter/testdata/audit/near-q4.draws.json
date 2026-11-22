@@ -1,0 +1,10 @@
+[
+ {
+  "start": "2026-11-21T07:00:02.000Z",
+  "end": "2026-11-21T07:00:16.250Z",
+  "litres": 20,
+  "duration_s": 14.2,
+  "median_flow_l_min": 80.0,
+  "peak_flow_l_min": 80.0
+ }
+]
