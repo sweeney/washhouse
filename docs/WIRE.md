@@ -383,7 +383,7 @@ draw (its loss swamps the power) and is judged again after it, so a
 | `event` | `STARTUP`, `HEARTBEAT`, `SHUTDOWN` or `LWT` |
 | `timestamp` | washhouse's wall clock (the only wall-clock time on the wire) |
 | `version` | the commit washhouse was built from |
-| `ready` | `true` once washhouse has its config and is subscribed to its inputs |
+| `ready` | `true` once washhouse has its config and is subscribed to its inputs. It never goes back to `false` while washhouse runs (a reconnect resubscribes, and a failed config reload keeps the last good config); a new run starts `false` at STARTUP |
 | `uptime_s` | seconds since start |
 | `tanks` | the configured cylinders, in config order |
 | `reason` | SHUTDOWN only, after `tanks`: the signal (`SIGTERM`, `SIGINT`) or `context` |
@@ -405,9 +405,12 @@ or vanished.
   baseline, so litres counted while it was down are never a draw. A draw
   running across the restart is cut: the part before it never gets a
   `draw_ended`, and the litres after it are a new draw with its own
-  `draw_id`. A consumer should expire a draw it never sees end (statehouse
-  gives each a 30 min safety expiry).
+  `draw_id`. A consumer shouldn't leave such a draw to an expiry, which
+  would date its end too late. Reconcile from State: when `active_draw` no
+  longer names a draw that has had no `draw_ended`, or on washhouse's
+  STARTUP or last will, end it at its last known `last_litre_at`. This
+  relies on `active_draw` leaving only in the publish after `draw_ended`.
 
 ## Changes
 
-None yet: v1 is in draft.
+None yet: v1 is in draft. The freeze will be recorded here, with the date and the reviews it followed.
