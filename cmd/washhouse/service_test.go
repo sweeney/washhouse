@@ -738,6 +738,7 @@ func TestReloadReplaysTheLatestInputs(t *testing.T) {
 			t.Errorf("%s: %v, was %v", what, b, a)
 		}
 	}
+	same("low hot water", before.LowHotWater, after.LowHotWater)
 	same("boiler hw", before.Boiler.HW, after.Boiler.HW)
 	same("boiler ch", before.Boiler.CH, after.Boiler.CH)
 	same("tanktemp online", before.Tanktemp.Online, after.Tanktemp.Online)
