@@ -88,7 +88,7 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
         "503":
-          $ref: "#/components/responses/Unavailable"
+          $ref: "#/components/responses/NotReadyOrAuthUnavailable"
   /api/v1/tanks/{id}:
     get:
       operationId: getTank
@@ -123,7 +123,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
         "503":
-          $ref: "#/components/responses/Unavailable"
+          $ref: "#/components/responses/NotReadyOrAuthUnavailable"
   /api/v1/draws:
     get:
       operationId: getDraws
@@ -133,7 +133,10 @@ paths:
         The draws ended since washhouse started (a reload keeps them), at
         most the behaviour document's `recent_draws`. Longer history is in
         Influx. A draw is listed from its `draw_ended`; `balanced` is
-        `null` until its `draw_balanced`.
+        `null` until its `draw_balanced`. A draw cut by a washhouse restart
+        or a behaviour reload never gets a `draw_ended`, so it is never
+        listed (docs/WIRE.md, Delivery): reconcile those from the state's
+        `active_draw`.
       responses:
         "200":
           description: The recent draws.
@@ -145,6 +148,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/AuthUnavailable"
   /api/v1/model:
     get:
       operationId: getModel
@@ -165,6 +170,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/AuthUnavailable"
 components:
   securitySchemes:
     bearer:
@@ -189,14 +196,32 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
-    Unavailable:
+    AuthUnavailable:
       description: |
-        The token couldn't be checked (identity's keys are unavailable;
-        keep the token and retry after `Retry-After`), or washhouse has
-        had no input yet.
+        The token couldn't be checked: identity's keys are unavailable.
+        Keep the token and retry after `Retry-After`; it isn't a verdict on
+        the token. (identity v0.7.0 also answers this way, for about 10 s,
+        to a token with an unknown key id just after another.)
       headers:
         Retry-After:
-          description: Seconds to wait, when the token couldn't be checked.
+          description: Seconds to wait.
+          required: true
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotReadyOrAuthUnavailable:
+      description: |
+        Either washhouse has had no input yet, so there is no state to give
+        (`{"error": "washhouse has had no input yet"}`), or the token
+        couldn't be checked (AuthUnavailable). Retry after `Retry-After`
+        either way; keep the token.
+      headers:
+        Retry-After:
+          description: Seconds to wait.
+          required: true
           schema:
             type: integer
       content:

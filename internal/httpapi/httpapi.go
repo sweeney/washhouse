@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -70,21 +71,24 @@ func (r *Recorder) store() {
 	r.snap.Store(&s)
 }
 
-// After records an input's outcome: st, and ev's draw events.
+// After records an input's outcome: st, and ev's draw events. It builds
+// the new snapshot apart and takes it only when all of it encoded, so a
+// failure changes nothing.
 func (r *Recorder) After(st engine.State, ev []engine.Event) error {
-	b, err := publish.State(st)
+	state, err := publish.State(st)
 	if err != nil {
 		return err
 	}
-	r.cur.State, r.cur.Tanks, r.cur.TankIDs = b, map[string][]byte{}, nil
+	tanks, ids := map[string][]byte{}, []string(nil)
 	for _, t := range st.Tanks {
 		tb, err := publish.Tank(st, t)
 		if err != nil {
 			return err
 		}
-		r.cur.Tanks[t.DeviceID] = tb
-		r.cur.TankIDs = append(r.cur.TankIDs, t.DeviceID)
+		tanks[t.DeviceID] = tb
+		ids = append(ids, t.DeviceID)
 	}
+	draws := r.cur.Draws
 	for _, e := range ev {
 		switch {
 		case e.Type == engine.EventDrawEnded && e.Ended != nil:
@@ -92,22 +96,23 @@ func (r *Recorder) After(st engine.State, ev []engine.Event) error {
 			if err != nil {
 				return err
 			}
-			r.cur.Draws = append([]Draw{{ID: e.Ended.DrawID, Ended: m.Payload}}, r.cur.Draws...)
+			draws = append([]Draw{{ID: e.Ended.DrawID, Ended: m.Payload}}, draws...)
 		case e.Type == engine.EventDrawBalanced && e.Balanced != nil:
 			m, err := publish.Event(e, "")
 			if err != nil {
 				return err
 			}
-			for i := range r.cur.Draws {
-				if r.cur.Draws[i].ID == e.Balanced.DrawID {
-					d := r.cur.Draws[i] // a new Draw: the old snapshot keeps its own
+			for i := range draws {
+				if draws[i].ID == e.Balanced.DrawID {
+					d := draws[i] // a new Draw in a new slice: snapshots keep theirs
 					d.Balanced = m.Payload
-					r.cur.Draws = append(append(append([]Draw{}, r.cur.Draws[:i]...), d), r.cur.Draws[i+1:]...)
+					draws = append(append(append([]Draw{}, draws[:i]...), d), draws[i+1:]...)
 					break
 				}
 			}
 		}
 	}
+	r.cur.State, r.cur.Tanks, r.cur.TankIDs, r.cur.Draws = state, tanks, ids, draws
 	r.trim()
 	r.store()
 	return nil
@@ -121,9 +126,11 @@ func (r *Recorder) Behaviour(raw []byte, at time.Time, keep int) {
 	r.store()
 }
 
+// trim keeps the newest keep draws, clipped: no spare capacity for a
+// later append to write into a slice a snapshot holds.
 func (r *Recorder) trim() {
 	if len(r.cur.Draws) > r.keep {
-		r.cur.Draws = r.cur.Draws[:r.keep]
+		r.cur.Draws = slices.Clip(r.cur.Draws[:r.keep])
 	}
 }
 
@@ -158,7 +165,7 @@ func New(c Config) (http.Handler, error) {
 	api.HandleFunc("GET /api/v1/state", func(w http.ResponseWriter, _ *http.Request) {
 		s := c.Snapshot()
 		if s.State == nil {
-			serve.WriteError(w, http.StatusServiceUnavailable, "washhouse has had no input yet")
+			notReady(w)
 			return
 		}
 		raw(w, s.State)
@@ -166,7 +173,7 @@ func New(c Config) (http.Handler, error) {
 	api.HandleFunc("GET /api/v1/tanks/{id}", func(w http.ResponseWriter, r *http.Request) {
 		s, id := c.Snapshot(), r.PathValue("id")
 		if s.State == nil {
-			serve.WriteError(w, http.StatusServiceUnavailable, "washhouse has had no input yet")
+			notReady(w)
 			return
 		}
 		b, ok := s.Tanks[id]
@@ -215,6 +222,13 @@ func New(c Config) (http.Handler, error) {
 		serve.WriteError(w, http.StatusNotFound, "not found")
 	})
 	return serve.CORS(mux), nil
+}
+
+// notReady is the 503 before the first input. Retry-After is about one
+// tanktemp sweep: every 503 carries one (openapi.yaml).
+func notReady(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", "30")
+	serve.WriteError(w, http.StatusServiceUnavailable, "washhouse has had no input yet")
 }
 
 // raw writes an already-encoded JSON body.

@@ -70,13 +70,16 @@ The spec is `GET /openapi.json` (source: `internal/httpapi/openapi.yaml`).
 identity, a user's (active) or a service's. `http.audience` says whether the
 token must name `washhouse`: `off`, `warn` (accept and log one that
 doesn't) or `enforce`. A token that can't be checked because identity's
-keys are unavailable is a 503 with `Retry-After`, not a 401.
+keys are unavailable is a 503 with `Retry-After`, not a 401; so is a
+state asked for before the first input. Switch `http.audience` to
+`enforce` once the `warn` log shows every caller's tokens name
+`washhouse` (user tokens included): the draws are an occupancy record.
 
 | Path | What |
 |---|---|
 | `GET /api/v1/state` | The system's state: `{base}/state`'s payload, byte for byte (503 before the first input). |
 | `GET /api/v1/tanks/{id}` | One tank: `{base}/tank/{id}`'s payload. |
-| `GET /api/v1/draws` | Recent draws, newest first, each its `draw_ended` and `draw_balanced` events (`balanced` is `null` until it comes); at most `recent_draws`, kept across a reload. |
+| `GET /api/v1/draws` | Recent draws, newest first, each its `draw_ended` and `draw_balanced` events (`balanced` is `null` until it comes); at most `recent_draws`, kept across a reload. A draw cut by a restart or a reload has no `draw_ended`, so it is never listed. |
 | `GET /api/v1/model` | The running behaviour document and when it was applied. |
 
 ```

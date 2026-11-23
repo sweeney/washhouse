@@ -146,7 +146,9 @@ func (v *validator) check(path string, x any, s map[string]any, at string) {
 				continue
 			}
 			key := at + "/properties/" + k
-			v.seen[key] = true
+			if val != nil { // a property only ever null leaves its other branch unchecked
+				v.seen[key] = true
+			}
 			v.check(path+"."+k, val, ps, key)
 		}
 	case []any:
@@ -261,5 +263,23 @@ func TestSpecMatchesEveryResponse(t *testing.T) {
 	}
 	if len(never) > 0 {
 		t.Errorf("declared but never sent:\n%s", strings.Join(never, "\n"))
+	}
+}
+
+// Every 503 the spec declares requires Retry-After, and the draws and the
+// model declare the auth 503 too (any /api/ route can meet it).
+func TestSpec503sRequireRetryAfter(t *testing.T) {
+	v := &validator{doc: specDoc(t), seen: map[string]bool{}}
+	for _, route := range []string{"/api/v1/state", "/api/v1/tanks/{id}", "/api/v1/draws", "/api/v1/model"} {
+		r, _ := v.doc["paths"].(map[string]any)[route].(map[string]any)["get"].(map[string]any)["responses"].(map[string]any)["503"].(map[string]any)
+		if r == nil {
+			t.Errorf("%s has no 503", route)
+			continue
+		}
+		resp, _ := v.resolveResponse(r)
+		h, _ := resp["headers"].(map[string]any)["Retry-After"].(map[string]any)
+		if h == nil || h["required"] != true {
+			t.Errorf("%s: 503 Retry-After %v", route, h)
+		}
 	}
 }

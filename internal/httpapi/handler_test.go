@@ -136,6 +136,11 @@ func TestBeforeAnyInput(t *testing.T) {
 		if w.Code != http.StatusServiceUnavailable || strings.TrimSpace(w.Body.String()) != `{"error":"washhouse has had no input yet"}` {
 			t.Errorf("%s: %d %s", p, w.Code, w.Body.String())
 		}
+		// Every 503 carries Retry-After (statehouse's review of #7): here,
+		// about one tanktemp sweep.
+		if w.Header().Get("Retry-After") != "30" {
+			t.Errorf("%s: Retry-After %q", p, w.Header().Get("Retry-After"))
+		}
 	}
 	if w := get(h, "/api/v1/draws", true); w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != `{"draws":[]}` {
 		t.Errorf("draws: %d %s", w.Code, w.Body.String())

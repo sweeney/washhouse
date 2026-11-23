@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"math"
 	"testing"
 	"time"
 
@@ -155,5 +156,47 @@ func TestRecorderBehaviour(t *testing.T) {
 	s := r.Snapshot()
 	if string(s.Behaviour) != `{"x":1}` || !s.AppliedAt.Equal(at) || len(s.Draws) != 1 {
 		t.Errorf("snapshot %+v", s)
+	}
+}
+
+// A trimmed list has no spare capacity: a snapshot's slice can never be
+// grown into another's (tanktemp's review of #7).
+func TestTrimmedDrawsHaveNoSpareCapacity(t *testing.T) {
+	r := NewRecorder(2)
+	at := time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i, id := range []string{"a", "b", "c"} {
+		_ = r.After(engine.State{At: at}, []engine.Event{endedEvent(id, at.Add(time.Duration(i)*time.Minute))})
+	}
+	if d := r.Snapshot().Draws; cap(d) != len(d) {
+		t.Errorf("len %d, cap %d", len(d), cap(d))
+	}
+	r.Behaviour(nil, at, 1)
+	if d := r.Snapshot().Draws; cap(d) != len(d) {
+		t.Errorf("after Behaviour: len %d, cap %d", len(d), cap(d))
+	}
+}
+
+// After that fails changes nothing: a later Behaviour doesn't store a
+// half-made snapshot (tanktemp's review of #7).
+func TestFailedAfterChangesNothing(t *testing.T) {
+	r := NewRecorder(5)
+	at := time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
+	good := engine.State{At: at, Tanks: []engine.TankState{{DeviceID: "t", State: "unknown"}}}
+	if err := r.After(good, []engine.Event{endedEvent("a", at)}); err != nil {
+		t.Fatal(err)
+	}
+	before := r.Snapshot()
+	// The state and the tanks encode; the draw doesn't (NaN litres), so
+	// After fails after they are made.
+	next := engine.State{At: at.Add(time.Minute), Tanks: []engine.TankState{{DeviceID: "t", State: "unknown"}, {DeviceID: "u", State: "unknown"}}}
+	badDraw := endedEvent("b", at)
+	badDraw.Ended.Litres = math.NaN()
+	if err := r.After(next, []engine.Event{badDraw}); err == nil {
+		t.Fatal("a draw of NaN litres encoded")
+	}
+	r.Behaviour([]byte(`{}`), at, 5)
+	s := r.Snapshot()
+	if string(s.State) != string(before.State) || len(s.Tanks) != 1 || s.Tanks["t"] == nil || len(s.TankIDs) != 1 || len(s.Draws) != 1 {
+		t.Errorf("after a failed After: %d tanks %v, %d draws", len(s.Tanks), s.TankIDs, len(s.Draws))
 	}
 }
