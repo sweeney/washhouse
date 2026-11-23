@@ -135,12 +135,18 @@ quantities are floats even when whole, counts integers, words strings.
 - In Flux, `aggregateWindow` stamps a window at its end by default; use
   `timeSrc: "_start"`.
 
-`/healthz` shows `influx` (`null` when off): points `queued`, writes
-`failed`, `last_queued_at`, and the last error. Writes are queued and
-batched (influxdb-client-go), and never block the loop. A failure doesn't
-make washhouse degraded: Influx is history, not the service. During an
-outage the client's retry buffer drops its oldest points when full, so
-`failed` undercounts what was lost. `-check-config` reads the token file.
+`/healthz` shows `influx` (`null` when off): points `queued` and
+`dropped`, writes `failed`, messages `unmapped` (a bug if ever non-zero),
+`last_queued_at`, and the last error. Points go through a bounded queue to
+the client (influxdb-client-go, which batches), so a hanging Influx never
+holds the loop: what the queue can't hold is dropped and counted. A
+failure doesn't make washhouse degraded: Influx is history, not the
+service. During an outage the client's retry buffer drops its oldest
+points when full, and it reports at most one error at a time, so `failed`
+undercounts what was lost. `-check-config` reads the token file.
+
+statehouse writes its booleans as Influx booleans, not `0`/`1`; a query
+across both services' measurements must allow for that.
 
 The tools tests need `python3`, `mosquitto`, `mosquitto_sub`/`mosquitto_pub`
 and `shellcheck`. Conventions for changes are in [`CLAUDE.md`](CLAUDE.md).

@@ -29,11 +29,19 @@ type fakeInflux struct {
 	errs    chan error
 	flushed int
 	hang    chan struct{} // when set, Flush waits on it
+	stuck   chan struct{} // when set, WritePoint waits on it (Influx hanging)
+	atFlush []int         // how many points had been written at each Flush
 }
 
 func newFakeInflux() *fakeInflux { return &fakeInflux{errs: make(chan error, 64)} }
 
 func (f *fakeInflux) WritePoint(p *write.Point) {
+	f.mu.Lock()
+	stuck := f.stuck
+	f.mu.Unlock()
+	if stuck != nil {
+		<-stuck
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.failing {
@@ -46,6 +54,7 @@ func (f *fakeInflux) WritePoint(p *write.Point) {
 func (f *fakeInflux) Flush() {
 	f.mu.Lock()
 	f.flushed++
+	f.atFlush = append(f.atFlush, len(f.lines))
 	hang := f.hang
 	f.mu.Unlock()
 	if hang != nil {
@@ -165,7 +174,8 @@ func TestInfluxSink(t *testing.T) {
 		t.Errorf("before: %+v", st)
 	}
 	s.write(messages)
-	if got := f.delivered(); len(got) != 1 || got[0] != `hot_water_system,site=home boiler_hw=1i,continuous_flow=0i,drawing=0i 978307200000000000` {
+	waitFor(t, "the point", func() bool { return len(f.delivered()) == 1 })
+	if got := f.delivered(); got[0] != `hot_water_system,site=home boiler_hw=1i,continuous_flow=0i,drawing=0i 978307200000000000` {
 		t.Errorf("delivered %q", got)
 	}
 	if st := s.status(); st.Queued != 1 || st.LastQueuedAt == nil || !st.LastQueuedAt.Equal(now) || st.Failed != 0 {
@@ -179,9 +189,9 @@ func TestInfluxSink(t *testing.T) {
 		t.Errorf("after a failure: %+v", st)
 	}
 
-	// A message that doesn't map is a failure too, not a crash.
+	// A message that doesn't map is counted on its own, not a crash.
 	s.write([]publish.Message{{Topic: "water/hot/state", Payload: []byte(`{`)}})
-	if st := s.status(); st.Failed != 2 || !strings.Contains(st.LastError, "water/hot/state") {
+	if st := s.status(); st.Failed != 1 || st.Unmapped != 1 || !strings.Contains(st.LastError, "water/hot/state") {
 		t.Errorf("after a bad message: %+v", st)
 	}
 
@@ -192,9 +202,41 @@ func TestInfluxSink(t *testing.T) {
 	if off.report() != nil {
 		t.Errorf("Influx off on /healthz: %+v, want null", off.report())
 	}
-	if st := s.report(); st == nil || st.Queued != 2 || st.Failed != 2 {
+	if st := s.report(); st == nil || st.Queued != 2 || st.Failed != 1 {
 		t.Errorf("on /healthz: %+v", st)
 	}
+}
+
+// A hanging Influx never stalls the loop (statehouse's review of #8: the
+// client's WritePoint blocks behind a synchronous POST): write returns at
+// once, and what the queue can't hold is dropped and counted.
+func TestInfluxSinkNeverBlocks(t *testing.T) {
+	f := newFakeInflux()
+	f.stuck = make(chan struct{})
+	s := newInfluxSink(f, nil, influx.Mapper{Base: "water/hot"}, time.Now)
+	done := make(chan struct{})
+	go func() {
+		for range influxQueue + 10 {
+			s.write(messages[:1])
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("write blocked behind a hanging Influx")
+	}
+	if st := s.status(); st.Dropped < 9 || st.Queued+st.Dropped != influxQueue+10 {
+		t.Errorf("queued %d, dropped %d", st.Queued, st.Dropped)
+	}
+	// Shutdown gives up on it too, and a write after shutdown is dropped.
+	start := time.Now()
+	s.shutdown(50 * time.Millisecond)
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("shutdown took %v", d)
+	}
+	s.write(messages[:1])
+	close(f.stuck)
 }
 
 // shutdown flushes, then closes the client; a Flush that hangs (Influx
@@ -207,6 +249,19 @@ func TestInfluxSinkShutdown(t *testing.T) {
 	s.shutdown(time.Second)
 	if f.flushed != 1 || closed != 1 {
 		t.Errorf("flushed %d, closed %d", f.flushed, closed)
+	}
+
+	// What is still queued is handed to the client before the flush.
+	f = newFakeInflux()
+	f.stuck = make(chan struct{})
+	s = newInfluxSink(f, nil, influx.Mapper{Base: "water/hot"}, time.Now)
+	for range 3 {
+		s.write(messages[:1])
+	}
+	time.AfterFunc(50*time.Millisecond, func() { close(f.stuck) })
+	s.shutdown(5 * time.Second)
+	if len(f.atFlush) != 1 || f.atFlush[0] != 3 {
+		t.Errorf("points written at the flush: %v, want [3]", f.atFlush)
 	}
 
 	f = newFakeInflux()
