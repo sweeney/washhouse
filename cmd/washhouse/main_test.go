@@ -261,7 +261,7 @@ func TestRun(t *testing.T) {
 	waitFor(t, "the reload", func() bool { return strings.Contains(logs.String(), "behaviour reloaded") })
 	cs.set(`{"colour":"blue"}`, http.StatusOK)
 	hup <- syscall.SIGHUP
-	waitFor(t, "the refusal", func() bool { return strings.Contains(healthz(), "the behaviour namespace was refused") })
+	waitFor(t, "the refusal", func() bool { return strings.Contains(healthz(), "the last behaviour fetch failed or was refused") })
 	if !strings.Contains(logs.String(), "keeping the running behaviour") {
 		t.Errorf("log:\n%s", logs.String())
 	}

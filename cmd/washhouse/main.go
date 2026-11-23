@@ -37,7 +37,6 @@ import (
 	"github.com/sweeney/common/lifecycle"
 	"github.com/sweeney/common/mqttpub"
 	"github.com/sweeney/common/mqttpub/retry"
-	"github.com/sweeney/common/remoteconfig"
 	"github.com/sweeney/common/wire/washhouse"
 )
 
@@ -292,6 +291,15 @@ func run(ctx context.Context, s *service, d deps) error {
 	return err
 }
 
+// namespaceStatus is a namespace on /healthz: remoteconfig's Status, and
+// how long ago (seconds), as statehouse shows it.
+type namespaceStatus struct {
+	OK         bool      `json:"ok"`
+	FetchedAt  time.Time `json:"fetched_at"`
+	FetchedAgo int       `json:"fetched_ago"`
+	Error      string    `json:"error,omitempty"`
+}
+
 // report is /healthz: starting until the first input, degraded while the
 // broker is unreachable, while inputs are being dropped, or while tanktemp
 // is silent (no synced sweep or meter message; the room and the
@@ -313,17 +321,29 @@ func (s *service) report(connected bool, now time.Time) health.Report {
 	if h.dropped > 0 {
 		why = append(why, fmt.Sprintf("%d inputs dropped", h.dropped))
 	}
-	var namespaces map[string]remoteconfig.Status
+	var namespaces map[string]namespaceStatus
 	if s.remote != nil {
-		namespaces = s.remote.tracker.Statuses()
+		namespaces = map[string]namespaceStatus{}
+		for ns, st := range s.remote.tracker.Statuses() {
+			namespaces[ns] = namespaceStatus{OK: st.OK, FetchedAt: st.FetchedAt.UTC(),
+				FetchedAgo: int(now.Sub(st.FetchedAt) / time.Second), Error: st.Error}
+		}
 		if st := s.remote.status(); !st.OK && !st.FetchedAt.IsZero() {
-			why = append(why, "the behaviour namespace was refused (running the last good): "+st.Error)
+			why = append(why, "the last behaviour fetch failed or was refused (running the last good): "+st.Error)
 		}
 	}
 	if len(why) > 0 {
 		r.Status, r.Detail = health.StatusDegraded, strings.Join(why, "; ")
 	}
 	var eventAt, lastAt, lastTT *string
+	s.mu.Lock()
+	appliedAt := s.appliedAt
+	s.mu.Unlock()
+	var applied *string
+	if !appliedAt.IsZero() {
+		x := appliedAt.UTC().Format(time.RFC3339)
+		applied = &x
+	}
 	if !h.lastTanktemp.IsZero() {
 		x := h.lastTanktemp.UTC().Format(time.RFC3339)
 		lastTT = &x
@@ -347,6 +367,7 @@ func (s *service) report(connected bool, now time.Time) health.Report {
 		{Key: "published", Value: h.published},
 		{Key: "publish_errors", Value: h.publishErrors},
 		{Key: "remote_config", Value: namespaces},
+		{Key: "behaviour_applied_at", Value: applied},
 	}
 	return r
 }

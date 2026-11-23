@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -629,7 +630,7 @@ func TestHealthShowsTheNamespace(t *testing.T) {
 	}
 	s.remote.tracker.Record("washhouse", errors.New("washhouse: config: colour"))
 	r := s.report(true, t0)
-	if r.Status != "degraded" || r.Detail != "the behaviour namespace was refused (running the last good): washhouse: config: colour" {
+	if r.Status != "degraded" || r.Detail != "the last behaviour fetch failed or was refused (running the last good): washhouse: config: colour" {
 		t.Errorf("refused: %s %q", r.Status, r.Detail)
 	}
 	s.remote.tracker.Record("washhouse", nil)
@@ -678,5 +679,116 @@ func TestHealthBeforeAnyFetch(t *testing.T) {
 	s.remote = &remote{ns: "washhouse"}
 	if r := s.report(true, t0); r.Status != "ok" {
 		t.Errorf("%s %q", r.Status, r.Detail)
+	}
+}
+
+// /healthz shows each namespace's fetch (when, how long ago, the error),
+// and when the running document was applied: an engine rebuilt by a reload
+// shows there (statehouse's review of #6).
+func TestHealthShowsTheFetchAndTheApply(t *testing.T) {
+	s, _, c := newTestService(t, "water/hot")
+	now := time.Now()
+	c.t = now.Add(-time.Hour)
+	if _, err := s.apply(exampleDoc(t, replace(`"recent_draws": 50,`, `"recent_draws": 40,`))); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	s.h.lastReceived, s.h.lastTanktemp = now, now
+	s.mu.Unlock()
+	s.remote = &remote{ns: "washhouse"}
+	s.remote.tracker.Record("washhouse", errors.New("no"))
+	r := s.report(true, now.Add(90*time.Second))
+	var ns map[string]namespaceStatus
+	var applied *string
+	for _, f := range r.Fields {
+		switch f.Key {
+		case "remote_config":
+			ns, _ = f.Value.(map[string]namespaceStatus)
+		case "behaviour_applied_at":
+			applied, _ = f.Value.(*string)
+		}
+	}
+	st, ok := ns["washhouse"]
+	if !ok || st.OK || st.Error != "no" || st.FetchedAt.IsZero() || st.FetchedAgo < 89 || st.FetchedAgo > 91 {
+		t.Errorf("remote_config %+v", ns)
+	}
+	if want := c.t.UTC().Format(time.RFC3339); applied == nil || *applied != want {
+		t.Errorf("behaviour_applied_at %v, want %s", applied, want)
+	}
+}
+
+// A changed reload replays the latest admitted input on each topic into
+// the new engine, as a restart's retained messages would, so the
+// programmer, the room, tanktemp's status, the tanks and the meter are
+// known at once, not when each next speaks (tanktemp's review of #6).
+// The replay publishes nothing.
+func TestReloadReplaysTheLatestInputs(t *testing.T) {
+	s, fake, c := newTestService(t, "water/hot")
+	for _, l := range readLines(t, showerFixture) {
+		c.t = l.at
+		s.handle(mqttpub.Received{Topic: l.topic, Payload: l.payload})
+	}
+	before, published := s.eng.State(), len(fake.Snapshot())
+	if _, err := s.apply(exampleDoc(t, replace(`"recent_draws": 50,`, `"recent_draws": 40,`))); err != nil {
+		t.Fatal(err)
+	}
+	after := s.eng.State()
+	same := func(what string, a, b *bool) {
+		if a == nil || b == nil || *a != *b {
+			t.Errorf("%s: %v, was %v", what, b, a)
+		}
+	}
+	same("boiler hw", before.Boiler.HW, after.Boiler.HW)
+	same("boiler ch", before.Boiler.CH, after.Boiler.CH)
+	same("tanktemp online", before.Tanktemp.Online, after.Tanktemp.Online)
+	if after.AmbientC == nil || *after.AmbientC != *before.AmbientC {
+		t.Errorf("ambient %v, was %v", after.AmbientC, before.AmbientC)
+	}
+	for i, tk := range after.Tanks {
+		if tk.StoredKWh == nil || *tk.StoredKWh != *before.Tanks[i].StoredKWh {
+			t.Errorf("%s stored %v, was %v", tk.DeviceID, tk.StoredKWh, before.Tanks[i].StoredKWh)
+		}
+	}
+	if after.Meter.Count == nil || *after.Meter.Count != *before.Meter.Count || after.ActiveDraw != nil {
+		t.Errorf("meter %+v, active %v", after.Meter, after.ActiveDraw)
+	}
+	if !after.At.Equal(before.At) {
+		t.Errorf("event time %v, was %v", after.At, before.At)
+	}
+	if n := len(fake.Snapshot()); n != published {
+		t.Errorf("the replay published %d messages", n-published)
+	}
+}
+
+// The latest input on a topic is replayed, whatever the engine made of it:
+// a sweep with no usable probe is the tank's present (no estimate), as
+// the retained message would be after a restart, not the good sweep
+// before it.
+func TestReloadReplaysAFailedSweep(t *testing.T) {
+	s, _, c := newTestService(t, "water/hot")
+	var last line
+	for _, l := range readLines(t, showerFixture) {
+		c.t = l.at
+		s.handle(mqttpub.Received{Topic: l.topic, Payload: l.payload})
+		if strings.HasSuffix(l.topic, "cylinder_left/state") {
+			last = l
+		}
+	}
+	bad := regexp.MustCompile(`"(temp|raw)_c":[-0-9.]+`).ReplaceAllString(string(last.payload), `"${1}_c":null`)
+	bad = strings.ReplaceAll(bad, `"error":null`, `"error":"crc"`)
+	at := last.at.Add(30 * time.Second)
+	bad = regexp.MustCompile(`"timestamp":"[^"]*"`).ReplaceAllString(bad, `"timestamp":"`+at.UTC().Format(time.RFC3339)+`"`)
+	c.t = at
+	s.handle(mqttpub.Received{Topic: last.topic, Payload: []byte(bad)})
+	before := s.eng.State().Tanks[0]
+	if before.StoredKWh != nil {
+		t.Fatalf("the bad sweep left an estimate (%+v)", s.health())
+	}
+	if _, err := s.apply(exampleDoc(t, replace(`"recent_draws": 50,`, `"recent_draws": 40,`))); err != nil {
+		t.Fatal(err)
+	}
+	after := s.eng.State().Tanks[0]
+	if after.StoredKWh != nil || before.StoredKWh != nil || after.ProbesOK == nil || *after.ProbesOK != *before.ProbesOK {
+		t.Errorf("after the reload %+v\nbefore %+v", after, before)
 	}
 }

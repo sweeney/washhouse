@@ -70,12 +70,15 @@ washhouse -check-behaviour new-behaviour.json
 kill -HUP "$(pidof washhouse)"   # the unit's reload, once phase 6 has one
 ```
 
-On SIGHUP, washhouse fetches the namespace again. A document it refuses
-(invalid, or a new `ambient_topic`, which needs a restart because the
-subscriptions are made at start) leaves it running the last good one, and
-`/healthz` is degraded until a good one lands. An unchanged document
-changes nothing. A changed one starts the engine again, which consumers
-see as a restart (docs/WIRE.md, Delivery): the UA fit goes back to its
+On SIGHUP, washhouse fetches the namespace again. A fetch that fails, or a
+document it refuses (invalid, or a new `ambient_topic`, which needs a
+restart because the subscriptions are made at start), leaves it running
+the last good one, and
+`/healthz` is degraded until a good one lands (it shows each namespace's
+last fetch, with `fetched_ago` in seconds, and `behaviour_applied_at`). An unchanged document
+changes nothing. A changed one starts the engine again, fed the latest
+input on each topic (as a restart's retained messages would be), which
+consumers see as a restart (docs/WIRE.md, Delivery): the UA fit goes back to its
 priors, and a draw in progress gets no `draw_ended`.
 
 The tools tests need `python3`, `mosquitto`, `mosquitto_sub`/`mosquitto_pub`

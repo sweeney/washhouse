@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -53,6 +54,10 @@ type service struct {
 	// the silence is measured.
 	lastEvent, lastWall time.Time
 	lastTanktemp        time.Time
+	// The latest admitted input on each topic, which a reload replays
+	// into the new engine as a restart's retained messages would.
+	latest map[string]admitted
+	seq    int
 
 	start   time.Time
 	version string
@@ -64,6 +69,7 @@ type service struct {
 	// (lifecycle's), and the silence (/healthz's).
 	shownTanks   []string
 	shownSilence time.Duration
+	appliedAt    time.Time // wall clock: when the running document was applied
 }
 
 // running is what a behaviour document makes: the engine and everything
@@ -75,6 +81,11 @@ type running struct {
 	eng   *engine.Engine
 	pub   *publish.Publisher
 	tanks []string
+}
+
+type admitted struct {
+	seq int
+	m   ingest.Msg
 }
 
 type reloadReq struct {
@@ -103,6 +114,7 @@ func newService(lc localConfig, d document, out mqttpub.Publisher, wall func() t
 	s := &service{
 		src: lc.sources(d.bc.AmbientTopic), out: out, wall: wall, log: logger, base: lc.MQTT.BaseTopic,
 		in: make(chan mqttpub.Received, queueLen), ticks: make(chan chan struct{}), reloads: make(chan reloadReq),
+		latest: map[string]admitted{},
 	}
 	if err := s.src.Validate(); err != nil {
 		return nil, err
@@ -151,14 +163,16 @@ func (s *service) build(d document) (running, error) {
 func (s *service) install(r running) {
 	s.running = r
 	s.mu.Lock()
-	s.shownTanks, s.shownSilence = r.tanks, r.fresh.Silence
+	s.shownTanks, s.shownSilence, s.appliedAt = r.tanks, r.fresh.Silence, s.wall()
 	s.mu.Unlock()
 }
 
 // apply is a reload, on the loop: an unchanged document changes nothing;
 // a changed one starts the engine again (a restart, for consumers: what
-// it has learnt goes, and a draw in progress gets no draw_ended), keeping
-// event time. A document that needs a restart is refused whole.
+// it has learnt goes, and a draw in progress gets no draw_ended), fed the
+// latest input on each topic, in the order they came, as a restart's
+// retained messages would be; it publishes nothing until the next input.
+// A document that needs a restart is refused whole.
 func (s *service) apply(d document) (bool, error) {
 	if bytes.Equal(d.raw, s.raw) {
 		return false, nil
@@ -170,6 +184,16 @@ func (s *service) apply(d document) (bool, error) {
 	r, err := s.build(d)
 	if err != nil {
 		return false, err
+	}
+	ins := make([]admitted, 0, len(s.latest))
+	for _, a := range s.latest {
+		ins = append(ins, a)
+	}
+	sort.Slice(ins, func(i, j int) bool { return ins[i].seq < ins[j].seq })
+	for _, a := range ins {
+		if _, err := ingest.Feed[engine.Event](r.eng, a.m); err != nil {
+			s.log.Printf("reload: replaying %s: %v", a.m.Topic, err)
+		}
 	}
 	s.install(r)
 	return true, nil
@@ -306,6 +330,10 @@ func (s *service) handle(r mqttpub.Received) {
 		s.log.Printf("%s: refused: %v", r.Topic, err)
 		return
 	}
+	// Kept whatever the engine makes of it: it is the topic's present, as
+	// the retained message would be.
+	s.seq++
+	s.latest[r.Topic] = admitted{s.seq, m}
 	ev, err := ingest.Feed[engine.Event](s.eng, m)
 	if err != nil {
 		s.count(func(h *healthStats) { h.feedErrors++ })

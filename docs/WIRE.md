@@ -450,7 +450,11 @@ or vanished.
   process and its status carry on: when washhouse applies a changed
   behaviour document (on SIGHUP), its engine starts again, so a draw
   running then is cut as above, and the next state comes from the new
-  engine. Reconcile it the same way, from `active_draw`.
+  engine, with everything below reset: the tanks `unknown` with
+  `power_kw` `null` until their power is judged again, `ua_w_per_k` back
+  to the configured prior, `low_hot_water` `null`. Reconcile a cut draw
+  the same way, from `active_draw`. `/healthz` shows when the running
+  document was applied (`behaviour_applied_at`).
 - **What a restart resets**, since it is all in memory: `ua_w_per_k` goes
   back to the configured prior until the fit has evidence again, so a step
   in it after a restart isn't a change in the tank; each tank is `unknown`
