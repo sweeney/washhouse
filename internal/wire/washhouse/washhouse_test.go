@@ -449,6 +449,7 @@ func TestClosedVocabularies(t *testing.T) {
 		{"heartbeat offline", strings.Replace(hb, `"online":true`, `"online":false`, 1), statusDec},
 		{"shutdown online", strings.Replace(read("status-shutdown.golden"), `"online":false`, `"online":true`, 1), statusDec},
 		{"reason on a heartbeat", strings.Replace(hb, `]}`, `],"reason":"SIGTERM"}`, 1), statusDec},
+		{"status tank id", strings.Replace(hb, `"tanks":["hot_water_cylinder_left"`, `"tanks":["Left/1"`, 1), statusDec},
 	} {
 		if err := c.dec([]byte(c.raw)); err == nil {
 			t.Errorf("%s: decoded", c.name)

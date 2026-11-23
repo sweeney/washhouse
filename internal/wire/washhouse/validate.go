@@ -96,5 +96,10 @@ func (s Status) validate() error {
 	if s.Reason != nil && s.Event != StatusShutdown {
 		return fmt.Errorf("washhouse: a %s has no reason", s.Event)
 	}
+	for _, id := range s.Tanks {
+		if err := deviceID(id); err != nil {
+			return err
+		}
+	}
 	return nil
 }
