@@ -154,6 +154,7 @@ func TestSilenceMovesEventTimeOn(t *testing.T) {
 	offset := time.Hour
 	c.t = arrived.Add(offset + silence - time.Second)
 	s.lastWall = arrived.Add(offset) // as if it arrived on this clock
+	s.lastTanktemp = s.lastWall
 	n := len(fake.Snapshot())
 	s.tick()
 	if len(fake.Snapshot()) != n {
@@ -333,6 +334,12 @@ func TestHealthReport(t *testing.T) {
 	}
 	c.t = t0
 	s.handle(mqttpub.Received{Topic: "somewhere", Payload: []byte("x")})
+	if r := s.report(true, t0); r.Status != "degraded" || r.Detail != "no tanktemp input yet" {
+		t.Errorf("inputs but none from tanktemp: %s %q", r.Status, r.Detail)
+	}
+	s.mu.Lock()
+	s.h.lastTanktemp = t0
+	s.mu.Unlock()
 	for _, tc := range []struct {
 		name      string
 		connected bool
@@ -344,7 +351,7 @@ func TestHealthReport(t *testing.T) {
 		{"working", true, time.Second, 0, "ok", ""},
 		{"just within the silence", true, s.fresh.Silence, 0, "ok", ""},
 		{"disconnected", false, time.Second, 0, "degraded", "MQTT not connected"},
-		{"silent", true, s.fresh.Silence + time.Second, 0, "degraded", "no input for 2m1s"},
+		{"silent", true, s.fresh.Silence + time.Second, 0, "degraded", "no tanktemp input for 2m1s"},
 		{"dropping", true, time.Second, 3, "degraded", "3 inputs dropped"},
 		{"dropped one", true, time.Second, 1, "degraded", "1 inputs dropped"},
 		{"disconnected and dropping", false, time.Second, 3, "degraded", "MQTT not connected; 3 inputs dropped"},
@@ -360,7 +367,8 @@ func TestHealthReport(t *testing.T) {
 }
 
 // An input that doesn't move event time on (an old programmer event, a
-// replay) doesn't restart the silence: it isn't news.
+// replay) moves neither the base the silence extrapolates from nor the
+// silence itself.
 func TestOldInputDoesNotRestartTheSilence(t *testing.T) {
 	s, fake, c := newTestService(t, "water/hot")
 	lines := readLines(t, showerFixture)
@@ -376,10 +384,95 @@ func TestOldInputDoesNotRestartTheSilence(t *testing.T) {
 		t.Fatalf("an old event moved the silence: wall %v→%v", wall, s.lastWall)
 	}
 	n := len(fake.Snapshot())
-	c.t = wall.Add(s.fresh.Silence)
+	c.t = s.lastTanktemp.Add(s.fresh.Silence)
 	s.tick()
 	st, err := washhouse.DecodeState([]byte(fake.Snapshot()[len(fake.Snapshot())-1].Payload))
-	if len(fake.Snapshot()) == n || err != nil || !st.Timestamp.Equal(event.Add(s.fresh.Silence)) {
+	if len(fake.Snapshot()) == n || err != nil || !st.Timestamp.Equal(event.Add(c.t.Sub(wall))) {
 		t.Errorf("no tick at the silence (%d new, %v)", len(fake.Snapshot())-n, err)
+	}
+}
+
+// tanktemp's probe (PR #5 review): the room keeps reporting after
+// tanktemp stops. Its readings move event time on but end no draw, so the
+// silence that matters is tanktemp's: the draw must still end.
+func TestRoomReadingsDoNotHideTanktempsSilence(t *testing.T) {
+	s, fake, c := newTestService(t, "water/hot")
+	for _, l := range readLines(t, showerFixture) {
+		c.t = l.at
+		s.handle(mqttpub.Received{Topic: l.topic, Payload: l.payload})
+		if s.eng.State().ActiveDraw != nil {
+			break
+		}
+	}
+	n := len(fake.Snapshot())
+	stopped := c.t
+	for at := 90 * time.Second; at <= time.Hour; at += 90 * time.Second {
+		c.t = stopped.Add(at)
+		s.handle(mqttpub.Received{Topic: "zigbee2mqtt/climate_groundfloor_boiler-room", Payload: []byte(`{"temperature":20}`)})
+		s.tick()
+	}
+	var ended bool
+	for _, m := range fake.Snapshot()[n:] {
+		ended = ended || (m.Topic == "water/hot/events" && strings.Contains(m.Payload, `"draw_ended"`))
+	}
+	if !ended || s.eng.State().ActiveDraw != nil {
+		t.Errorf("draw_ended %v, active %v", ended, s.eng.State().ActiveDraw != nil)
+	}
+	if r := s.report(true, c.t); r.Status != "degraded" || !strings.Contains(r.Detail, "no tanktemp input") {
+		t.Errorf("health %s %q", r.Status, r.Detail)
+	}
+}
+
+// Sweeps whose clock isn't synced are skipped by the engine, so they
+// don't count as tanktemp being heard: the draw still ends.
+func TestUnsyncedSweepsDoNotHideTanktempsSilence(t *testing.T) {
+	s, fake, c := newTestService(t, "water/hot")
+	lines := readLines(t, showerFixture)
+	i := 0
+	for ; i < len(lines); i++ {
+		c.t = lines[i].at
+		s.handle(mqttpub.Received{Topic: lines[i].topic, Payload: lines[i].payload})
+		if s.eng.State().ActiveDraw != nil {
+			break
+		}
+	}
+	n := len(fake.Snapshot())
+	stopped := c.t
+	for at := 30 * time.Second; at <= 10*time.Minute; at += 30 * time.Second {
+		c.t = stopped.Add(at)
+		for _, l := range lines[i+1:] {
+			if strings.HasSuffix(l.topic, "/state") {
+				p := strings.Replace(string(l.payload), `"clock_synced":true`, `"clock_synced":false`, 1)
+				s.handle(mqttpub.Received{Topic: l.topic, Payload: []byte(p)})
+				break
+			}
+		}
+		s.tick()
+	}
+	var ended bool
+	for _, m := range fake.Snapshot()[n:] {
+		ended = ended || (m.Topic == "water/hot/events" && strings.Contains(m.Payload, `"draw_ended"`))
+	}
+	if !ended {
+		t.Error("no draw_ended")
+	}
+}
+
+// With tanktemp never heard, time still moves on: the room's reading goes
+// stale.
+func TestTanktempNeverHeardStillTicks(t *testing.T) {
+	s, fake, c := newTestService(t, "water/hot")
+	c.t = time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
+	s.handle(mqttpub.Received{Topic: "zigbee2mqtt/climate_groundfloor_boiler-room", Payload: []byte(`{"temperature":20}`)})
+	c.t = c.t.Add(time.Hour)
+	s.tick()
+	m, ok := fake.Find("water/hot/state")
+	for _, x := range fake.Snapshot() {
+		if x.Topic == "water/hot/state" {
+			m = x
+		}
+	}
+	if !ok || !strings.Contains(m.Payload, `"ambient_c":null`) || !strings.Contains(m.Payload, `"timestamp":"2001-01-01T01:00:00.000Z"`) {
+		t.Errorf("last state %s", m.Payload)
 	}
 }

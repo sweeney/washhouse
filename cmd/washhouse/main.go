@@ -242,8 +242,9 @@ func run(ctx context.Context, s *service, d deps) error {
 }
 
 // report is /healthz: starting until the first input, degraded while the
-// broker is unreachable, while inputs are being dropped, or after a
-// silence; ok otherwise.
+// broker is unreachable, while inputs are being dropped, or while tanktemp
+// is silent (no synced sweep or meter message; the room and the
+// programmer don't count); ok otherwise.
 func (s *service) report(connected bool, now time.Time) health.Report {
 	h := s.health()
 	r := health.Report{Status: health.StatusOK, Version: s.version, Start: s.start, Now: now}
@@ -253,8 +254,10 @@ func (s *service) report(connected bool, now time.Time) health.Report {
 		why = append(why, "MQTT not connected")
 	case h.lastReceived.IsZero():
 		r.Status = health.StatusStarting
-	case now.Sub(h.lastReceived) > s.fresh.Silence:
-		why = append(why, fmt.Sprintf("no input for %v", now.Sub(h.lastReceived).Round(time.Second)))
+	case h.lastTanktemp.IsZero():
+		why = append(why, "no tanktemp input yet")
+	case now.Sub(h.lastTanktemp) > s.fresh.Silence:
+		why = append(why, fmt.Sprintf("no tanktemp input for %v", now.Sub(h.lastTanktemp).Round(time.Second)))
 	}
 	if h.dropped > 0 {
 		why = append(why, fmt.Sprintf("%d inputs dropped", h.dropped))
@@ -262,7 +265,11 @@ func (s *service) report(connected bool, now time.Time) health.Report {
 	if len(why) > 0 {
 		r.Status, r.Detail = health.StatusDegraded, strings.Join(why, "; ")
 	}
-	var eventAt, lastAt *string
+	var eventAt, lastAt, lastTT *string
+	if !h.lastTanktemp.IsZero() {
+		x := h.lastTanktemp.UTC().Format(time.RFC3339)
+		lastTT = &x
+	}
 	if !h.eventAt.IsZero() {
 		x := h.eventAt.UTC().Format(time.RFC3339Nano)
 		eventAt = &x
@@ -276,6 +283,7 @@ func (s *service) report(connected bool, now time.Time) health.Report {
 		{Key: "ready", Value: s.ready.Load()},
 		{Key: "event_time", Value: eventAt},
 		{Key: "last_input_at", Value: lastAt},
+		{Key: "last_tanktemp_at", Value: lastTT},
 		{Key: "inputs", Value: map[string]int{"received": h.received, "refused": h.refused,
 			"decode_errors": h.decodeErrors, "feed_errors": h.feedErrors, "dropped": h.dropped}},
 		{Key: "published", Value: h.published},

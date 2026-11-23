@@ -40,9 +40,12 @@ type service struct {
 	in    chan mqttpub.Received
 	ticks chan chan struct{}
 
-	// Owned by the loop: the event time of the latest input, and the wall
-	// time it arrived, from which a silence moves event time on.
+	// Owned by the loop: the event time of the latest input that moved it
+	// on, and the wall time it arrived, from which a silence moves event
+	// time on; and when tanktemp's latest dated input arrived, from which
+	// the silence is measured.
 	lastEvent, lastWall time.Time
+	lastTanktemp        time.Time
 
 	start   time.Time
 	version string
@@ -57,6 +60,7 @@ type healthStats struct {
 	received, refused, decodeErrors, feedErrors, dropped int
 	published, publishErrors                             int
 	lastReceived                                         time.Time // wall clock
+	lastTanktemp                                         time.Time // wall clock: tanktemp's latest dated input
 	eventAt                                              time.Time // the engine's event time
 }
 
@@ -102,9 +106,9 @@ func newService(lc localConfig, bc behaviour.Config, ec engine.Config, out mqttp
 	return s, nil
 }
 
-// subscribe makes every subscription, at QoS 1 (the meter's litres and the
-// events are published at 1; the broker sends each at the lower of the
-// two).
+// subscribe makes every subscription at QoS 1: the broker sends each
+// message at the lower of that and its publisher's (tanktemp's state and
+// meter go at 0, its status and the programmer's events at 1).
 func (s *service) subscribe(sub mqttpub.Subscriber) error {
 	for _, f := range s.src.Filters() {
 		if err := sub.Subscribe(f, 1, s.enqueue, s.lost); err != nil {
@@ -194,6 +198,10 @@ func (s *service) handle(r mqttpub.Received) {
 	if st.At.After(s.lastEvent) {
 		s.lastEvent, s.lastWall = st.At, now
 	}
+	if (m.State != nil && m.State.ClockSynced) || (m.Meter != nil && m.Meter.ClockSynced) {
+		s.lastTanktemp = now
+		s.count(func(h *healthStats) { h.lastTanktemp = now })
+	}
 	s.send(st, ev)
 }
 
@@ -203,19 +211,20 @@ func (s *service) send(st engine.State, ev []engine.Event) {
 	s.publish(st, ev)
 }
 
-// tick moves event time on once there has been no input for the silence:
-// to the latest input's time plus the wall time since it arrived, so a
-// draw still ends and the tanks still go stale when tanktemp has stopped.
-// Never before the first input.
+// tick moves event time on once tanktemp has been silent for the silence
+// (no synced sweep or meter message; a room reading moves event time but
+// ends no draw, PR #5 review): to the latest input's time plus the wall
+// time since it arrived, so a draw still ends and the tanks still go
+// stale when tanktemp has stopped. Never before the first input.
 func (s *service) tick() {
 	if s.lastWall.IsZero() {
 		return
 	}
-	since := s.wall().Sub(s.lastWall)
-	if since < s.fresh.Silence {
+	now := s.wall()
+	if !s.lastTanktemp.IsZero() && now.Sub(s.lastTanktemp) < s.fresh.Silence {
 		return
 	}
-	ev := s.eng.Tick(s.lastEvent.Add(since))
+	ev := s.eng.Tick(s.lastEvent.Add(now.Sub(s.lastWall)))
 	s.send(s.eng.State(), ev)
 }
 

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -186,6 +187,16 @@ func TestRun(t *testing.T) {
 		t.Errorf("state %s", m.Payload)
 	}
 
+	// tanktemp's meter, dated now: /healthz is ok only once tanktemp is heard.
+	for _, l := range readLines(t, showerFixture) {
+		if l.topic == "water/hot/tanktemp/meter" {
+			p := regexp.MustCompile(`"timestamp":"[^"]*"`).ReplaceAllString(string(l.payload), `"timestamp":"`+now+`"`)
+			c.Deliver(l.topic, []byte(p), true)
+			break
+		}
+	}
+	waitFor(t, "the meter", func() bool { return s.health().received == 2 })
+
 	n := len(statuses(c.Fake))
 	c.reconnected <- struct{}{}
 	waitFor(t, "the reconnect HEARTBEAT", func() bool { return len(statuses(c.Fake)) > n })
@@ -196,7 +207,7 @@ func TestRun(t *testing.T) {
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	for _, want := range []string{`"status": "ok"`, `"version": "abc1234"`, `"mqtt_connected": true`, `"ready": true`, `"received": 1`} {
+	for _, want := range []string{`"status": "ok"`, `"version": "abc1234"`, `"mqtt_connected": true`, `"ready": true`, `"received": 2`} {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("%s isn't in /healthz:\n%s", want, body)
 		}

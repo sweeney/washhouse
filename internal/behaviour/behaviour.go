@@ -60,8 +60,10 @@ type freshFile struct {
 }
 
 // Freshness is the service's freshness rules: Ahead and Stale are
-// ingest.Gate's; after Silence with no input, the service moves event
-// time on by its own clock.
+// ingest.Gate's (Stale must exceed tanktemp's sweep interval plus a
+// sweep's length, or a current retained sweep is refused); after Silence
+// with no dated tanktemp input, the service moves event time on by its own
+// clock.
 type Freshness struct {
 	Ahead, Stale, Silence time.Duration
 }

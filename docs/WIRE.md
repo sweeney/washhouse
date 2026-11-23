@@ -38,8 +38,9 @@ thermal state, and every draw.
   clock. washhouse runs on a host with a real-time clock, and skips
   tanktemp sweeps whose clock wasn't synced. One case moves event time
   without an input: after a silence (2 min in the plan's config) with no
-  input that moved it on, typically because tanktemp has stopped, washhouse
-  moves it on by its own clock, to the latest input's time plus the time
+  dated input from tanktemp (a sweep or meter message with a synced
+  clock; the room and the programmer don't count, since they end no
+  draw), washhouse moves it on by its own clock, to the latest input's time plus the time
   since that input arrived, so a running draw still ends and the tanks
   still go stale; `timestamp` is then that time. An input dated more than
   90 s (in the plan's config) past washhouse's clock is refused, since
