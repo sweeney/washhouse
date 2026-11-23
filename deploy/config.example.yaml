@@ -1,0 +1,21 @@
+# washhouse's local config: how to reach the broker and serve HTTP, and
+# where things are on the broker. Behaviour (the cylinders, the meter's
+# draw rules, every threshold) is in the behaviour document, not here.
+# The real file is /etc/washhouse/config.yaml (deploy/config.local.yaml,
+# gitignored); these values are examples.
+mqtt:
+  broker: tcp://broker.example:1883
+  client_id: washhouse            # optional: washhouse-<hostname>
+  username: washhouse             # optional
+  password_file: /etc/washhouse/mqtt-password   # optional; one line
+  # What washhouse publishes under (test/water/hot to try it).
+  base_topic: water/hot
+  tanktemp_topic: water/hot/tanktemp
+  boiler_topic: energy/boiler/sensor
+http:
+  listen: 127.0.0.1:8095
+# The behaviour document (testdata/behaviour.example.json has the plan's
+# values). Phase 5b reads it from the config service instead.
+behaviour_file: /etc/washhouse/behaviour.json
+# How often washhouse's status topic carries a HEARTBEAT.
+heartbeat: 15m

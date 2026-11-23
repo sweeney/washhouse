@@ -2,6 +2,10 @@ github.com/eclipse/paho.mqtt.golang v1.4.3 h1:2kwcUGn8seMUfWndX0hGbvH8r7crgcJguQ
 github.com/eclipse/paho.mqtt.golang v1.4.3/go.mod h1:CSYvoAlsMkhYOXh/oKyxa8EcBci6dVkLCbo5tTC1RIE=
 github.com/gorilla/websocket v1.5.0 h1:PPwGk2jz7EePpoHN/+ClbZu8SPxiqlu12wZP/3sWmnc=
 github.com/gorilla/websocket v1.5.0/go.mod h1:YR8l580nyteQvAITg2hZ9XVh4b55+EU/adAjf1fMHhE=
+github.com/sweeney/common/health v0.1.0 h1:49fMS3S3Ehb9FlKpCswR2IhE64NXlpbiAhXF20tb28Y=
+github.com/sweeney/common/health v0.1.0/go.mod h1:5XRzdXD2SjAadxV01VlniawGN6tubtfSercPBEBBxFE=
+github.com/sweeney/common/lifecycle v0.2.0 h1:HgM+tO5COStIas3EkwNBlkT/Nr59XysJOyCJW57hB3Y=
+github.com/sweeney/common/lifecycle v0.2.0/go.mod h1:2/anRm1xemwmmu1pj6zQqaLNWF9jrNPD17bUlO4h1hk=
 github.com/sweeney/common/mqttpub v0.2.0 h1:yjmcr+6YHcAZ7+mMxnGbQfAd8q6yWc6vDBnbj7jUoTY=
 github.com/sweeney/common/mqttpub v0.2.0/go.mod h1:0aURnyRQtAdf8kkq6/OsxPGZQqwBlSjUP+fcxC6HMGo=
 github.com/sweeney/common/wire v0.1.0 h1:ynqdtX8nNoNOEY8YlZmiGgTGZwM4oUEcbv29QLuzokc=
@@ -10,3 +14,6 @@ golang.org/x/net v0.8.0 h1:Zrh2ngAOFYneWTAIAPethzeaQLuHwhuBkuV6ZiRnUaQ=
 golang.org/x/net v0.8.0/go.mod h1:QVkue5JL9kW//ek3r6jTKnTFis1tRmNAW2P1shuFdJc=
 golang.org/x/sync v0.1.0 h1:wsuoTGHzEhffawBOhz5CYhcrV4IdKZbEyZjBMuTp12o=
 golang.org/x/sync v0.1.0/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
+gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
+gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
+gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=

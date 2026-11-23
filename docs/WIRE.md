@@ -36,7 +36,14 @@ thermal state, and every draw.
   sweep's, a meter message's, the programmer's switch time). The status
   topic is the exception: it describes the daemon, so it carries the wall
   clock. washhouse runs on a host with a real-time clock, and skips
-  tanktemp sweeps whose clock wasn't synced.
+  tanktemp sweeps whose clock wasn't synced. One case moves event time
+  without an input: after a silence (2 min in the plan's config) with no
+  input that moved it on, typically because tanktemp has stopped, washhouse
+  moves it on by its own clock, to the latest input's time plus the time
+  since that input arrived, so a running draw still ends and the tanks
+  still go stale; `timestamp` is then that time. An input dated more than
+  90 s (in the plan's config) past washhouse's clock is refused, since
+  event time never goes back.
 - **`schema`** names the payload and its major version:
   `net.swee.washhouse.{state,tank,event,status}.v1`. It is the first key.
 - Enumerations are lower case, except the status `event`, which matches
@@ -447,4 +454,8 @@ or vanished.
 
 ## Changes
 
+- **2026-11-23, v1 clarified (not a change to any payload):** `timestamp`
+  after a silence with no input, and the refusal of an input dated too far
+  ahead (Conventions). Both describe what the service does when
+  it runs; the bytes are unchanged.
 - **2026-11-23, v1 frozen:** after statehouse's review (no blockers; it reconciles cut draws from State and throttles on its side) and tanktemp's two reviews (12 points, all taken) on sweeney/washhouse#3. The code moved to `sweeney/common`'s `wire` module the same day; the bytes are unchanged.

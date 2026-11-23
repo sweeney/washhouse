@@ -12,6 +12,17 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: install mosquitto
+        run: sudo apt-get update && sudo apt-get install -y mosquitto
+      # Ubuntu's mosquitto AppArmor profile stops it reading the tests'
+      # configs under /tmp (as in sweeney/common's mqttpub workflow).
+      - name: let mosquitto read the tests' configs
+        run: |
+          ls /etc/apparmor.d/ | grep -i mosquitto || echo "no mosquitto AppArmor profile"
+          for p in /etc/apparmor.d/*mosquitto*; do
+            [ -f "$p" ] && sudo apparmor_parser -R "$p" && echo "unloaded $p"
+          done
+          true
       - name: build
         run: go build -trimpath ./...
       - name: vet

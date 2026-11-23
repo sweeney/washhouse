@@ -291,7 +291,12 @@ Moving statehouse, greenhouse and countinghouse onto 3 and 4 is a follow-up, not
    - Phase 3: after the 50 L shower the first power back was still −1.33 kW of settle tail. Either raise `power_settle` to 20 min or more, or say in WIRE.md that power just after a draw can still carry it. Decide with more showers.
    - After the valve test: re-fit the 0.11/0.89 outlet split from the extra unmasked draws. The merged usable steps when the right tank's strat plateau crosses about 36.8 °C, which a better split and profile will smooth.
 
-5. **Service shell.** Ingest, publish, lifecycle, health, API, Influx, config, plus the remote-config namespace JSON for the user to write.
+5. **Service shell.** Ingest, publish, lifecycle, health, API, Influx, config, plus the remote-config namespace JSON for the user to write. In four PRs:
+   - **5a, ingest and the loop.** `internal/behaviour` (washreplay's strict config, shared: the same document becomes the namespace in 5b), `internal/ingest` (subscriptions, decoding by topic, `Feed`, and a freshness gate: an input its publisher dates more than 90 s past the wall clock is refused, since event time never goes back; a retained sweep more than 90 s old is refused, as statehouse does; nothing rests on the retained flag), and `cmd/washhouse`: a local YAML config (broker, HTTP, and the topics: `base_topic`, `tanktemp_topic`, `boiler_topic` are local, not in the namespace, so a test run can publish under `test/water/hot` against the real behaviour), one loop goroutine owning the engine (paho's handlers only queue), `lifecycle` for STARTUP/HEARTBEAT/SHUTDOWN and a HEARTBEAT on each reconnect, and `/healthz`. Event time moves by the clock only after `freshness.silence` with no input (WIRE.md, Conventions). The service publishes exactly what `washreplay -wire` does for the same recording (a test). Until 5b the behaviour document is a local file.
+   - **5b, config.** The `washhouse` namespace through `remoteconfig`, keep-last-good on SIGHUP, refusal to boot cold; the namespace JSON for the owner.
+   - **5c, API.** `web/apiauth` and `web/serve` extracted to common; the OpenAPI spec and its tests.
+   - **5d, Influx.**
+   - Still open: the Live bit for boiler-sensor's will (above).
 6. **Deploy.** Use the swee:deploy-service skill: idempotent `deploy.sh` and `bootstrap.sh` with `--check` and `--yes`, tested before use. Host: the home server (named only in gitignored `deploy/host`); settle commit dates before deploying.
 7. **Statehouse PRs** (1→4 above).
 8. **Later:** time-to-empty and time-to-full forecasts, a daily usage summary, a hwplan-style programme advisor, and watching the before/after lagging protocol through the UA fit.
