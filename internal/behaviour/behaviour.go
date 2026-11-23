@@ -40,6 +40,7 @@ type Config struct {
 	BoilerHeartbeat        duration     `json:"boiler_heartbeat"`
 	BoilerMissedHeartbeats float64      `json:"boiler_missed_heartbeats"`
 	RecentDraws            int          `json:"recent_draws"`
+	Freshness              freshFile    `json:"freshness"`
 	ColdC                  float64      `json:"cold_c"`
 	KWhPerLitreK           float64      `json:"heat_capacity_kwh_per_litre_k"`
 	Vessel                 vesselFile   `json:"vessel"`
@@ -48,6 +49,40 @@ type Config struct {
 	Meter                  meterFile    `json:"meter"`
 	Thermal                thermalFile  `json:"thermal"`
 	Draw                   drawFile     `json:"draw"`
+}
+
+// freshFile is the service's freshness rules (internal/ingest's Gate, and
+// how long without an input before event time moves on by the clock).
+type freshFile struct {
+	Ahead   duration `json:"ahead"`
+	Stale   duration `json:"stale"`
+	Silence duration `json:"silence"`
+}
+
+// Freshness is the service's freshness rules: Ahead and Stale are
+// ingest.Gate's; after Silence with no input, the service moves event
+// time on by its own clock.
+type Freshness struct {
+	Ahead, Stale, Silence time.Duration
+}
+
+// Fresh is fc's freshness rules.
+func (fc Config) Fresh() Freshness {
+	return Freshness{Ahead: time.Duration(fc.Freshness.Ahead), Stale: time.Duration(fc.Freshness.Stale),
+		Silence: time.Duration(fc.Freshness.Silence)}
+}
+
+// validate refuses a rule that isn't more than 0.
+func (f Freshness) validate() error {
+	for _, x := range []struct {
+		name string
+		d    time.Duration
+	}{{"ahead", f.Ahead}, {"stale", f.Stale}, {"silence", f.Silence}} {
+		if x.d <= 0 {
+			return fmt.Errorf("freshness.%s is %v; it must be more than 0", x.name, x.d)
+		}
+	}
+	return nil
 }
 
 type vesselFile struct {
@@ -158,6 +193,9 @@ func Load(r io.Reader) (Config, engine.Config, error) {
 	}
 	ec, err := fc.Engine()
 	if err != nil {
+		return Config{}, engine.Config{}, fmt.Errorf("config: %w", err)
+	}
+	if err := fc.Fresh().validate(); err != nil {
 		return Config{}, engine.Config{}, fmt.Errorf("config: %w", err)
 	}
 	return fc, ec, nil

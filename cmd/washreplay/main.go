@@ -13,7 +13,7 @@
 // Recordings are mosquitto_sub `-F '%I %t %p'` logs, gzipped (.gz) or
 // plain, as internal/replay reads them; several are fed in order through
 // one engine. The engine's config comes from -config, a JSON file
-// (testdata/washreplay-config.example.json has the plan's values); nothing
+// (testdata/behaviour.example.json has the plan's values); nothing
 // about the cylinders or the thresholds is built in.
 //
 // After the last recording, if a draw is still running or waiting for its

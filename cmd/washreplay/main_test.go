@@ -17,7 +17,7 @@ var update = flag.Bool("update", false, "rewrite the golden files from this run"
 
 const (
 	fixture     = "../../testdata/fixtures/shower-layered.log.gz"
-	examplePath = "../../testdata/washreplay-config.example.json"
+	examplePath = "../../testdata/behaviour.example.json"
 )
 
 func runOK(t *testing.T, args ...string) string {

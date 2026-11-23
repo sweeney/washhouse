@@ -17,7 +17,7 @@ import (
 	"github.com/sweeney/washhouse/internal/vessel"
 )
 
-const examplePath = "../../testdata/washreplay-config.example.json"
+const examplePath = "../../testdata/behaviour.example.json"
 
 // planConfig is internal/engine's planConfig (its helpers_test.go says
 // where each value comes from), repeated here so the example file is
@@ -78,6 +78,9 @@ func TestExampleConfigIsThePlans(t *testing.T) {
 	if fc.AmbientTopic != "zigbee2mqtt/climate_groundfloor_boiler-room" {
 		t.Errorf("ambient topic %q", fc.AmbientTopic)
 	}
+	if got, want := fc.Fresh(), (Freshness{Ahead: 90 * time.Second, Stale: 90 * time.Second, Silence: 2 * time.Minute}); got != want {
+		t.Errorf("freshness %+v, want %+v", got, want)
+	}
 }
 
 func TestConfigIsStrict(t *testing.T) {
@@ -113,6 +116,10 @@ func TestConfigIsStrict(t *testing.T) {
 		{"missing gaps", `"gaps": [{"low": "lower", "high": "middle"}]`, `"gaps_x": []`, "gaps"},
 		{"unknown gap key", `{"low": "lower", "high": "middle"}`, `{"low": "lower", "high": "middle", "mm": 1}`, "mm"},
 		{"gap position unknown", `{"low": "lower", "high": "middle"}`, `{"low": "lower", "high": "attic"}`, "attic"},
+		{"missing freshness", `"silence": "2m"`, `"silence_x": "2m"`, "silence"},
+		{"no silence", `"silence": "2m"`, `"silence": "0s"`, "silence"},
+		{"no ahead", `"ahead": "90s"`, `"ahead": "0s"`, "ahead"},
+		{"negative stale", `"stale": "90s"`, `"stale": "-1s"`, "stale"},
 		{"old gap key", `"thermocline_c": 40,`, `"thermocline_c": 40, "gap_low_mm": 400,`, "gap_low_mm"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

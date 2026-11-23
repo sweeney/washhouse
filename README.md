@@ -39,7 +39,7 @@ Replay a recording (gzipped or plain) through the engine; the config holds
 every threshold and the cylinders' geometry:
 
 ```
-go run ./cmd/washreplay -config testdata/washreplay-config.example.json \
+go run ./cmd/washreplay -config testdata/behaviour.example.json \
     [-state-every 10m] [-json] testdata/fixtures/shower-layered.log.gz
 ```
 
