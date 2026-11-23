@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"regexp"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -27,6 +28,8 @@ type localConfig struct {
 	HTTP         httpConfig     `yaml:"http"`
 	RemoteConfig remoteConfig   `yaml:"remote_config"`
 	Identity     identityConfig `yaml:"identity"`
+	Site         siteConfig     `yaml:"site"`
+	Influx       influxConfig   `yaml:"influx"` // optional: none, no history
 	Heartbeat    duration       `yaml:"heartbeat"`
 }
 
@@ -100,6 +103,7 @@ func loadLocal(b []byte) (localConfig, error) {
 		{"remote_config.base_url", c.RemoteConfig.BaseURL}, {"remote_config.namespace", c.RemoteConfig.Namespace},
 		{"identity.base_url", c.Identity.BaseURL}, {"identity.client_id", c.Identity.ClientID},
 		{"identity.client_secret_file", c.Identity.ClientSecretFile},
+		{"site.id", c.Site.ID},
 	} {
 		if r.v == "" {
 			return localConfig{}, fmt.Errorf("%s is required", r.key)
@@ -113,6 +117,22 @@ func loadLocal(b []byte) (localConfig, error) {
 	} {
 		if err := secureURL(r.v); err != nil {
 			return localConfig{}, fmt.Errorf("%s: %w", r.key, err)
+		}
+	}
+	if !siteID.MatchString(c.Site.ID) {
+		return localConfig{}, fmt.Errorf("site.id %q must match %s", c.Site.ID, siteID)
+	}
+	if c.Influx != (influxConfig{}) {
+		for _, r := range []struct{ key, v string }{
+			{"influx.url", c.Influx.URL}, {"influx.org", c.Influx.Org},
+			{"influx.bucket", c.Influx.Bucket}, {"influx.token_file", c.Influx.TokenFile},
+		} {
+			if r.v == "" {
+				return localConfig{}, fmt.Errorf("%s is required when influx is set", r.key)
+			}
+		}
+		if err := secureURL(c.Influx.URL); err != nil {
+			return localConfig{}, fmt.Errorf("influx.url: %w", err)
 		}
 	}
 	switch c.HTTP.Audience {
@@ -137,6 +157,9 @@ func loadLocal(b []byte) (localConfig, error) {
 	return c, nil
 }
 
+// siteID is a site's id, as in the config service's sites namespace.
+var siteID = regexp.MustCompile(`^[a-z0-9_-]+$`)
+
 // secureURL refuses a URL a bearer token or a client secret would cross
 // in cleartext: https, or http to this host (for tests).
 func secureURL(s string) error {
@@ -156,4 +179,17 @@ func secureURL(s string) error {
 // behaviour document.
 func (c localConfig) sources(ambient string) ingest.Sources {
 	return ingest.Sources{Tanktemp: []string{c.MQTT.TanktempTopic}, Boiler: c.MQTT.BoilerTopic, Ambient: ambient}
+}
+
+// influxConfig is where the history goes; the section is optional.
+type influxConfig struct {
+	URL       string `yaml:"url"`
+	Org       string `yaml:"org"`
+	Bucket    string `yaml:"bucket"`
+	TokenFile string `yaml:"token_file"`
+}
+
+// siteConfig is the property washhouse reports for.
+type siteConfig struct {
+	ID string `yaml:"id"`
 }

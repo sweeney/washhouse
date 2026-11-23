@@ -28,6 +28,7 @@ var core = []string{
 	"internal/draw",
 	"internal/engine",
 	"internal/estimate",
+	"internal/influx", // builds points; the service writes them
 	"internal/ingest", // decodes and gates; the service subscribes
 	"internal/meter",
 	"internal/profile",
@@ -50,6 +51,7 @@ var forbiddenDeps = []string{
 	module + "/internal/httpapi",
 	"github.com/eclipse/paho.mqtt.golang",
 	"github.com/sweeney/common/mqttpub",
+	"github.com/influxdata/influxdb-client-go/v2", // internal/influx builds points; cmd writes them
 }
 
 func goList(t *testing.T, format, pkg string, deps bool) []string {

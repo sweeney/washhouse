@@ -31,6 +31,9 @@ func TestExampleLocalConfigLoads(t *testing.T) {
 		RemoteConfig: remoteConfig{BaseURL: "https://config.example", Namespace: "washhouse"},
 		Identity: identityConfig{BaseURL: "https://id.example", ClientID: "washhouse",
 			ClientSecretFile: "/etc/washhouse/client-secret"},
+		Site: siteConfig{ID: "home"},
+		Influx: influxConfig{URL: "http://localhost:8086", Org: "home", Bucket: "washhouse",
+			TokenFile: "/etc/washhouse/influx-token"},
 		Heartbeat: duration(15 * time.Minute),
 	}
 	if c != want {
@@ -74,6 +77,14 @@ func TestLocalConfigIsStrict(t *testing.T) {
 		{"base inside tanktemp's", "base_topic: water/hot", "base_topic: water/hot/tanktemp/x", "tanktemp"},
 		{"wildcard source", "tanktemp_topic: water/hot/tanktemp", "tanktemp_topic: water/hot/#", "wildcard"},
 		{"two documents", "heartbeat: 15m", "heartbeat: 15m\n---\nheartbeat: 5m", "one document"},
+		{"no site", "site:\n  id: home\n", "", "site.id"},
+		{"a bad site", "  id: home", "  id: Home Site", "site.id"},
+		{"no influx url", "  url: http://localhost:8086\n", "", "influx.url"},
+		{"no influx org", "  org: home\n", "", "influx.org"},
+		{"no influx bucket", "  bucket: washhouse\n", "", "influx.bucket"},
+		{"no influx token", "  token_file: /etc/washhouse/influx-token   # one line\n", "", "influx.token_file"},
+		{"a token in the file", "  token_file: /etc/washhouse/influx-token", "  token: hunter2", "token"},
+		{"influx in cleartext", "url: http://localhost:8086", "url: http://influx.example:8086", "https"},
 		{"a password in the file", "  password_file: /etc/washhouse/mqtt-password", "  password: hunter2", "password"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -103,7 +114,8 @@ func TestLoopbackMayBeCleartext(t *testing.T) {
 func TestOptionalLocalKeys(t *testing.T) {
 	ex := readLocalExample(t)
 	for _, drop := range []string{"  client_id: washhouse            # optional: washhouse-<hostname>\n",
-		"  username: washhouse             # optional\n", "  public_url: https://washhouse.example   # optional: the API spec's server\n", "  password_file: /etc/washhouse/mqtt-password   # optional; one line\n"} {
+		"  username: washhouse             # optional\n",
+		"influx:\n  url: http://localhost:8086\n  org: home\n  bucket: washhouse\n  token_file: /etc/washhouse/influx-token   # one line\n", "  public_url: https://washhouse.example   # optional: the API spec's server\n", "  password_file: /etc/washhouse/mqtt-password   # optional; one line\n"} {
 		if !strings.Contains(ex, drop) {
 			t.Fatalf("%q isn't in the example", drop)
 		}

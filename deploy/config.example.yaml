@@ -30,5 +30,16 @@ identity:
   base_url: https://id.example
   client_id: washhouse
   client_secret_file: /etc/washhouse/client-secret   # one line
+# The property this washhouse reports for: the site tag on every Influx
+# point (an id in the config service's sites namespace, as statehouse's).
+site:
+  id: home
+# Where the history goes (optional: leave the section out for none). The
+# measurements are in the README.
+influx:
+  url: http://localhost:8086
+  org: home
+  bucket: washhouse
+  token_file: /etc/washhouse/influx-token   # one line
 # How often washhouse's status topic carries a HEARTBEAT.
 heartbeat: 15m

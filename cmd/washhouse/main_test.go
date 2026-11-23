@@ -20,6 +20,8 @@ import (
 	"github.com/sweeney/common/mqttpub"
 	"github.com/sweeney/common/mqttpub/mqttpubtest"
 	"github.com/sweeney/common/wire/washhouse"
+
+	"github.com/sweeney/washhouse/internal/influx"
 )
 
 func TestVersionFlagPrintsVersion(t *testing.T) {
@@ -55,8 +57,12 @@ func writeConfig(t *testing.T, cs *configService) string {
 	if err := os.WriteFile(secret, []byte("s3cret\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	token := filepath.Join(t.TempDir(), "influx-token")
+	if err := os.WriteFile(token, []byte("tok\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	for from, to := range map[string]string{"https://config.example": cs.URL, "https://id.example": cs.URL,
-		"/etc/washhouse/client-secret": secret} {
+		"/etc/washhouse/client-secret": secret, "/etc/washhouse/influx-token": token} {
 		if !strings.Contains(s, from) {
 			t.Fatalf("%q isn't in the example", from)
 		}
@@ -78,7 +84,7 @@ func TestCheckConfig(t *testing.T) {
 	}
 	for _, want := range []string{": ok: 2 tanks (hot_water_cylinder_left, hot_water_cylinder_right), meter hot_water_meter",
 		"reading water/hot/tanktemp and energy/boiler/sensor", "publishing to water/hot on tcp://broker.example:1883",
-		"behaviour from washhouse on " + cs.URL} {
+		"behaviour from washhouse on " + cs.URL, "history to washhouse on http://localhost:8086 as site home"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("%q isn't in %q", want, out.String())
 		}
@@ -90,6 +96,21 @@ func TestCheckConfigRefusesABadNamespace(t *testing.T) {
 	cs.set(`{"colour":"blue"}`, http.StatusOK)
 	var out, errOut bytes.Buffer
 	if code := realMain([]string{"-config", writeConfig(t, cs), "-check-config"}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "colour") {
+		t.Errorf("exit %d, stderr %q", code, errOut.String())
+	}
+}
+
+// -check-config reads the Influx token, as a start would.
+func TestCheckConfigRefusesAMissingInfluxToken(t *testing.T) {
+	cs := newConfigService(t)
+	p := writeConfig(t, cs)
+	b, _ := os.ReadFile(p)
+	b = regexp.MustCompile(`token_file: \S+`).ReplaceAll(b, []byte("token_file: /nonexistent/influx-token"))
+	if err := os.WriteFile(p, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := realMain([]string{"-config", p, "-check-config"}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "influx.token_file") {
 		t.Errorf("exit %d, stderr %q", code, errOut.String())
 	}
 }
@@ -197,10 +218,12 @@ func TestRun(t *testing.T) {
 	sig, hup := make(chan os.Signal, 1), make(chan os.Signal, 1)
 	tick := make(chan time.Time)
 	done := make(chan error, 1)
+	fi := newFakeInflux()
+	sink := newInfluxSink(fi, nil, influx.Mapper{Base: "water/hot", Site: "home"}, time.Now)
 	go func() {
 		done <- run(context.Background(), s, deps{Conn: c, Wall: time.Now, Listener: ln, Signals: sig, Tick: tick,
 			HeartbeatTick: make(chan time.Time), Logger: log.New(logs, "", 0), Version: "abc1234", Remote: r, Reload: hup,
-			Auth: tokenGate})
+			Auth: tokenGate, Influx: sink})
 	}()
 
 	waitFor(t, "STARTUP", func() bool { return len(statuses(c.Fake)) >= 1 })
@@ -223,6 +246,15 @@ func TestRun(t *testing.T) {
 	if m, _ := c.Find("water/hot/state"); !strings.Contains(m.Payload, `"boiler":{"hw":true,"ch":false}`) {
 		t.Errorf("state %s", m.Payload)
 	}
+	// ... and its history.
+	waitFor(t, "the state's point", func() bool {
+		for _, l := range fi.delivered() {
+			if strings.HasPrefix(l, "hot_water_system,site=home ") && strings.Contains(l, "boiler_hw=1i") {
+				return true
+			}
+		}
+		return false
+	})
 
 	// tanktemp's meter, dated now: /healthz is ok only once tanktemp is heard.
 	for _, l := range readLines(t, showerFixture) {
@@ -269,7 +301,8 @@ func TestRun(t *testing.T) {
 	if code, b := api("ok"); code != http.StatusOK || !strings.Contains(b, `"schema":"net.swee.washhouse.state.v1"`) {
 		t.Errorf("/api/v1/state: %d %s", code, b)
 	}
-	for _, want := range []string{`"status": "ok"`, `"version": "abc1234"`, `"mqtt_connected": true`, `"ready": true`, `"received": 2`} {
+	for _, want := range []string{`"status": "ok"`, `"version": "abc1234"`, `"mqtt_connected": true`, `"ready": true`, `"received": 2`,
+		`"influx": {`, `"last_queued_at": "`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("%s isn't in /healthz:\n%s", want, body)
 		}
@@ -310,6 +343,9 @@ func TestRun(t *testing.T) {
 	}
 	if !c.Closed {
 		t.Error("the connection wasn't closed")
+	}
+	if fi.flushed != 1 {
+		t.Errorf("Influx flushed %d times at shutdown", fi.flushed)
 	}
 }
 

@@ -111,12 +111,24 @@ func realMain(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "washhouse: the behaviour namespace from %s: %v; refusing to start without it\n", r.base, err)
 		return 1
 	}
+	var hist *influxSink
+	if lc.Influx != (influxConfig{}) {
+		if hist, err = dialInflux(lc.Influx, lc.Site.ID, lc.MQTT.BaseTopic, time.Now); err != nil {
+			fmt.Fprintf(stderr, "washhouse: %v\n", err)
+			return 1
+		}
+	}
 	if *check {
-		fmt.Fprintf(stdout, "%s: ok: %s, reading %s and %s, publishing to %s on %s, behaviour from %s on %s\n",
-			*path, describe(d), lc.MQTT.TanktempTopic, lc.MQTT.BoilerTopic, lc.MQTT.BaseTopic, lc.MQTT.Broker, r.ns, r.base)
+		history := "no history"
+		if hist != nil {
+			history = fmt.Sprintf("history to %s on %s as site %s", lc.Influx.Bucket, lc.Influx.URL, lc.Site.ID)
+		}
+		fmt.Fprintf(stdout, "%s: ok: %s, reading %s and %s, publishing to %s on %s, behaviour from %s on %s, %s\n",
+			*path, describe(d), lc.MQTT.TanktempTopic, lc.MQTT.BoilerTopic, lc.MQTT.BaseTopic, lc.MQTT.Broker, r.ns, r.base, history)
+		hist.shutdown(time.Second)
 		return 0
 	}
-	if err := serve(lc, r, d, hup); err != nil {
+	if err := serve(lc, r, d, hup, hist); err != nil {
 		fmt.Fprintf(stderr, "washhouse: %v\n", err)
 		return 1
 	}
@@ -145,7 +157,7 @@ func readConfig(path string) (localConfig, error) {
 }
 
 // serve builds the real dependencies and runs.
-func serve(lc localConfig, r *remote, d document, hup <-chan os.Signal) error {
+func serve(lc localConfig, r *remote, d document, hup <-chan os.Signal, hist *influxSink) error {
 	logger := log.New(os.Stderr, "", 0) // journald adds timestamps
 	id := lc.MQTT.ClientID
 	if id == "" {
@@ -180,7 +192,7 @@ func serve(lc localConfig, r *remote, d document, hup <-chan os.Signal) error {
 	}
 	return run(context.Background(), s, deps{Conn: pub, Wall: time.Now, Listener: ln, Logger: logger,
 		Version: version, Heartbeat: time.Duration(lc.Heartbeat), Broker: lc.MQTT.Broker, ClientID: id,
-		Remote: r, Reload: hup, Auth: mw, PublicURL: lc.HTTP.PublicURL})
+		Remote: r, Reload: hup, Auth: mw, PublicURL: lc.HTTP.PublicURL, Influx: hist})
 }
 
 // newAuth is the API's middleware: a token identity signed, a user's
@@ -245,12 +257,16 @@ type deps struct {
 
 	Auth      func(http.Handler) http.Handler // the API's; nil: no API (tests)
 	PublicURL string
+
+	Influx *influxSink // the history; nil: none
 }
 
 // run is washhouse: subscribe, connect, then the loop under lifecycle
 // until a signal; SHUTDOWN is the last status.
 func run(ctx context.Context, s *service, d deps) error {
-	s.version, s.start, s.remote = d.Version, d.Wall(), d.Remote
+	s.version, s.start, s.remote, s.hist = d.Version, d.Wall(), d.Remote, d.Influx
+	// Deferred first, so it runs last: once the loop has stopped writing.
+	defer s.hist.shutdown(influxWait)
 	if err := s.subscribe(d.Conn); err != nil {
 		return err
 	}
@@ -421,6 +437,7 @@ func (s *service) report(connected bool, now time.Time) health.Report {
 		{Key: "publish_errors", Value: h.publishErrors},
 		{Key: "remote_config", Value: namespaces},
 		{Key: "behaviour_applied_at", Value: applied},
+		{Key: "influx", Value: s.hist.report()},
 	}
 	return r
 }

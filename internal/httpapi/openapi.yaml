@@ -38,8 +38,9 @@ paths:
       summary: Health, in common/health's shape. Public.
       description: |
         ok, starting or degraded, with the broker connection, each input's
-        age and counts, the behaviour namespace's last fetch, and when the
-        running behaviour was applied.
+        age and counts, the behaviour namespace's last fetch, when the
+        running behaviour was applied, and the Influx writer's counts
+        (null when it is off; a failure doesn't degrade the status).
       security: []
       responses:
         "200":

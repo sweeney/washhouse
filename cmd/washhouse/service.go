@@ -44,6 +44,7 @@ type service struct {
 	running
 
 	remote *remote           // nil: no namespace (tests)
+	hist   *influxSink       // nil: no history; the loop writes
 	rec    *httpapi.Recorder // what the API serves; the loop records
 
 	in      chan mqttpub.Received
@@ -388,6 +389,7 @@ func (s *service) publish(st engine.State, ev []engine.Event) {
 		s.log.Printf("publish: %v", err)
 		return
 	}
+	s.hist.write(msgs) // what washhouse found, whether or not the broker took it
 	for _, m := range msgs {
 		err := s.out.Publish(mqttpub.Message{Topic: m.Topic, Payload: string(m.Payload), Retained: m.Retained, QOS: m.QoS})
 		s.count(func(h *healthStats) {
