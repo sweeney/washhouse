@@ -476,3 +476,26 @@ func TestTanktempNeverHeardStillTicks(t *testing.T) {
 		t.Errorf("last state %s", m.Payload)
 	}
 }
+
+// tanktemp's meter is optional: synced sweeps alone are tanktemp heard
+// (tanktemp's re-review of #5).
+func TestSweepsAloneAreTanktempHeard(t *testing.T) {
+	s, fake, c := newTestService(t, "water/hot")
+	var last time.Time
+	for _, l := range readLines(t, showerFixture)[:300] {
+		if strings.HasSuffix(l.topic, "/state") {
+			c.t, last = l.at, l.at
+			s.handle(mqttpub.Received{Topic: l.topic, Payload: l.payload})
+		}
+	}
+	c.t = last.Add(time.Second)
+	if r := s.report(true, c.t); r.Status != "ok" {
+		t.Errorf("health %s %q", r.Status, r.Detail)
+	}
+	n := len(fake.Snapshot())
+	c.t = last.Add(s.fresh.Silence - time.Second)
+	s.tick()
+	if len(fake.Snapshot()) != n {
+		t.Errorf("ticked within the silence: %s", wireLines(fake.Snapshot()[n:]))
+	}
+}
