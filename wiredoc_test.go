@@ -4,21 +4,25 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/sweeney/common/wire/washhouse"
 )
 
 // Every example in docs/WIRE.md is a message common/wire decodes and
-// re-encodes to exactly the same bytes, once compacted: the document
-// can't drift from the code that speaks it. (common/wire's goldens are
-// these examples too.)
+// re-encodes to exactly the same bytes, once compacted, and is one of the
+// goldens of the pinned common/wire module: the document can't drift from
+// the code that speaks it, nor from the bytes that pin it.
 func TestWireDocExamplesRoundTrip(t *testing.T) {
 	doc, err := os.ReadFile("docs/WIRE.md")
 	if err != nil {
 		t.Fatal(err)
 	}
+	goldens := pinnedGoldens(t)
 	blocks := regexp.MustCompile("(?s)```json\n(.*?)```").FindAllSubmatch(doc, -1)
 	if len(blocks) < 8 {
 		t.Fatalf("WIRE.md has %d json examples, want at least 8", len(blocks))
@@ -65,6 +69,9 @@ func TestWireDocExamplesRoundTrip(t *testing.T) {
 		if !bytes.Equal(got, want) {
 			t.Errorf("example doesn't round-trip:\n doc %s\ngot %s", want, got)
 		}
+		if !goldens[string(want)] {
+			t.Errorf("example is no golden of the pinned common/wire:\n%s", want)
+		}
 	}
 }
 
@@ -73,4 +80,27 @@ func check(t *testing.T, err error) {
 	if err != nil {
 		t.Error(err)
 	}
+}
+
+// pinnedGoldens reads common/wire/washhouse's goldens from the module
+// go.mod pins (the module cache, offline).
+func pinnedGoldens(t *testing.T) map[string]bool {
+	t.Helper()
+	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "github.com/sweeney/common/wire").Output()
+	if err != nil {
+		t.Fatalf("locating common/wire: %v", err)
+	}
+	files, _ := filepath.Glob(filepath.Join(strings.TrimSpace(string(out)), "washhouse", "testdata", "*.golden"))
+	if len(files) < 8 {
+		t.Fatalf("%d goldens in the pinned common/wire", len(files))
+	}
+	g := map[string]bool{}
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		g[string(b)] = true
+	}
+	return g
 }

@@ -3,7 +3,8 @@
 This document is normative. The golden files of `sweeney/common`'s
 `wire/washhouse` package (`wire/washhouse/testdata/`) pin these bytes
 exactly, and a diff there is a breaking change; every example here must
-decode and re-encode to itself through that package (`wiredoc_test.go`). New fields are additive. Removing or renaming a field
+equal one of those goldens (as pinned in `go.mod`) and decode and re-encode
+to itself through that package (`wiredoc_test.go`). New fields are additive. Removing or renaming a field
 is a major change, announced here first (Changes, below), and bumps the
 `schema` version.
 
