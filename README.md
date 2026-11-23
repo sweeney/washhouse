@@ -29,8 +29,8 @@ next.
 | `internal/` | The pure core: decoders, the meter consumer, the cylinder model, thermal tracking, draw attribution, `engine`, which wires them into the system's state and events, and `publish`, which turns those into the wire messages of `common/wire/washhouse` (in `sweeney/common`; its goldens pin WIRE.md). The decoders for washhouse's inputs are `common/wire/tanktemp` and `common/wire/boiler`. |
 | `cmd/washreplay` | Replays recordings through the engine and prints its events and states. |
 | `cmd/washhouse` | The service: subscribes, runs the engine, publishes, and serves `/healthz`. |
-| `deploy/config.example.yaml` | The service's local config: the broker, HTTP, and the topics. |
-| `testdata/behaviour.example.json` | The behaviour document (cylinders, meter rules, thresholds) with the plan's values. |
+| `deploy/config.example.yaml` | The service's local config: the broker, HTTP, the topics, and where the behaviour document is (the config service, read with identity client credentials). |
+| `testdata/behaviour.example.json` | The behaviour document (cylinders, meter rules, thresholds) with the plan's values: the shape of the `washhouse` namespace. |
 
 ## Development
 
@@ -51,13 +51,32 @@ With `-wire` instead of `-json`, it prints every message the service would
 publish, as `topic payload` lines (docs/WIRE.md).
 
 Run the service against a broker, publishing under a test prefix (set
-`base_topic: test/water/hot` in a copy of `deploy/config.example.yaml`):
+`base_topic: test/water/hot` in a copy of `deploy/config.example.yaml`).
+Its behaviour is the config service's namespace (`remote_config`), read
+as an identity client; washhouse refuses to start without it.
+`-check-config` checks the local file and fetches the namespace:
 
 ```
 go run ./cmd/washhouse -config my-config.yaml -check-config
 go run ./cmd/washhouse -config my-config.yaml
 curl -s localhost:8095/healthz
 ```
+
+To change the behaviour, check the new document with the installed build
+first, write it to the namespace, then send SIGHUP:
+
+```
+washhouse -check-behaviour new-behaviour.json
+kill -HUP "$(pidof washhouse)"   # the unit's reload, once phase 6 has one
+```
+
+On SIGHUP, washhouse fetches the namespace again. A document it refuses
+(invalid, or a new `ambient_topic`, which needs a restart because the
+subscriptions are made at start) leaves it running the last good one, and
+`/healthz` is degraded until a good one lands. An unchanged document
+changes nothing. A changed one starts the engine again, which consumers
+see as a restart (docs/WIRE.md, Delivery): the UA fit goes back to its
+priors, and a draw in progress gets no `draw_ended`.
 
 The tools tests need `python3`, `mosquitto`, `mosquitto_sub`/`mosquitto_pub`
 and `shellcheck`. Conventions for changes are in [`CLAUDE.md`](CLAUDE.md).

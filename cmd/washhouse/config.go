@@ -5,23 +5,42 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/sweeney/common/remoteconfig"
 
 	"github.com/sweeney/washhouse/internal/ingest"
 	"github.com/sweeney/washhouse/internal/publish"
 )
 
 // localConfig is the local YAML file (deploy/config.example.yaml): the
-// broker, HTTP, and where things are on the broker. Unknown keys are
-// refused (yaml.v3 also refuses a duplicate), every key is required but
-// the three optional MQTT ones, and the topics are checked.
+// broker, HTTP, where things are on the broker, and where the behaviour
+// document is. Unknown keys are refused (yaml.v3 also refuses a
+// duplicate), every key is required but the three optional MQTT ones, and
+// the topics and URLs are checked.
 type localConfig struct {
-	MQTT          mqttConfig `yaml:"mqtt"`
-	HTTP          httpConfig `yaml:"http"`
-	BehaviourFile string     `yaml:"behaviour_file"`
-	Heartbeat     duration   `yaml:"heartbeat"`
+	MQTT         mqttConfig     `yaml:"mqtt"`
+	HTTP         httpConfig     `yaml:"http"`
+	RemoteConfig remoteConfig   `yaml:"remote_config"`
+	Identity     identityConfig `yaml:"identity"`
+	Heartbeat    duration       `yaml:"heartbeat"`
+}
+
+// remoteConfig is the config service and the behaviour namespace on it.
+type remoteConfig struct {
+	BaseURL   string `yaml:"base_url"`
+	Namespace string `yaml:"namespace"`
+}
+
+// identityConfig is the client washhouse reads the namespace as.
+type identityConfig struct {
+	BaseURL          string `yaml:"base_url"`
+	ClientID         string `yaml:"client_id"`
+	ClientSecretFile string `yaml:"client_secret_file"`
 }
 
 type mqttConfig struct {
@@ -67,7 +86,10 @@ func loadLocal(b []byte) (localConfig, error) {
 	for _, r := range []struct{ key, v string }{
 		{"mqtt.broker", c.MQTT.Broker}, {"mqtt.base_topic", c.MQTT.BaseTopic},
 		{"mqtt.tanktemp_topic", c.MQTT.TanktempTopic}, {"mqtt.boiler_topic", c.MQTT.BoilerTopic},
-		{"http.listen", c.HTTP.Listen}, {"behaviour_file", c.BehaviourFile},
+		{"http.listen", c.HTTP.Listen},
+		{"remote_config.base_url", c.RemoteConfig.BaseURL}, {"remote_config.namespace", c.RemoteConfig.Namespace},
+		{"identity.base_url", c.Identity.BaseURL}, {"identity.client_id", c.Identity.ClientID},
+		{"identity.client_secret_file", c.Identity.ClientSecretFile},
 	} {
 		if r.v == "" {
 			return localConfig{}, fmt.Errorf("%s is required", r.key)
@@ -76,6 +98,16 @@ func loadLocal(b []byte) (localConfig, error) {
 	if c.Heartbeat <= 0 {
 		return localConfig{}, errors.New("heartbeat is required, and more than 0")
 	}
+	for _, r := range []struct{ key, v string }{
+		{"remote_config.base_url", c.RemoteConfig.BaseURL}, {"identity.base_url", c.Identity.BaseURL},
+	} {
+		if err := secureURL(r.v); err != nil {
+			return localConfig{}, fmt.Errorf("%s: %w", r.key, err)
+		}
+	}
+	if err := remoteconfig.ValidName(c.RemoteConfig.Namespace); err != nil {
+		return localConfig{}, fmt.Errorf("remote_config.namespace: %w", err)
+	}
 	if _, err := publish.New(c.MQTT.BaseTopic); err != nil {
 		return localConfig{}, err
 	}
@@ -83,6 +115,21 @@ func loadLocal(b []byte) (localConfig, error) {
 		return localConfig{}, err
 	}
 	return c, nil
+}
+
+// secureURL refuses a URL a bearer token or a client secret would cross
+// in cleartext: https, or http to this host (for tests).
+func secureURL(s string) error {
+	u, err := url.Parse(s)
+	if err == nil && u.Host != "" {
+		switch {
+		case u.Scheme == "https":
+			return nil
+		case u.Scheme == "http" && (u.Hostname() == "localhost" || net.ParseIP(u.Hostname()).IsLoopback()):
+			return nil
+		}
+	}
+	return fmt.Errorf("%q must be an https URL (or http to this host)", s)
 }
 
 // sources are the topics washhouse reads; ambient comes from the

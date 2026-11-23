@@ -446,6 +446,11 @@ or vanished.
   `online: false`, the retained state and tank messages are the last it
   published, not the present (`active_draw`, `low_hot_water` and the tank
   states included). Gate on status, as for tanktemp.
+- **A behaviour reload is a restart** of everything below, though the
+  process and its status carry on: when washhouse applies a changed
+  behaviour document (on SIGHUP), its engine starts again, so a draw
+  running then is cut as above, and the next state comes from the new
+  engine. Reconcile it the same way, from `active_draw`.
 - **What a restart resets**, since it is all in memory: `ua_w_per_k` goes
   back to the configured prior until the fit has evidence again, so a step
   in it after a restart isn't a change in the tank; each tank is `unknown`
@@ -455,6 +460,9 @@ or vanished.
 
 ## Changes
 
+- **2026-11-23, v1 clarified (not a change to any payload):** a behaviour
+  reload restarts the engine without a STARTUP (Delivery), so a consumer
+  reconciles a cut draw from `active_draw`, not from status alone.
 - **2026-11-23, v1 clarified (not a change to any payload):** `timestamp`
   after a silence with no input, and the refusal of an input dated too far
   ahead (Conventions). Both describe what the service does when

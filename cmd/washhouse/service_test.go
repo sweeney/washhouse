@@ -3,18 +3,21 @@ package main
 import (
 	"bufio"
 	"compress/gzip"
+	"context"
+	"errors"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/sweeney/common/health"
 	"github.com/sweeney/common/lifecycle"
 	"github.com/sweeney/common/mqttpub"
 	"github.com/sweeney/common/mqttpub/mqttpubtest"
 	"github.com/sweeney/common/wire/washhouse"
-	"github.com/sweeney/washhouse/internal/behaviour"
 )
 
 const (
@@ -60,21 +63,34 @@ type clock struct{ t time.Time }
 
 func (c *clock) now() time.Time { return c.t }
 
+// exampleDoc is the example behaviour document, edited.
+func exampleDoc(t *testing.T, edit func(string) string) document {
+	t.Helper()
+	b, err := os.ReadFile(behaviourExample)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	if edit != nil {
+		s = edit(s)
+	}
+	d, err := parseDocument([]byte(s))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func replace(from, to string) func(string) string {
+	return func(s string) string { return strings.Replace(s, from, to, 1) }
+}
+
 func newTestService(t *testing.T, base string) (*service, *mqttpubtest.Fake, *clock) {
 	t.Helper()
-	f, err := os.Open(behaviourExample)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	bc, ec, err := behaviour.Load(f)
-	if err != nil {
-		t.Fatal(err)
-	}
 	lc := localConfig{MQTT: mqttConfig{BaseTopic: base, TanktempTopic: "water/hot/tanktemp", BoilerTopic: "energy/boiler/sensor"}}
 	fake := &mqttpubtest.Fake{}
 	c := &clock{}
-	s, err := newService(lc, bc, ec, fake, c.now, log.New(io.Discard, "", 0))
+	s, err := newService(lc, exampleDoc(t, nil), fake, c.now, log.New(io.Discard, "", 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,17 +299,8 @@ func (q qosRecorder) Subscribe(filter string, qos byte, _ func(mqttpub.Received)
 // refused: a tanktemp prefix of water subscribes to water/+/state, which
 // is water/hot/state.
 func TestBaseThatReadsItselfIsRefused(t *testing.T) {
-	f, err := os.Open(behaviourExample)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	bc, ec, err := behaviour.Load(f)
-	if err != nil {
-		t.Fatal(err)
-	}
 	lc := localConfig{MQTT: mqttConfig{BaseTopic: "water/hot", TanktempTopic: "water", BoilerTopic: "energy/boiler/sensor"}}
-	if _, err := newService(lc, bc, ec, &mqttpubtest.Fake{}, time.Now, nil); err == nil || !strings.Contains(err.Error(), "reads") {
+	if _, err := newService(lc, exampleDoc(t, nil), &mqttpubtest.Fake{}, time.Now, nil); err == nil || !strings.Contains(err.Error(), "reads") {
 		t.Errorf("got %v", err)
 	}
 }
@@ -497,5 +504,179 @@ func TestSweepsAloneAreTanktempHeard(t *testing.T) {
 	s.tick()
 	if len(fake.Snapshot()) != n {
 		t.Errorf("ticked within the silence: %s", wireLines(fake.Snapshot()[n:]))
+	}
+}
+
+// A reload of the same document (reformatted is the same) changes
+// nothing: the engine, and what it has learnt, carry on.
+func TestReloadUnchangedKeepsTheEngine(t *testing.T) {
+	s, _, _ := newTestService(t, "water/hot")
+	eng := s.eng
+	d := exampleDoc(t, replace(`"recent_draws": 50,`, `"recent_draws":   50,`))
+	changed, err := s.apply(d)
+	if err != nil || changed {
+		t.Fatalf("changed %v, err %v", changed, err)
+	}
+	if s.eng != eng {
+		t.Error("the engine was rebuilt")
+	}
+}
+
+// A changed document rebuilds the engine (a restart, for consumers) and
+// the gate, and keeps event time.
+func TestReloadChangedRebuilds(t *testing.T) {
+	s, fake, c := newTestService(t, "water/hot")
+	c.t = time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, l := range readLines(t, showerFixture)[:20] {
+		c.t = l.at
+		s.handle(mqttpub.Received{Topic: l.topic, Payload: l.payload})
+	}
+	eng, lastEvent, published := s.eng, s.lastEvent, len(fake.Snapshot())
+	if lastEvent.IsZero() {
+		t.Fatal("no event time")
+	}
+	d := exampleDoc(t, replace(`"freshness": {"ahead": "90s", "stale": "90s", "silence": "2m"}`,
+		`"freshness": {"ahead": "60s", "stale": "90s", "silence": "5m"}`))
+	changed, err := s.apply(d)
+	if err != nil || !changed {
+		t.Fatalf("changed %v, err %v", changed, err)
+	}
+	if s.eng == eng || s.gate.Ahead != time.Minute || s.silence() != 5*time.Minute {
+		t.Errorf("engine rebuilt %v, gate %+v, silence %v", s.eng != eng, s.gate, s.silence())
+	}
+	s.mu.Lock()
+	s.h.lastReceived, s.h.lastTanktemp = c.t, c.t
+	s.mu.Unlock()
+	if r := s.report(true, c.t.Add(3*time.Minute)); r.Status != "ok" {
+		t.Errorf("/healthz judges the silence by the old document: %s %q", r.Status, r.Detail)
+	}
+	if s.lastEvent != lastEvent {
+		t.Errorf("event time %v, was %v", s.lastEvent, lastEvent)
+	}
+	if n := len(fake.Snapshot()); n != published {
+		t.Errorf("a reload published %d messages; the next input publishes", n-published)
+	}
+	if !bytesEqual(s.raw, d.raw) {
+		t.Error("the running document isn't the new one")
+	}
+}
+
+func bytesEqual(a, b []byte) bool { return string(a) == string(b) }
+
+// The subscriptions are made at start, so a changed room sensor needs a
+// restart: the document is refused whole, and nothing changes.
+func TestReloadRefusesAnAmbientChange(t *testing.T) {
+	s, _, _ := newTestService(t, "water/hot")
+	eng, raw := s.eng, s.raw
+	d := exampleDoc(t, replace(`"ambient_topic": "zigbee2mqtt/climate_groundfloor_boiler-room"`, `"ambient_topic": "zigbee2mqtt/elsewhere"`))
+	changed, err := s.apply(d)
+	if err == nil || !strings.Contains(err.Error(), "restart") || changed {
+		t.Fatalf("changed %v, err %v", changed, err)
+	}
+	if s.eng != eng || !bytesEqual(s.raw, raw) {
+		t.Error("a refused document changed something")
+	}
+}
+
+// The status names the tanks of the running document.
+func TestReloadRenamesTheTanks(t *testing.T) {
+	s, _, _ := newTestService(t, "water/hot")
+	d := exampleDoc(t, func(x string) string {
+		return strings.ReplaceAll(x, "hot_water_cylinder_left", "cylinder_a")
+	})
+	if _, err := s.apply(d); err != nil {
+		t.Fatal(err)
+	}
+	m, err := s.status(lifecycle.Event{Kind: lifecycle.Heartbeat, At: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(m.Payload, `"tanks":["cylinder_a","hot_water_cylinder_right"]`) {
+		t.Errorf("status %s", m.Payload)
+	}
+}
+
+// reload hands the document to the loop and waits for its answer.
+func TestReloadRunsOnTheLoop(t *testing.T) {
+	s, _, _ := newTestService(t, "water/hot")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { defer close(done); s.loop(ctx, nil) }()
+	changed, err := s.reload(ctx, exampleDoc(t, replace(`"recent_draws": 50,`, `"recent_draws": 40,`)))
+	if err != nil || !changed {
+		t.Errorf("changed %v, err %v", changed, err)
+	}
+	cancel()
+	<-done
+	if _, err := s.reload(ctx, exampleDoc(t, nil)); err == nil {
+		t.Error("a reload with the loop gone didn't fail")
+	}
+}
+
+// /healthz carries the namespace's status, and is degraded while the
+// latest fetch was refused (washhouse runs the last good document).
+func TestHealthShowsTheNamespace(t *testing.T) {
+	s, _, _ := newTestService(t, "water/hot")
+	t0 := time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
+	s.mu.Lock()
+	s.h.lastReceived, s.h.lastTanktemp = t0, t0
+	s.mu.Unlock()
+	s.remote = &remote{ns: "washhouse"}
+	s.remote.tracker.Record("washhouse", nil)
+	if r := s.report(true, t0); r.Status != "ok" || !hasField(r, "remote_config") {
+		t.Errorf("landed: %s %q %v", r.Status, r.Detail, r.Fields)
+	}
+	s.remote.tracker.Record("washhouse", errors.New("washhouse: config: colour"))
+	r := s.report(true, t0)
+	if r.Status != "degraded" || r.Detail != "the behaviour namespace was refused (running the last good): washhouse: config: colour" {
+		t.Errorf("refused: %s %q", r.Status, r.Detail)
+	}
+	s.remote.tracker.Record("washhouse", nil)
+	if r := s.report(true, t0); r.Status != "ok" {
+		t.Errorf("landed again: %s %q", r.Status, r.Detail)
+	}
+}
+
+func hasField(r health.Report, key string) bool {
+	for _, f := range r.Fields {
+		if f.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
+// A document that fetched and parsed but that the service refuses (here,
+// a new room sensor) counts as refused on /healthz.
+func TestRefusedReloadShowsOnHealth(t *testing.T) {
+	s, _, _ := newTestService(t, "water/hot")
+	cs := newConfigService(t)
+	r, err := newRemote(localFor(t, cs), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.remote = r
+	b, _ := os.ReadFile(behaviourExample)
+	cs.set(strings.Replace(string(b), "climate_groundfloor_boiler-room", "elsewhere", 1), http.StatusOK)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.loop(ctx, nil)
+	s.reloadFrom(ctx, r)
+	if st := r.status(); st.OK || !strings.Contains(st.Error, "restart") {
+		t.Errorf("status %+v", st)
+	}
+}
+
+// Before any fetch there is nothing refused.
+func TestHealthBeforeAnyFetch(t *testing.T) {
+	s, _, _ := newTestService(t, "water/hot")
+	t0 := time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
+	s.mu.Lock()
+	s.h.lastReceived, s.h.lastTanktemp = t0, t0
+	s.mu.Unlock()
+	s.remote = &remote{ns: "washhouse"}
+	if r := s.report(true, t0); r.Status != "ok" {
+		t.Errorf("%s %q", r.Status, r.Detail)
 	}
 }

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -21,24 +23,29 @@ import (
 // few messages every 30 s, so a full queue means the loop is stuck.
 const queueLen = 1024
 
+// reloadWait bounds a SIGHUP's fetch.
+const reloadWait = 20 * time.Second
+
 // service is washhouse's loop: messages in, the engine, messages out. One
 // goroutine (loop) owns the engine and the publisher; paho's handlers only
 // queue (enqueue), since a handler that publishes and waits can deadlock
 // paho, and one that blocks stalls every subscription.
 type service struct {
-	src   ingest.Sources
-	gate  ingest.Gate
-	fresh behaviour.Freshness
-	eng   *engine.Engine
-	pub   *publish.Publisher
-	out   mqttpub.Publisher
-	wall  func() time.Time
-	log   *log.Logger
-	base  string
-	tanks []string
+	src  ingest.Sources // fixed at start: the subscriptions are
+	out  mqttpub.Publisher
+	wall func() time.Time
+	log  *log.Logger
+	base string
 
-	in    chan mqttpub.Received
-	ticks chan chan struct{}
+	// running is the behaviour document's part, owned by the loop and
+	// replaced whole by apply.
+	running
+
+	remote *remote // nil: no namespace (tests)
+
+	in      chan mqttpub.Received
+	ticks   chan chan struct{}
+	reloads chan reloadReq
 
 	// Owned by the loop: the event time of the latest input that moved it
 	// on, and the wall time it arrived, from which a silence moves event
@@ -53,6 +60,31 @@ type service struct {
 
 	mu sync.Mutex
 	h  healthStats
+	// What other goroutines read of running: the status's tank list
+	// (lifecycle's), and the silence (/healthz's).
+	shownTanks   []string
+	shownSilence time.Duration
+}
+
+// running is what a behaviour document makes: the engine and everything
+// else a reload replaces.
+type running struct {
+	raw   []byte
+	gate  ingest.Gate
+	fresh behaviour.Freshness
+	eng   *engine.Engine
+	pub   *publish.Publisher
+	tanks []string
+}
+
+type reloadReq struct {
+	d    document
+	done chan reloadResult
+}
+
+type reloadResult struct {
+	changed bool
+	err     error
 }
 
 // healthStats are the loop's counts since start, for /healthz.
@@ -64,46 +96,128 @@ type healthStats struct {
 	eventAt                                              time.Time // the engine's event time
 }
 
-func newService(lc localConfig, bc behaviour.Config, ec engine.Config, out mqttpub.Publisher, wall func() time.Time, logger *log.Logger) (*service, error) {
+func newService(lc localConfig, d document, out mqttpub.Publisher, wall func() time.Time, logger *log.Logger) (*service, error) {
 	if logger == nil {
 		logger = log.New(log.Writer(), "", 0)
 	}
-	eng, err := engine.New(ec)
-	if err != nil {
-		return nil, err
-	}
-	pub, err := publish.New(lc.MQTT.BaseTopic)
-	if err != nil {
-		return nil, err
-	}
-	fr := bc.Fresh()
 	s := &service{
-		src: lc.sources(bc.AmbientTopic), gate: ingest.Gate{Ahead: fr.Ahead, Stale: fr.Stale}, fresh: fr,
-		eng: eng, pub: pub, out: out, wall: wall, log: logger, base: lc.MQTT.BaseTopic,
-		in: make(chan mqttpub.Received, queueLen), ticks: make(chan chan struct{}),
-	}
-	for _, t := range ec.Tanks {
-		s.tanks = append(s.tanks, t.DeviceID)
+		src: lc.sources(d.bc.AmbientTopic), out: out, wall: wall, log: logger, base: lc.MQTT.BaseTopic,
+		in: make(chan mqttpub.Received, queueLen), ticks: make(chan chan struct{}), reloads: make(chan reloadReq),
 	}
 	if err := s.src.Validate(); err != nil {
 		return nil, err
 	}
-	if err := s.gate.Validate(); err != nil {
+	r, err := s.build(d)
+	if err != nil {
 		return nil, err
 	}
-	// Never read back what washhouse publishes.
+	s.install(r)
+	return s, nil
+}
+
+// build makes what d calls for, checked: never reading back what washhouse
+// publishes.
+func (s *service) build(d document) (running, error) {
+	eng, err := engine.New(d.ec)
+	if err != nil {
+		return running{}, err
+	}
+	pub, err := publish.New(s.base)
+	if err != nil {
+		return running{}, err
+	}
+	fr := d.bc.Fresh()
+	r := running{raw: d.raw, gate: ingest.Gate{Ahead: fr.Ahead, Stale: fr.Stale}, fresh: fr, eng: eng, pub: pub}
+	for _, t := range d.ec.Tanks {
+		r.tanks = append(r.tanks, t.DeviceID)
+	}
+	if err := r.gate.Validate(); err != nil {
+		return running{}, err
+	}
 	own := []string{washhouse.StateTopic(s.base), washhouse.EventsTopic(s.base), washhouse.StatusTopic(s.base)}
-	for _, id := range s.tanks {
+	for _, id := range r.tanks {
 		own = append(own, washhouse.TankTopic(s.base, id))
 	}
 	for _, f := range s.src.Filters() {
 		for _, t := range own {
 			if mqttpub.Match(f, t) {
-				return nil, fmt.Errorf("the subscription %s reads washhouse's own %s", f, t)
+				return running{}, fmt.Errorf("the subscription %s reads washhouse's own %s", f, t)
 			}
 		}
 	}
-	return s, nil
+	return r, nil
+}
+
+func (s *service) install(r running) {
+	s.running = r
+	s.mu.Lock()
+	s.shownTanks, s.shownSilence = r.tanks, r.fresh.Silence
+	s.mu.Unlock()
+}
+
+// apply is a reload, on the loop: an unchanged document changes nothing;
+// a changed one starts the engine again (a restart, for consumers: what
+// it has learnt goes, and a draw in progress gets no draw_ended), keeping
+// event time. A document that needs a restart is refused whole.
+func (s *service) apply(d document) (bool, error) {
+	if bytes.Equal(d.raw, s.raw) {
+		return false, nil
+	}
+	if d.bc.AmbientTopic != s.src.Ambient {
+		return false, fmt.Errorf("ambient_topic is %q, was %q: the subscriptions are made at start, so restart washhouse to apply it",
+			d.bc.AmbientTopic, s.src.Ambient)
+	}
+	r, err := s.build(d)
+	if err != nil {
+		return false, err
+	}
+	s.install(r)
+	return true, nil
+}
+
+// reload has the loop apply d, and waits for its answer.
+func (s *service) reload(ctx context.Context, d document) (bool, error) {
+	req := reloadReq{d: d, done: make(chan reloadResult, 1)}
+	select {
+	case s.reloads <- req:
+	case <-ctx.Done():
+		return false, errNoLoop
+	}
+	select {
+	case r := <-req.done:
+		return r.changed, r.err
+	case <-ctx.Done():
+		return false, errNoLoop
+	}
+}
+
+// reloadFrom is a SIGHUP: fetch the namespace and apply it, or keep the
+// running behaviour.
+func (s *service) reloadFrom(ctx context.Context, r *remote) {
+	fctx, cancel := context.WithTimeout(ctx, reloadWait)
+	d, err := r.fetch(fctx)
+	cancel()
+	if err != nil {
+		s.log.Printf("reload: %v; keeping the running behaviour", err)
+		return
+	}
+	changed, err := s.reload(ctx, d)
+	switch {
+	case errors.Is(err, errNoLoop):
+	case err != nil:
+		r.refused(err)
+		s.log.Printf("reload: %v; keeping the running behaviour", err)
+	case changed:
+		s.log.Printf("behaviour reloaded from %s: the engine starts again", r.ns)
+	default:
+		s.log.Printf("behaviour unchanged")
+	}
+}
+
+func (s *service) silence() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.shownSilence
 }
 
 // subscribe makes every subscription at QoS 1: the broker sends each
@@ -148,6 +262,9 @@ func (s *service) loop(ctx context.Context, reconnected <-chan struct{}) {
 		case done := <-s.ticks:
 			s.tick()
 			close(done)
+		case req := <-s.reloads:
+			changed, err := s.apply(req.d)
+			req.done <- reloadResult{changed, err}
 		case <-reconnected:
 			s.emit(lifecycle.Event{Kind: lifecycle.Heartbeat, At: s.wall()})
 		}
@@ -265,8 +382,11 @@ func (s *service) health() healthStats {
 // status is e's {base}/status message. Ready (the lifecycle moment) is
 // the first HEARTBEAT, as for tanktemp.
 func (s *service) status(e lifecycle.Event) (mqttpub.Message, error) {
+	s.mu.Lock()
+	tanks := s.shownTanks
+	s.mu.Unlock()
 	st := washhouse.Status{Online: true, Event: washhouse.StatusHeartbeat, Timestamp: washhouse.Time{Time: e.At},
-		Version: s.version, Ready: s.ready.Load(), UptimeS: int64(e.At.Sub(s.start) / time.Second), Tanks: s.tanks}
+		Version: s.version, Ready: s.ready.Load(), UptimeS: int64(e.At.Sub(s.start) / time.Second), Tanks: tanks}
 	switch e.Kind {
 	case lifecycle.Startup:
 		st.Event = washhouse.StatusStartup

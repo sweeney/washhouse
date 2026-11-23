@@ -4,11 +4,14 @@
 //
 //	washhouse -config /etc/washhouse/config.yaml
 //	washhouse -config /etc/washhouse/config.yaml -check-config
+//	washhouse -check-behaviour behaviour.json
 //	washhouse -version
 //
 // The local config (deploy/config.example.yaml) says how to reach the
-// broker and where things are on it; the behaviour document it names
-// (testdata/behaviour.example.json) says everything else.
+// broker and where things are on it; the behaviour document
+// (testdata/behaviour.example.json) says everything else. That is the
+// config service's namespace: washhouse refuses to start without it, and
+// SIGHUP fetches it again, keeping the running one if it is refused.
 //
 // This file only wires things together: the loop is service.go, the logic
 // is in internal/, and run is tested with every outside dependency faked.
@@ -24,17 +27,18 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/sweeney/common/health"
 	"github.com/sweeney/common/lifecycle"
 	"github.com/sweeney/common/mqttpub"
 	"github.com/sweeney/common/mqttpub/retry"
+	"github.com/sweeney/common/remoteconfig"
 	"github.com/sweeney/common/wire/washhouse"
-	"github.com/sweeney/washhouse/internal/behaviour"
-	"github.com/sweeney/washhouse/internal/engine"
 )
 
 // version is stamped at build time with -ldflags "-X main.version=<commit>".
@@ -47,6 +51,8 @@ const (
 	connectWait = 10 * time.Second
 	// tickEvery is how often the loop checks for a silence (service.tick).
 	tickEvery = 5 * time.Second
+	// bootWait bounds the first fetch of the behaviour namespace.
+	bootWait = 30 * time.Second
 )
 
 func main() { os.Exit(realMain(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -55,7 +61,8 @@ func realMain(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("washhouse", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	path := fs.String("config", "/etc/washhouse/config.yaml", "the local config file")
-	check := fs.Bool("check-config", false, "check the config and the behaviour document, then exit")
+	check := fs.Bool("check-config", false, "check the config and fetch the behaviour namespace, then exit")
+	checkBehaviour := fs.String("check-behaviour", "", "check a behaviour document `file` (before writing it to the namespace), then exit")
 	showVersion := fs.Bool("version", false, "print the version and exit")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -64,52 +71,78 @@ func realMain(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "washhouse %s\n", version)
 		return 0
 	}
-	lc, bc, ec, err := readConfig(*path)
+	if *checkBehaviour != "" {
+		b, err := os.ReadFile(*checkBehaviour)
+		if err == nil {
+			var d document
+			if d, err = parseDocument(b); err == nil {
+				fmt.Fprintf(stdout, "%s: ok: %s, room %s\n", *checkBehaviour, describe(d), d.bc.AmbientTopic)
+				return 0
+			}
+		}
+		fmt.Fprintf(stderr, "washhouse: %s: %v\n", *checkBehaviour, err)
+		return 1
+	}
+	// SIGHUP's default is to exit: catch it before anything can take time.
+	var hup chan os.Signal
+	if !*check {
+		hup = make(chan os.Signal, 1)
+		signal.Notify(hup, syscall.SIGHUP)
+	}
+	lc, err := readConfig(*path)
 	if err != nil {
 		fmt.Fprintf(stderr, "washhouse: %v\n", err)
 		return 1
 	}
+	r, err := newRemote(lc, version)
+	if err != nil {
+		fmt.Fprintf(stderr, "washhouse: %v\n", err)
+		return 1
+	}
+	// Longer than a reload's wait: right after a host reboot, identity and
+	// the config service may be up but slow.
+	ctx, cancel := context.WithTimeout(context.Background(), bootWait)
+	d, err := r.fetch(ctx)
+	cancel()
+	if err != nil {
+		fmt.Fprintf(stderr, "washhouse: the behaviour namespace from %s: %v; refusing to start without it\n", r.base, err)
+		return 1
+	}
 	if *check {
-		var ids []string
-		for _, t := range ec.Tanks {
-			ids = append(ids, t.DeviceID)
-		}
-		fmt.Fprintf(stdout, "%s: ok: %d tanks (%s), meter %s, reading %s and %s, publishing to %s on %s\n",
-			*path, len(ids), strings.Join(ids, ", "), ec.Meter.DeviceID, lc.MQTT.TanktempTopic, lc.MQTT.BoilerTopic,
-			lc.MQTT.BaseTopic, lc.MQTT.Broker)
+		fmt.Fprintf(stdout, "%s: ok: %s, reading %s and %s, publishing to %s on %s, behaviour from %s on %s\n",
+			*path, describe(d), lc.MQTT.TanktempTopic, lc.MQTT.BoilerTopic, lc.MQTT.BaseTopic, lc.MQTT.Broker, r.ns, r.base)
 		return 0
 	}
-	if err := serve(lc, bc, ec); err != nil {
+	if err := serve(lc, r, d, hup); err != nil {
 		fmt.Fprintf(stderr, "washhouse: %v\n", err)
 		return 1
 	}
 	return 0
 }
 
-// readConfig reads the local config and the behaviour document it names.
-func readConfig(path string) (localConfig, behaviour.Config, engine.Config, error) {
+func describe(d document) string {
+	var ids []string
+	for _, t := range d.ec.Tanks {
+		ids = append(ids, t.DeviceID)
+	}
+	return fmt.Sprintf("%d tanks (%s), meter %s", len(ids), strings.Join(ids, ", "), d.ec.Meter.DeviceID)
+}
+
+// readConfig reads the local config.
+func readConfig(path string) (localConfig, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return localConfig{}, behaviour.Config{}, engine.Config{}, err
+		return localConfig{}, err
 	}
 	lc, err := loadLocal(b)
 	if err != nil {
-		return localConfig{}, behaviour.Config{}, engine.Config{}, fmt.Errorf("%s: %w", path, err)
+		return localConfig{}, fmt.Errorf("%s: %w", path, err)
 	}
-	f, err := os.Open(lc.BehaviourFile)
-	if err != nil {
-		return localConfig{}, behaviour.Config{}, engine.Config{}, err
-	}
-	defer f.Close()
-	bc, ec, err := behaviour.Load(f)
-	if err != nil {
-		return localConfig{}, behaviour.Config{}, engine.Config{}, fmt.Errorf("%s: %w", lc.BehaviourFile, err)
-	}
-	return lc, bc, ec, nil
+	return lc, nil
 }
 
 // serve builds the real dependencies and runs.
-func serve(lc localConfig, bc behaviour.Config, ec engine.Config) error {
+func serve(lc localConfig, r *remote, d document, hup <-chan os.Signal) error {
 	logger := log.New(os.Stderr, "", 0) // journald adds timestamps
 	id := lc.MQTT.ClientID
 	if id == "" {
@@ -130,7 +163,7 @@ func serve(lc localConfig, bc behaviour.Config, ec engine.Config) error {
 	if err != nil {
 		return err
 	}
-	s, err := newService(lc, bc, ec, pub, time.Now, logger)
+	s, err := newService(lc, d, pub, time.Now, logger)
 	if err != nil {
 		return err
 	}
@@ -139,7 +172,8 @@ func serve(lc localConfig, bc behaviour.Config, ec engine.Config) error {
 		return fmt.Errorf("http: %w", err)
 	}
 	return run(context.Background(), s, deps{Conn: pub, Wall: time.Now, Listener: ln, Logger: logger,
-		Version: version, Heartbeat: time.Duration(lc.Heartbeat), Broker: lc.MQTT.Broker, ClientID: id})
+		Version: version, Heartbeat: time.Duration(lc.Heartbeat), Broker: lc.MQTT.Broker, ClientID: id,
+		Remote: r, Reload: hup})
 }
 
 // connection is what run needs from MQTT: MQTTPublisher, faked in tests.
@@ -164,12 +198,15 @@ type deps struct {
 	HeartbeatTick    <-chan time.Time
 	Signals          <-chan os.Signal // nil: SIGINT and SIGTERM
 	Broker, ClientID string           // for the log
+
+	Remote *remote          // the behaviour namespace; nil: none
+	Reload <-chan os.Signal // each a SIGHUP: fetch Remote again
 }
 
 // run is washhouse: subscribe, connect, then the loop under lifecycle
 // until a signal; SHUTDOWN is the last status.
 func run(ctx context.Context, s *service, d deps) error {
-	s.version, s.start = d.Version, d.Wall()
+	s.version, s.start, s.remote = d.Version, d.Wall(), d.Remote
 	if err := s.subscribe(d.Conn); err != nil {
 		return err
 	}
@@ -214,6 +251,20 @@ func run(ctx context.Context, s *service, d deps) error {
 	var once sync.Once
 	var loopDone sync.WaitGroup
 	defer func() { stopLoop(); loopDone.Wait() }()
+	if d.Remote != nil && d.Reload != nil {
+		loopDone.Add(1)
+		go func() {
+			defer loopDone.Done()
+			for {
+				select {
+				case <-loopCtx.Done():
+					return
+				case <-d.Reload:
+					s.reloadFrom(loopCtx, d.Remote)
+				}
+			}
+		}()
+	}
 
 	err := lifecycle.Run(ctx, lifecycle.Config{
 		Work: func(wctx context.Context, _ time.Time) error {
@@ -256,11 +307,18 @@ func (s *service) report(connected bool, now time.Time) health.Report {
 		r.Status = health.StatusStarting
 	case h.lastTanktemp.IsZero():
 		why = append(why, "no tanktemp input yet")
-	case now.Sub(h.lastTanktemp) > s.fresh.Silence:
+	case now.Sub(h.lastTanktemp) > s.silence():
 		why = append(why, fmt.Sprintf("no tanktemp input for %v", now.Sub(h.lastTanktemp).Round(time.Second)))
 	}
 	if h.dropped > 0 {
 		why = append(why, fmt.Sprintf("%d inputs dropped", h.dropped))
+	}
+	var namespaces map[string]remoteconfig.Status
+	if s.remote != nil {
+		namespaces = s.remote.tracker.Statuses()
+		if st := s.remote.status(); !st.OK && !st.FetchedAt.IsZero() {
+			why = append(why, "the behaviour namespace was refused (running the last good): "+st.Error)
+		}
 	}
 	if len(why) > 0 {
 		r.Status, r.Detail = health.StatusDegraded, strings.Join(why, "; ")
@@ -288,6 +346,7 @@ func (s *service) report(connected bool, now time.Time) health.Report {
 			"decode_errors": h.decodeErrors, "feed_errors": h.feedErrors, "dropped": h.dropped}},
 		{Key: "published", Value: h.published},
 		{Key: "publish_errors", Value: h.publishErrors},
+		{Key: "remote_config", Value: namespaces},
 	}
 	return r
 }

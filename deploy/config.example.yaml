@@ -14,8 +14,16 @@ mqtt:
   boiler_topic: energy/boiler/sensor
 http:
   listen: 127.0.0.1:8095
-# The behaviour document (testdata/behaviour.example.json has the plan's
-# values). Phase 5b reads it from the config service instead.
-behaviour_file: /etc/washhouse/behaviour.json
+# The behaviour document is the config service's namespace (its shape is
+# testdata/behaviour.example.json); washhouse refuses to start without it,
+# and SIGHUP fetches it again.
+remote_config:
+  base_url: https://config.example
+  namespace: washhouse
+# The client washhouse reads the namespace as (client credentials).
+identity:
+  base_url: https://id.example
+  client_id: washhouse
+  client_secret_file: /etc/washhouse/client-secret   # one line
 # How often washhouse's status topic carries a HEARTBEAT.
 heartbeat: 15m

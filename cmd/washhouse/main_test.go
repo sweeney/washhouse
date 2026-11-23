@@ -46,20 +46,21 @@ func TestMissingConfigIsAnError(t *testing.T) {
 	}
 }
 
-// writeConfig writes a local config whose behaviour_file is the example.
-func writeConfig(t *testing.T, edit func(string) string) string {
+// writeConfig writes the example local config pointed at cs, with a
+// client secret file.
+func writeConfig(t *testing.T, cs *configService) string {
 	t.Helper()
-	b, err := os.ReadFile(exampleLocal)
-	if err != nil {
+	s := readLocalExample(t)
+	secret := filepath.Join(t.TempDir(), "client-secret")
+	if err := os.WriteFile(secret, []byte("s3cret\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	abs, err := filepath.Abs(behaviourExample)
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := strings.Replace(string(b), "/etc/washhouse/behaviour.json", abs, 1)
-	if edit != nil {
-		s = edit(s)
+	for from, to := range map[string]string{"https://config.example": cs.URL, "https://id.example": cs.URL,
+		"/etc/washhouse/client-secret": secret} {
+		if !strings.Contains(s, from) {
+			t.Fatalf("%q isn't in the example", from)
+		}
+		s = strings.Replace(s, from, to, 1)
 	}
 	p := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(p, []byte(s), 0o600); err != nil {
@@ -68,30 +69,58 @@ func writeConfig(t *testing.T, edit func(string) string) string {
 	return p
 }
 
+// -check-config checks the local config and fetches the namespace.
 func TestCheckConfig(t *testing.T) {
+	cs := newConfigService(t)
 	var out, errOut bytes.Buffer
-	if code := realMain([]string{"-config", writeConfig(t, nil), "-check-config"}, &out, &errOut); code != 0 {
+	if code := realMain([]string{"-config", writeConfig(t, cs), "-check-config"}, &out, &errOut); code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, errOut.String())
 	}
 	for _, want := range []string{": ok: 2 tanks (hot_water_cylinder_left, hot_water_cylinder_right), meter hot_water_meter",
-		"reading water/hot/tanktemp and energy/boiler/sensor", "publishing to water/hot on tcp://broker.example:1883"} {
+		"reading water/hot/tanktemp and energy/boiler/sensor", "publishing to water/hot on tcp://broker.example:1883",
+		"behaviour from washhouse on " + cs.URL} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("%q isn't in %q", want, out.String())
 		}
 	}
 }
 
-func TestCheckConfigRefusesABadBehaviourFile(t *testing.T) {
+func TestCheckConfigRefusesABadNamespace(t *testing.T) {
+	cs := newConfigService(t)
+	cs.set(`{"colour":"blue"}`, http.StatusOK)
+	var out, errOut bytes.Buffer
+	if code := realMain([]string{"-config", writeConfig(t, cs), "-check-config"}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "colour") {
+		t.Errorf("exit %d, stderr %q", code, errOut.String())
+	}
+}
+
+// washhouse never starts without its behaviour: systemd restarts it until
+// the config service answers.
+func TestBootRefusesWithoutTheNamespace(t *testing.T) {
+	cs := newConfigService(t)
+	cs.set("", http.StatusServiceUnavailable)
+	var out, errOut bytes.Buffer
+	if code := realMain([]string{"-config", writeConfig(t, cs)}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "refusing to start") {
+		t.Errorf("exit %d, stderr %q", code, errOut.String())
+	}
+}
+
+// -check-behaviour checks a document before it is written to the
+// namespace, with no config service and no local config.
+func TestCheckBehaviour(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := realMain([]string{"-check-behaviour", behaviourExample}, &out, &errOut); code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, errOut.String())
+	}
+	if want := behaviourExample + ": ok: 2 tanks (hot_water_cylinder_left, hot_water_cylinder_right), meter hot_water_meter, room zigbee2mqtt/climate_groundfloor_boiler-room\n"; out.String() != want {
+		t.Errorf("got  %q\nwant %q", out.String(), want)
+	}
 	bad := filepath.Join(t.TempDir(), "behaviour.json")
 	if err := os.WriteFile(bad, []byte(`{"colour":"blue"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	p := writeConfig(t, func(s string) string {
-		abs, _ := filepath.Abs(behaviourExample)
-		return strings.Replace(s, abs, bad, 1)
-	})
-	var out, errOut bytes.Buffer
-	if code := realMain([]string{"-config", p, "-check-config"}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "colour") {
+	out.Reset()
+	if code := realMain([]string{"-check-behaviour", bad}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "colour") {
 		t.Errorf("exit %d, stderr %q", code, errOut.String())
 	}
 }
@@ -151,6 +180,13 @@ func statuses(f *mqttpubtest.Fake) []washhouse.Status {
 // SHUTDOWN last on a signal.
 func TestRun(t *testing.T) {
 	s, _, _ := newTestService(t, "water/hot")
+	cs := newConfigService(t)
+	r, err := newRemote(localFor(t, cs), "abc1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs := &syncBuffer{}
+	s.log = log.New(logs, "", 0)
 	c := &conn{Fake: &mqttpubtest.Fake{}, reconnected: make(chan struct{}, 1)}
 	s.out = c
 	s.wall = time.Now
@@ -158,12 +194,12 @@ func TestRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sig := make(chan os.Signal, 1)
+	sig, hup := make(chan os.Signal, 1), make(chan os.Signal, 1)
 	tick := make(chan time.Time)
 	done := make(chan error, 1)
 	go func() {
 		done <- run(context.Background(), s, deps{Conn: c, Wall: time.Now, Listener: ln, Signals: sig, Tick: tick,
-			HeartbeatTick: make(chan time.Time), Logger: log.New(io.Discard, "", 0), Version: "abc1234"})
+			HeartbeatTick: make(chan time.Time), Logger: log.New(logs, "", 0), Version: "abc1234", Remote: r, Reload: hup})
 	}()
 
 	waitFor(t, "STARTUP", func() bool { return len(statuses(c.Fake)) >= 1 })
@@ -201,16 +237,39 @@ func TestRun(t *testing.T) {
 	c.reconnected <- struct{}{}
 	waitFor(t, "the reconnect HEARTBEAT", func() bool { return len(statuses(c.Fake)) > n })
 
-	resp, err := http.Get("http://" + ln.Addr().String() + "/healthz")
-	if err != nil {
-		t.Fatal(err)
+	healthz := func() string {
+		resp, err := http.Get("http://" + ln.Addr().String() + "/healthz")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return string(body)
 	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	body := healthz()
 	for _, want := range []string{`"status": "ok"`, `"version": "abc1234"`, `"mqtt_connected": true`, `"ready": true`, `"received": 2`} {
-		if !strings.Contains(string(body), want) {
+		if !strings.Contains(body, want) {
 			t.Errorf("%s isn't in /healthz:\n%s", want, body)
 		}
+	}
+
+	// SIGHUP: a changed document is applied; a refused one keeps the last
+	// good, and /healthz says so; the same document again changes nothing.
+	b, _ := os.ReadFile(behaviourExample)
+	cs.set(strings.Replace(string(b), `"recent_draws": 50`, `"recent_draws": 40`, 1), http.StatusOK)
+	hup <- syscall.SIGHUP
+	waitFor(t, "the reload", func() bool { return strings.Contains(logs.String(), "behaviour reloaded") })
+	cs.set(`{"colour":"blue"}`, http.StatusOK)
+	hup <- syscall.SIGHUP
+	waitFor(t, "the refusal", func() bool { return strings.Contains(healthz(), "the behaviour namespace was refused") })
+	if !strings.Contains(logs.String(), "keeping the running behaviour") {
+		t.Errorf("log:\n%s", logs.String())
+	}
+	cs.set(strings.Replace(string(b), `"recent_draws": 50`, `"recent_draws": 40`, 1), http.StatusOK)
+	hup <- syscall.SIGHUP
+	waitFor(t, "the reload", func() bool { return strings.Contains(logs.String(), "behaviour unchanged") })
+	if body := healthz(); !strings.Contains(body, `"status": "ok"`) || !strings.Contains(body, `"remote_config"`) {
+		t.Errorf("/healthz after a good reload:\n%s", body)
 	}
 
 	sig <- syscall.SIGTERM
@@ -230,4 +289,21 @@ func TestRun(t *testing.T) {
 	if !c.Closed {
 		t.Error("the connection wasn't closed")
 	}
+}
+
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.String()
 }
