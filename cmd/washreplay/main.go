@@ -27,7 +27,6 @@ package main
 
 import (
 	"bufio"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -36,6 +35,7 @@ import (
 
 	"github.com/sweeney/washhouse/internal/behaviour"
 	"github.com/sweeney/washhouse/internal/engine"
+	"github.com/sweeney/washhouse/internal/ingest"
 	"github.com/sweeney/washhouse/internal/publish"
 	"github.com/sweeney/washhouse/internal/replay"
 )
@@ -141,20 +141,5 @@ func readConfig(path string) (behaviour.Config, engine.Config, error) {
 
 // feed gives one recorded message to the engine.
 func feed(e *engine.Engine, m replay.Msg) ([]engine.Event, error) {
-	switch {
-	case m.State != nil:
-		return e.TankState(*m.State)
-	case m.Meter != nil:
-		return e.Meter(*m.Meter), nil
-	case m.Status != nil:
-		e.Status(*m.Status)
-		return nil, nil
-	case m.BoilerEvent != nil:
-		return e.BoilerEvent(*m.BoilerEvent), nil
-	case m.BoilerSystem != nil:
-		return e.BoilerSystem(*m.BoilerSystem), nil
-	case m.Ambient != nil:
-		return e.Ambient(m.Ambient.At, m.Ambient.TempC), nil
-	}
-	return nil, errors.New("a message with nothing decoded")
+	return ingest.Feed[engine.Event](e, m)
 }

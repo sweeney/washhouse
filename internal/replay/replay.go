@@ -13,15 +13,13 @@ package replay
 import (
 	"bufio"
 	"compress/gzip"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 	"time"
 
-	"github.com/sweeney/common/wire/boiler"
-	"github.com/sweeney/common/wire/tanktemp"
+	"github.com/sweeney/washhouse/internal/ingest"
 )
 
 // Options say which topics to read beyond the fixed ones.
@@ -29,31 +27,18 @@ type Options struct {
 	Ambient string // the boiler-room climate topic; "" skips it
 }
 
+// Msg is one decoded message, as ingest decodes it.
+type Msg = ingest.Msg
+
 // Ambient is one boiler-room temperature reading.
-type Ambient struct {
-	At    time.Time // the receive time
-	TempC float64
+type Ambient = ingest.Ambient
+
+// sources are the topics a recording may hold: tanktemp under both its
+// prefixes, since recordings made before the move have the old one.
+func sources(o Options) ingest.Sources {
+	return ingest.Sources{Tanktemp: []string{"water/hot/tanktemp", "energy/hot_water"},
+		Boiler: "energy/boiler/sensor", Ambient: o.Ambient}
 }
-
-// Msg is one decoded message. Exactly one of the pointers is set.
-type Msg struct {
-	Received time.Time
-	Topic    string
-
-	State        *tanktemp.State
-	Status       *tanktemp.Status
-	Meter        *tanktemp.Meter
-	BoilerEvent  *boiler.Event
-	BoilerSystem *boiler.System
-	Ambient      *Ambient
-}
-
-const (
-	boilerEvents = "energy/boiler/sensor/events"
-	boilerSystem = "energy/boiler/sensor/system"
-)
-
-var tanktempPrefixes = []string{"water/hot/tanktemp/", "energy/hot_water/"}
 
 // ReadFile reads a recording, gunzipping it if its name ends in .gz.
 func ReadFile(path string, o Options) ([]Msg, error) {
@@ -82,6 +67,7 @@ func ReadFile(path string, o Options) ([]Msg, error) {
 // is an error, naming the line.
 func Read(r io.Reader, o Options) ([]Msg, error) {
 	var out []Msg
+	src := sources(o)
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
 	for n := 1; sc.Scan(); n++ {
@@ -97,62 +83,13 @@ func Read(r io.Reader, o Options) ([]Msg, error) {
 		if err != nil {
 			return nil, fmt.Errorf("line %d: receive time: %w", n, err)
 		}
-		m := Msg{Received: rx.UTC(), Topic: parts[1]}
-		ok, err := decode(&m, []byte(parts[2]), o)
+		m, ok, err := src.Decode(parts[1], []byte(parts[2]), rx.UTC())
 		if err != nil {
-			return nil, fmt.Errorf("line %d (%s): %w", n, m.Topic, err)
+			return nil, fmt.Errorf("line %d (%s): %w", n, parts[1], err)
 		}
 		if ok {
 			out = append(out, m)
 		}
 	}
 	return out, sc.Err()
-}
-
-func decode(m *Msg, b []byte, o Options) (bool, error) {
-	switch m.Topic {
-	case boilerEvents:
-		e, err := boiler.DecodeEvent(b)
-		m.BoilerEvent = &e
-		return true, err
-	case boilerSystem:
-		s, err := boiler.DecodeSystem(b)
-		m.BoilerSystem = &s
-		return true, err
-	}
-	if o.Ambient != "" && m.Topic == o.Ambient {
-		var c struct {
-			Temperature *float64 `json:"temperature"`
-		}
-		if err := json.Unmarshal(b, &c); err != nil {
-			return true, err
-		}
-		if c.Temperature == nil {
-			return false, nil // a climate message without a temperature: nothing to use
-		}
-		m.Ambient = &Ambient{At: m.Received, TempC: *c.Temperature}
-		return true, nil
-	}
-	for _, p := range tanktempPrefixes {
-		rest, ok := strings.CutPrefix(m.Topic, p)
-		if !ok {
-			continue
-		}
-		switch {
-		case rest == "meter":
-			x, err := tanktemp.DecodeMeter(b)
-			m.Meter = &x
-			return true, err
-		case rest == "status":
-			x, err := tanktemp.DecodeStatus(b)
-			m.Status = &x
-			return true, err
-		case strings.HasSuffix(rest, "/state") && !strings.Contains(strings.TrimSuffix(rest, "/state"), "/"):
-			x, err := tanktemp.DecodeState(b)
-			m.State = &x
-			return true, err
-		}
-		return false, nil
-	}
-	return false, nil
 }

@@ -28,6 +28,7 @@ var core = []string{
 	"internal/draw",
 	"internal/engine",
 	"internal/estimate",
+	"internal/ingest", // decodes and gates; the service subscribes
 	"internal/meter",
 	"internal/profile",
 	"internal/publish", // builds messages; the service (phase 5) sends them
@@ -41,8 +42,9 @@ var forbiddenDirect = []string{
 	"path/filepath", "syscall",
 }
 
+// forbiddenDeps are checked for every core package but the one named.
 var forbiddenDeps = []string{
-	module + "/internal/ingest",
+	module + "/internal/ingest", // the engine takes decoded messages, not topics
 	module + "/internal/replay", // reads files; the core takes decoded messages
 	module + "/internal/influx",
 	module + "/internal/httpapi",
@@ -94,7 +96,7 @@ func TestCorePackagesAreIsolated(t *testing.T) {
 			}
 			for _, dep := range goList(t, `{{.ImportPath}}`, pkg, true) {
 				for _, bad := range forbiddenDeps {
-					if dep == bad || strings.HasPrefix(dep, bad+"/") {
+					if dep != pkg && (dep == bad || strings.HasPrefix(dep, bad+"/")) {
 						t.Errorf("depends on %s", dep)
 					}
 				}
