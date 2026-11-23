@@ -13,18 +13,21 @@ info:
     token whose user is active, or a service (client-credentials) token.
     A token that can't be checked (identity's keys unavailable) is a 503
     with `Retry-After`, not a 401: keep the token and retry.
+  contact:
+    name: washhouse
+    url: https://github.com/sweeney/washhouse
   license:
     name: MIT
     url: https://opensource.org/licenses/MIT
 servers:
   - url: __PUBLIC_URL__
 tags:
-  - name: state
-    description: The hot water system now.
   - name: draws
     description: Recent draws, since washhouse started.
   - name: service
     description: The service itself.
+  - name: state
+    description: The hot water system now.
 security:
   - bearer: []
 paths:
@@ -33,6 +36,10 @@ paths:
       operationId: getHealth
       tags: [service]
       summary: Health, in common/health's shape. Public.
+      description: |
+        ok, starting or degraded, with the broker connection, each input's
+        age and counts, the behaviour namespace's last fetch, and when the
+        running behaviour was applied.
       security: []
       responses:
         "200":
@@ -52,6 +59,7 @@ paths:
       operationId: getOpenAPI
       tags: [service]
       summary: This document, as JSON. Public.
+      description: The OpenAPI document, converted from the YAML washhouse embeds.
       security: []
       responses:
         "200":
@@ -65,6 +73,9 @@ paths:
       operationId: getState
       tags: [state]
       summary: The system's state; the payload of {base}/state.
+      description: |
+        The latest state, byte for byte as washhouse last published it
+        (docs/WIRE.md, State). 503 until washhouse has had an input.
       responses:
         "200":
           description: The latest state.
@@ -83,6 +94,9 @@ paths:
       operationId: getTank
       tags: [state]
       summary: One tank's state; the payload of {base}/tank/{id}.
+      description: |
+        The tank's latest state, byte for byte as washhouse last published
+        it (docs/WIRE.md, Tank). 503 until washhouse has had an input.
       parameters:
         - name: id
           in: path
