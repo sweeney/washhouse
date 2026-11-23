@@ -29,11 +29,13 @@ var core = []string{
 	"internal/estimate",
 	"internal/meter",
 	"internal/profile",
+	"internal/publish", // builds messages; the service (phase 5) sends them
 	"internal/tank",
 	"internal/thermal",
 	"internal/vessel",
 	"internal/wire/boiler",
 	"internal/wire/tanktemp",
+	"internal/wire/washhouse",
 }
 
 var forbiddenDirect = []string{
@@ -44,7 +46,6 @@ var forbiddenDirect = []string{
 var forbiddenDeps = []string{
 	module + "/internal/ingest",
 	module + "/internal/replay", // reads files; the core takes decoded messages
-	module + "/internal/publish",
 	module + "/internal/influx",
 	module + "/internal/httpapi",
 	"github.com/eclipse/paho.mqtt.golang",

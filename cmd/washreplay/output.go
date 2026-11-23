@@ -11,6 +11,7 @@ import (
 	"github.com/sweeney/washhouse/internal/draw"
 	"github.com/sweeney/washhouse/internal/engine"
 	"github.com/sweeney/washhouse/internal/meter"
+	"github.com/sweeney/washhouse/internal/publish"
 	"github.com/sweeney/washhouse/internal/thermal"
 )
 
@@ -22,8 +23,23 @@ type printer struct {
 	w     io.Writer
 	json  bool
 	every time.Duration
-	next  time.Time // the next state line is due at or after this
+	next  time.Time          // the next state line is due at or after this
+	pub   *publish.Publisher // -wire: print the messages it builds instead
 	err   error
+}
+
+// wire prints what the publisher builds after an input.
+func (p *printer) wire(s engine.State, ev []engine.Event) {
+	ms, err := p.pub.After(s, ev)
+	if err != nil {
+		if p.err == nil {
+			p.err = err
+		}
+		return
+	}
+	for _, m := range ms {
+		p.line(m.Topic + " " + string(m.Payload))
+	}
 }
 
 const stamp = "2006-01-02T15:04:05.000Z"

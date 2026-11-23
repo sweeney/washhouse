@@ -19,11 +19,12 @@ service itself (`cmd/washhouse`) only reports its version so far.
 | Path | What it is |
 |---|---|
 | `PLAN.md` | Decisions, architecture, phases, verification. |
+| `docs/WIRE.md` | **Normative:** the MQTT contract washhouse will publish (state, tanks, events, status). Draft, under review. |
 | `docs/HOT-WATER-SYSTEM.md` | The cylinders, probes, plumbing and dynamics: what was measured, said, inferred or guessed. |
 | `docs/washhouse-explainer.html` | Open in a browser. A simulated day (fictional times) through the planned engine. |
 | `tools/` | Live-data tools used before washhouse exists: a recorder, a smoke test for tanktemp and boiler-sensor, and a meter audit. See [`tools/README.md`](tools/README.md). |
 | `meter/` | The hot-water meter's datasheet and photos. |
-| `internal/` | The pure core: decoders, the meter consumer, the cylinder model, thermal tracking, draw attribution, and `engine`, which wires them into the system's state and events. |
+| `internal/` | The pure core: decoders, the meter consumer, the cylinder model, thermal tracking, draw attribution, `engine`, which wires them into the system's state and events, and `publish`, which turns those into the wire messages of `internal/wire/washhouse` (its goldens pin WIRE.md). |
 | `cmd/washreplay` | Replays recordings through the engine and prints its events and states. |
 | `cmd/washhouse` | The service, a placeholder until phase 5. |
 
@@ -41,6 +42,9 @@ every threshold and the cylinders' geometry:
 go run ./cmd/washreplay -config testdata/washreplay-config.example.json \
     [-state-every 10m] [-json] testdata/fixtures/shower-layered.log.gz
 ```
+
+With `-wire` instead of `-json`, it prints every message the service would
+publish, as `topic payload` lines (docs/WIRE.md).
 
 The tools tests need `python3`, `mosquitto`, `mosquitto_sub`/`mosquitto_pub`
 and `shellcheck`. Conventions for changes are in [`CLAUDE.md`](CLAUDE.md).
