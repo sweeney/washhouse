@@ -54,8 +54,18 @@ type mqttConfig struct {
 }
 
 type httpConfig struct {
-	Listen string `yaml:"listen"`
+	Listen    string `yaml:"listen"`
+	PublicURL string `yaml:"public_url"` // optional: the spec's server
+	// Audience is whether a token must name washhouse: off, warn or enforce.
+	Audience string `yaml:"audience"`
 }
+
+// The audience modes (http.audience).
+const (
+	audienceOff     = "off"
+	audienceWarn    = "warn"
+	audienceEnforce = "enforce"
+)
 
 // duration is a time.Duration written as a Go duration string ("15m").
 type duration time.Duration
@@ -86,7 +96,7 @@ func loadLocal(b []byte) (localConfig, error) {
 	for _, r := range []struct{ key, v string }{
 		{"mqtt.broker", c.MQTT.Broker}, {"mqtt.base_topic", c.MQTT.BaseTopic},
 		{"mqtt.tanktemp_topic", c.MQTT.TanktempTopic}, {"mqtt.boiler_topic", c.MQTT.BoilerTopic},
-		{"http.listen", c.HTTP.Listen},
+		{"http.listen", c.HTTP.Listen}, {"http.audience", c.HTTP.Audience},
 		{"remote_config.base_url", c.RemoteConfig.BaseURL}, {"remote_config.namespace", c.RemoteConfig.Namespace},
 		{"identity.base_url", c.Identity.BaseURL}, {"identity.client_id", c.Identity.ClientID},
 		{"identity.client_secret_file", c.Identity.ClientSecretFile},
@@ -103,6 +113,16 @@ func loadLocal(b []byte) (localConfig, error) {
 	} {
 		if err := secureURL(r.v); err != nil {
 			return localConfig{}, fmt.Errorf("%s: %w", r.key, err)
+		}
+	}
+	switch c.HTTP.Audience {
+	case audienceOff, audienceWarn, audienceEnforce:
+	default:
+		return localConfig{}, fmt.Errorf("http.audience is %q: off, warn or enforce", c.HTTP.Audience)
+	}
+	if c.HTTP.PublicURL != "" {
+		if u, err := url.Parse(c.HTTP.PublicURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+			return localConfig{}, fmt.Errorf("http.public_url %q must be an http or https URL", c.HTTP.PublicURL)
 		}
 	}
 	if err := remoteconfig.ValidName(c.RemoteConfig.Namespace); err != nil {

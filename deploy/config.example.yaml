@@ -14,6 +14,11 @@ mqtt:
   boiler_topic: energy/boiler/sensor
 http:
   listen: 127.0.0.1:8095
+  public_url: https://washhouse.example   # optional: the API spec's server
+  # Whether a token must name washhouse as its audience: off, warn (accept
+  # one that doesn't, and log it) or enforce. Run warn until the log shows
+  # every caller's tokens do.
+  audience: warn
 # The behaviour document is the config service's namespace (its shape is
 # testdata/behaviour.example.json); washhouse refuses to start without it,
 # and SIGHUP fetches it again.

@@ -16,6 +16,7 @@ import (
 	"github.com/sweeney/common/wire/washhouse"
 	"github.com/sweeney/washhouse/internal/behaviour"
 	"github.com/sweeney/washhouse/internal/engine"
+	"github.com/sweeney/washhouse/internal/httpapi"
 	"github.com/sweeney/washhouse/internal/ingest"
 	"github.com/sweeney/washhouse/internal/publish"
 )
@@ -42,7 +43,8 @@ type service struct {
 	// replaced whole by apply.
 	running
 
-	remote *remote // nil: no namespace (tests)
+	remote *remote           // nil: no namespace (tests)
+	rec    *httpapi.Recorder // what the API serves; the loop records
 
 	in      chan mqttpub.Received
 	ticks   chan chan struct{}
@@ -123,7 +125,8 @@ func newService(lc localConfig, d document, out mqttpub.Publisher, wall func() t
 	if err != nil {
 		return nil, err
 	}
-	s.install(r)
+	s.rec = httpapi.NewRecorder(d.ec.RecentDraws)
+	s.install(r, d.ec.RecentDraws)
 	return s, nil
 }
 
@@ -160,10 +163,12 @@ func (s *service) build(d document) (running, error) {
 	return r, nil
 }
 
-func (s *service) install(r running) {
+func (s *service) install(r running, keep int) {
+	now := s.wall()
 	s.running = r
+	s.rec.Behaviour(r.raw, now, keep)
 	s.mu.Lock()
-	s.shownTanks, s.shownSilence, s.appliedAt = r.tanks, r.fresh.Silence, s.wall()
+	s.shownTanks, s.shownSilence, s.appliedAt = r.tanks, r.fresh.Silence, now
 	s.mu.Unlock()
 }
 
@@ -195,7 +200,7 @@ func (s *service) apply(d document) (bool, error) {
 			s.log.Printf("reload: replaying %s: %v", a.m.Topic, err)
 		}
 	}
-	s.install(r)
+	s.install(r, d.ec.RecentDraws)
 	return true, nil
 }
 
@@ -354,6 +359,9 @@ func (s *service) handle(r mqttpub.Received) {
 func (s *service) send(st engine.State, ev []engine.Event) {
 	s.count(func(h *healthStats) { h.eventAt = st.At })
 	s.publish(st, ev)
+	if err := s.rec.After(st, ev); err != nil {
+		s.log.Printf("api: %v", err)
+	}
 }
 
 // tick moves event time on once tanktemp has been silent for the silence

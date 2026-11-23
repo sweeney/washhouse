@@ -1,0 +1,511 @@
+openapi: 3.1.0
+info:
+  title: washhouse
+  version: "1"
+  description: |
+    Hot water state and draws, from the cylinders' probes and the
+    hot-water meter. The state and tank responses are the payloads
+    washhouse publishes on MQTT (docs/WIRE.md is normative for them), and
+    a draw is its `draw_ended` and `draw_balanced` events. Unknown is
+    `null`, never 0.
+
+    Everything under `/api/` needs a Bearer token from identity: a user
+    token whose user is active, or a service (client-credentials) token.
+    A token that can't be checked (identity's keys unavailable) is a 503
+    with `Retry-After`, not a 401: keep the token and retry.
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+servers:
+  - url: __PUBLIC_URL__
+tags:
+  - name: state
+    description: The hot water system now.
+  - name: draws
+    description: Recent draws, since washhouse started.
+  - name: service
+    description: The service itself.
+security:
+  - bearer: []
+paths:
+  /healthz:
+    get:
+      operationId: getHealth
+      tags: [service]
+      summary: Health, in common/health's shape. Public.
+      security: []
+      responses:
+        "200":
+          description: ok, starting or degraded (the body says which).
+          content:
+            application/json:
+              schema:
+                type: object
+        "503":
+          description: Down.
+          content:
+            application/json:
+              schema:
+                type: object
+  /openapi.json:
+    get:
+      operationId: getOpenAPI
+      tags: [service]
+      summary: This document, as JSON. Public.
+      security: []
+      responses:
+        "200":
+          description: The OpenAPI document.
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/v1/state:
+    get:
+      operationId: getState
+      tags: [state]
+      summary: The system's state; the payload of {base}/state.
+      responses:
+        "200":
+          description: The latest state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/State"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /api/v1/tanks/{id}:
+    get:
+      operationId: getTank
+      tags: [state]
+      summary: One tank's state; the payload of {base}/tank/{id}.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The tank's device_id.
+          schema:
+            type: string
+            pattern: "^[a-z0-9_-]+$"
+      responses:
+        "200":
+          description: The tank's latest state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tank"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: No tank with that id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /api/v1/draws:
+    get:
+      operationId: getDraws
+      tags: [draws]
+      summary: Recent draws, newest first.
+      description: |
+        The draws ended since washhouse started (a reload keeps them), at
+        most the behaviour document's `recent_draws`. Longer history is in
+        Influx. A draw is listed from its `draw_ended`; `balanced` is
+        `null` until its `draw_balanced`.
+      responses:
+        "200":
+          description: The recent draws.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Draws"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/v1/model:
+    get:
+      operationId: getModel
+      tags: [service]
+      summary: The behaviour document washhouse is running, and when it was applied.
+      description: |
+        The cylinders' geometry and probes, the meter's draw rules and every
+        threshold: the config service's `washhouse` namespace as last
+        applied. Each tank's live UA fit is its `ua_w_per_k`.
+      responses:
+        "200":
+          description: The running behaviour.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Model"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    Unauthorized:
+      description: No token, or one that isn't valid (or whose user isn't active).
+      headers:
+        WWW-Authenticate:
+          description: The Bearer challenge, with identity as the realm.
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: A valid service token whose client may not read washhouse.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unavailable:
+      description: |
+        The token couldn't be checked (identity's keys are unavailable;
+        keep the token and retry after `Retry-After`), or washhouse has
+        had no input yet.
+      headers:
+        Retry-After:
+          description: Seconds to wait, when the token couldn't be checked.
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  schemas:
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: string
+    Time:
+      type: string
+      format: date-time
+      description: UTC, RFC 3339, to the millisecond.
+    TankState:
+      type: string
+      enum: [heating, drawing, cooling, unknown]
+    HeatSource:
+      type: [string, "null"]
+      enum: [hw, ch, null]
+    Kind:
+      type: string
+      enum: [tap, shower, bath]
+    State:
+      type: object
+      additionalProperties: false
+      required: [schema, timestamp, stored_kwh, usable_l40, usable_l40_low, low_hot_water, boiler, ambient_c,
+        active_draw, meter, tanktemp, tanks]
+      properties:
+        schema:
+          type: string
+          enum: [net.swee.washhouse.state.v1]
+        timestamp:
+          $ref: "#/components/schemas/Time"
+        stored_kwh:
+          type: [number, "null"]
+        usable_l40:
+          type: [number, "null"]
+        usable_l40_low:
+          type: [number, "null"]
+        low_hot_water:
+          type: [boolean, "null"]
+        boiler:
+          type: object
+          additionalProperties: false
+          required: [hw, ch]
+          properties:
+            hw:
+              type: [boolean, "null"]
+            ch:
+              type: [boolean, "null"]
+        ambient_c:
+          type: [number, "null"]
+        active_draw:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/ActiveDraw"
+        meter:
+          type: object
+          additionalProperties: false
+          required: [timestamp, counting_since, count, litres_since_start, continuous_flow]
+          properties:
+            timestamp:
+              type: [string, "null"]
+              format: date-time
+            counting_since:
+              type: [string, "null"]
+              format: date-time
+            count:
+              type: [integer, "null"]
+            litres_since_start:
+              type: [number, "null"]
+            continuous_flow:
+              oneOf:
+                - type: "null"
+                - $ref: "#/components/schemas/ContinuousFlow"
+        tanktemp:
+          type: object
+          additionalProperties: false
+          required: [timestamp, online, version]
+          properties:
+            timestamp:
+              type: [string, "null"]
+              format: date-time
+            online:
+              type: [boolean, "null"]
+            version:
+              type: [string, "null"]
+        tanks:
+          type: array
+          items:
+            $ref: "#/components/schemas/TankSummary"
+    ActiveDraw:
+      type: object
+      additionalProperties: false
+      required: [draw_id, started_at, last_litre_at, litres, flow_l_min, kind]
+      properties:
+        draw_id:
+          type: string
+        started_at:
+          $ref: "#/components/schemas/Time"
+        last_litre_at:
+          $ref: "#/components/schemas/Time"
+        litres:
+          type: number
+        flow_l_min:
+          type: [number, "null"]
+        kind:
+          $ref: "#/components/schemas/Kind"
+    ContinuousFlow:
+      type: object
+      additionalProperties: false
+      required: [since, last, litres, flow_l_min]
+      properties:
+        since:
+          $ref: "#/components/schemas/Time"
+        last:
+          $ref: "#/components/schemas/Time"
+        litres:
+          type: number
+        flow_l_min:
+          type: number
+    TankSummary:
+      type: object
+      additionalProperties: false
+      required: [device_id, state, heat_source, stored_kwh, usable_l40, top_c]
+      properties:
+        device_id:
+          type: string
+        state:
+          $ref: "#/components/schemas/TankState"
+        heat_source:
+          $ref: "#/components/schemas/HeatSource"
+        stored_kwh:
+          type: [number, "null"]
+        usable_l40:
+          type: [number, "null"]
+        top_c:
+          type: [number, "null"]
+    Tank:
+      type: object
+      additionalProperties: false
+      required: [schema, device_id, timestamp, sweep_at, state, heat_source, stored_kwh, mean_c, top_c, hot_l,
+        usable_l40, usable_l40_low, power_kw, ua_w_per_k, probes_ok, probes_total]
+      properties:
+        schema:
+          type: string
+          enum: [net.swee.washhouse.tank.v1]
+        device_id:
+          type: string
+        timestamp:
+          $ref: "#/components/schemas/Time"
+        sweep_at:
+          type: [string, "null"]
+          format: date-time
+        state:
+          $ref: "#/components/schemas/TankState"
+        heat_source:
+          $ref: "#/components/schemas/HeatSource"
+        stored_kwh:
+          type: [number, "null"]
+        mean_c:
+          type: [number, "null"]
+        top_c:
+          type: [number, "null"]
+        hot_l:
+          type: [number, "null"]
+        usable_l40:
+          type: [number, "null"]
+        usable_l40_low:
+          type: [number, "null"]
+        power_kw:
+          type: [number, "null"]
+        ua_w_per_k:
+          type: [number, "null"]
+        probes_ok:
+          type: [integer, "null"]
+        probes_total:
+          type: [integer, "null"]
+    Draws:
+      type: object
+      additionalProperties: false
+      required: [draws]
+      properties:
+        draws:
+          type: array
+          items:
+            $ref: "#/components/schemas/Draw"
+    Draw:
+      type: object
+      additionalProperties: false
+      required: [ended, balanced]
+      properties:
+        ended:
+          $ref: "#/components/schemas/DrawEndedEvent"
+        balanced:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/DrawBalancedEvent"
+    DrawEndedEvent:
+      type: object
+      additionalProperties: false
+      required: [schema, event, timestamp, draw_ended]
+      properties:
+        schema:
+          type: string
+          enum: [net.swee.washhouse.event.v1]
+        event:
+          type: string
+          enum: [draw_ended]
+        timestamp:
+          $ref: "#/components/schemas/Time"
+        draw_ended:
+          $ref: "#/components/schemas/DrawEnded"
+    DrawEnded:
+      type: object
+      additionalProperties: false
+      required: [draw_id, started_at, ended_at, duration_s, litres, volume_kind, flow_l_min, kind, meter_from, meter_to]
+      properties:
+        draw_id:
+          type: string
+        started_at:
+          $ref: "#/components/schemas/Time"
+        ended_at:
+          $ref: "#/components/schemas/Time"
+        duration_s:
+          type: number
+        litres:
+          type: number
+        volume_kind:
+          type: string
+          enum: [metered]
+        flow_l_min:
+          type: [number, "null"]
+        kind:
+          $ref: "#/components/schemas/Kind"
+        meter_from:
+          $ref: "#/components/schemas/MeterRef"
+        meter_to:
+          $ref: "#/components/schemas/MeterRef"
+    MeterRef:
+      type: object
+      additionalProperties: false
+      required: [counting_since, seq]
+      properties:
+        counting_since:
+          $ref: "#/components/schemas/Time"
+        seq:
+          type: integer
+    DrawBalancedEvent:
+      type: object
+      additionalProperties: false
+      required: [schema, event, timestamp, draw_balanced]
+      properties:
+        schema:
+          type: string
+          enum: [net.swee.washhouse.event.v1]
+        event:
+          type: string
+          enum: [draw_balanced]
+        timestamp:
+          $ref: "#/components/schemas/Time"
+        draw_balanced:
+          $ref: "#/components/schemas/DrawBalanced"
+    DrawBalanced:
+      type: object
+      additionalProperties: false
+      required: [draw_id, ended_at, tanks, outlet_peak_c, inlet_drop_c, energy_kwh, heat_balance_l,
+        heat_balance_reliable, reasons, masked_by_reheat]
+      properties:
+        draw_id:
+          type: string
+        ended_at:
+          $ref: "#/components/schemas/Time"
+        tanks:
+          type: array
+          items:
+            $ref: "#/components/schemas/TankShare"
+        outlet_peak_c:
+          type: [number, "null"]
+        inlet_drop_c:
+          type: [number, "null"]
+        energy_kwh:
+          type: [number, "null"]
+        heat_balance_l:
+          type: [number, "null"]
+        heat_balance_reliable:
+          type: boolean
+        reasons:
+          type: array
+          items:
+            type: string
+            enum: [hw_on, tank_gained, hw_unknown, small, thermocline_gap, gap_unread, interrupted, shares_early,
+              no_loss, tank_missing]
+        masked_by_reheat:
+          type: boolean
+    TankShare:
+      type: object
+      additionalProperties: false
+      description: share and litres are absent together when the split can't be measured.
+      required: [device_id, outlet_peak_c, inlet_drop_c]
+      properties:
+        device_id:
+          type: string
+        share:
+          type: number
+        litres:
+          type: number
+        outlet_peak_c:
+          type: [number, "null"]
+        inlet_drop_c:
+          type: [number, "null"]
+    Model:
+      type: object
+      additionalProperties: false
+      required: [behaviour, applied_at]
+      properties:
+        behaviour:
+          type: object
+          description: The behaviour document (testdata/behaviour.example.json has its shape).
+        applied_at:
+          $ref: "#/components/schemas/Time"

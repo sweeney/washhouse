@@ -28,7 +28,8 @@ next.
 | `meter/` | The hot-water meter's datasheet and photos. |
 | `internal/` | The pure core: decoders, the meter consumer, the cylinder model, thermal tracking, draw attribution, `engine`, which wires them into the system's state and events, and `publish`, which turns those into the wire messages of `common/wire/washhouse` (in `sweeney/common`; its goldens pin WIRE.md). The decoders for washhouse's inputs are `common/wire/tanktemp` and `common/wire/boiler`. |
 | `cmd/washreplay` | Replays recordings through the engine and prints its events and states. |
-| `cmd/washhouse` | The service: subscribes, runs the engine, publishes, and serves `/healthz`. |
+| `cmd/washhouse` | The service: subscribes, runs the engine, publishes, and serves the API and `/healthz`. |
+| `internal/httpapi` | The HTTP API and its spec (`openapi.yaml`), which a test checks against every response over every fixture. |
 | `deploy/config.example.yaml` | The service's local config: the broker, HTTP, the topics, and where the behaviour document is (the config service, read with identity client credentials). |
 | `testdata/behaviour.example.json` | The behaviour document (cylinders, meter rules, thresholds) with the plan's values: the shape of the `washhouse` namespace. |
 
@@ -60,6 +61,26 @@ as an identity client; washhouse refuses to start without it.
 go run ./cmd/washhouse -config my-config.yaml -check-config
 go run ./cmd/washhouse -config my-config.yaml
 curl -s localhost:8095/healthz
+```
+
+## API
+
+The spec is `GET /openapi.json` (source: `internal/httpapi/openapi.yaml`).
+`/healthz` and `/openapi.json` are public; the rest needs a Bearer token from
+identity, a user's (active) or a service's. `http.audience` says whether the
+token must name `washhouse`: `off`, `warn` (accept and log one that
+doesn't) or `enforce`. A token that can't be checked because identity's
+keys are unavailable is a 503 with `Retry-After`, not a 401.
+
+| Path | What |
+|---|---|
+| `GET /api/v1/state` | The system's state: `{base}/state`'s payload, byte for byte (503 before the first input). |
+| `GET /api/v1/tanks/{id}` | One tank: `{base}/tank/{id}`'s payload. |
+| `GET /api/v1/draws` | Recent draws, newest first, each its `draw_ended` and `draw_balanced` events (`balanced` is `null` until it comes); at most `recent_draws`, kept across a reload. |
+| `GET /api/v1/model` | The running behaviour document and when it was applied. |
+
+```
+curl -s -H "Authorization: Bearer $TOKEN" localhost:8095/api/v1/state
 ```
 
 To change the behaviour, check the new document with the installed build

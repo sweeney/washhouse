@@ -19,11 +19,11 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -37,7 +37,11 @@ import (
 	"github.com/sweeney/common/lifecycle"
 	"github.com/sweeney/common/mqttpub"
 	"github.com/sweeney/common/mqttpub/retry"
+	"github.com/sweeney/common/web/apiauth"
+	webserve "github.com/sweeney/common/web/serve"
 	"github.com/sweeney/common/wire/washhouse"
+	"github.com/sweeney/identity/common/auth"
+	"github.com/sweeney/washhouse/internal/httpapi"
 )
 
 // version is stamped at build time with -ldflags "-X main.version=<commit>".
@@ -166,14 +170,52 @@ func serve(lc localConfig, r *remote, d document, hup <-chan os.Signal) error {
 	if err != nil {
 		return err
 	}
+	mw, err := newAuth(lc, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	if err != nil {
+		return err
+	}
 	ln, err := net.Listen("tcp", lc.HTTP.Listen)
 	if err != nil {
 		return fmt.Errorf("http: %w", err)
 	}
 	return run(context.Background(), s, deps{Conn: pub, Wall: time.Now, Listener: ln, Logger: logger,
 		Version: version, Heartbeat: time.Duration(lc.Heartbeat), Broker: lc.MQTT.Broker, ClientID: id,
-		Remote: r, Reload: hup})
+		Remote: r, Reload: hup, Auth: mw, PublicURL: lc.HTTP.PublicURL})
 }
+
+// newAuth is the API's middleware: a token identity signed, a user's
+// (active) or a service's, with the audience checked as configured.
+func newAuth(lc localConfig, logger *slog.Logger) (func(http.Handler) http.Handler, error) {
+	vc := auth.JWKSVerifierConfig{IssuerURL: lc.Identity.BaseURL, Issuer: lc.Identity.BaseURL, Logger: logger}
+	switch lc.HTTP.Audience {
+	case audienceOff:
+	case audienceWarn:
+		vc.RequiredAudience, vc.RequiredAudienceWarnOnly = audience, true
+	case audienceEnforce:
+		vc.RequiredAudience = audience
+	default:
+		return nil, fmt.Errorf("http.audience %q", lc.HTTP.Audience)
+	}
+	v, err := auth.NewJWKSVerifier(vc)
+	if err != nil {
+		return nil, err
+	}
+	return apiauth.New(apiauth.Config[*auth.TokenClaims, *auth.ServiceTokenClaims]{
+		Verifier: v,
+		UserOK: func(c *auth.TokenClaims) error {
+			if !c.IsActive {
+				return &apiauth.Refusal{Status: http.StatusUnauthorized, Code: "invalid_token", Description: "user account is not active"}
+			}
+			return nil
+		},
+		ServiceOK:       apiauth.AnyService[*auth.ServiceTokenClaims],
+		KeysUnavailable: auth.ErrKeysUnavailable,
+		TokenExpired:    auth.ErrTokenExpired,
+	})
+}
+
+// audience is the aud a token names to read washhouse (http.audience).
+const audience = "washhouse"
 
 // connection is what run needs from MQTT: MQTTPublisher, faked in tests.
 type connection interface {
@@ -200,6 +242,9 @@ type deps struct {
 
 	Remote *remote          // the behaviour namespace; nil: none
 	Reload <-chan os.Signal // each a SIGHUP: fetch Remote again
+
+	Auth      func(http.Handler) http.Handler // the API's; nil: no API (tests)
+	PublicURL string
 }
 
 // run is washhouse: subscribe, connect, then the loop under lifecycle
@@ -229,19 +274,27 @@ func run(ctx context.Context, s *service, d deps) error {
 	}
 
 	if d.Listener != nil {
-		mux := http.NewServeMux()
-		mux.Handle("GET /healthz", health.Handler(func() health.Report { return s.report(d.Conn.Connected(), d.Wall()) }))
-		srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+		hz := health.Handler(func() health.Report { return s.report(d.Conn.Connected(), d.Wall()) })
+		var h http.Handler
+		if d.Auth == nil {
+			mux := http.NewServeMux()
+			mux.Handle("GET /healthz", hz)
+			h = mux
+		} else {
+			var err error
+			if h, err = httpapi.New(httpapi.Config{Snapshot: s.rec.Snapshot, Health: hz, Auth: d.Auth, PublicURL: d.PublicURL}); err != nil {
+				return err
+			}
+		}
+		httpCtx, stopHTTP := context.WithCancel(context.Background())
+		httpDone := make(chan struct{})
 		go func() {
-			if err := srv.Serve(d.Listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			defer close(httpDone)
+			if err := webserve.Run(httpCtx, d.Listener, h); err != nil {
 				d.Logger.Printf("http: %v", err)
 			}
 		}()
-		defer func() {
-			sctx, stop := context.WithTimeout(context.Background(), 2*time.Second)
-			defer stop()
-			_ = srv.Shutdown(sctx)
-		}()
+		defer func() { stopHTTP(); <-httpDone }()
 	}
 
 	// The loop starts with the first unit of work, after STARTUP, so no

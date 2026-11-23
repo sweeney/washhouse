@@ -1,4 +1,4 @@
-.PHONY: build test test-tools lint check
+.PHONY: build test test-tools lint spectral check
 
 BINARY  := washhouse
 VERSION := $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
@@ -19,5 +19,9 @@ lint:
 	go vet ./...
 	test -z "$$(gofmt -l .)" || { gofmt -l .; exit 1; }
 	staticcheck ./...
+
+# The OpenAPI lint (CI runs it too); needs npx.
+spectral:
+	npx --yes @stoplight/spectral-cli@6.11.1 lint internal/httpapi/openapi.yaml
 
 check: lint test test-tools

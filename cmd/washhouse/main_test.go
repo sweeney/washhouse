@@ -199,7 +199,8 @@ func TestRun(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- run(context.Background(), s, deps{Conn: c, Wall: time.Now, Listener: ln, Signals: sig, Tick: tick,
-			HeartbeatTick: make(chan time.Time), Logger: log.New(logs, "", 0), Version: "abc1234", Remote: r, Reload: hup})
+			HeartbeatTick: make(chan time.Time), Logger: log.New(logs, "", 0), Version: "abc1234", Remote: r, Reload: hup,
+			Auth: tokenGate})
 	}()
 
 	waitFor(t, "STARTUP", func() bool { return len(statuses(c.Fake)) >= 1 })
@@ -247,6 +248,27 @@ func TestRun(t *testing.T) {
 		return string(body)
 	}
 	body := healthz()
+
+	// The API, behind auth: the state as published.
+	api := func(token string) (int, string) {
+		req, _ := http.NewRequest(http.MethodGet, "http://"+ln.Addr().String()+"/api/v1/state", nil)
+		if token != "" {
+			req.Header.Set("Authorization", token)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	if code, _ := api(""); code != http.StatusUnauthorized {
+		t.Errorf("/api/v1/state without a token: %d", code)
+	}
+	if code, b := api("ok"); code != http.StatusOK || !strings.Contains(b, `"schema":"net.swee.washhouse.state.v1"`) {
+		t.Errorf("/api/v1/state: %d %s", code, b)
+	}
 	for _, want := range []string{`"status": "ok"`, `"version": "abc1234"`, `"mqtt_connected": true`, `"ready": true`, `"received": 2`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("%s isn't in /healthz:\n%s", want, body)
@@ -306,4 +328,15 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.b.String()
+}
+
+// tokenGate is a fake auth middleware: only "Authorization: ok" gets in.
+func tokenGate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "ok" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

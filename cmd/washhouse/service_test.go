@@ -793,3 +793,46 @@ func TestReloadReplaysAFailedSweep(t *testing.T) {
 		t.Errorf("after the reload %+v\nbefore %+v", after, before)
 	}
 }
+
+// The API serves what the service last published: the state's payload
+// byte for byte, the draws as their events, and the running behaviour.
+func TestServiceRecordsForTheAPI(t *testing.T) {
+	s, fake, c := newTestService(t, "water/hot")
+	if snap := s.rec.Snapshot(); snap.State != nil || string(snap.Behaviour) != string(s.raw) {
+		t.Fatalf("before any input: %+v", snap)
+	}
+	for _, l := range readLines(t, showerFixture) {
+		c.t = l.at
+		s.handle(mqttpub.Received{Topic: l.topic, Payload: l.payload})
+	}
+	c.t = s.lastWall.Add(s.eng.Settle() + s.silence())
+	s.tick()
+	snap := s.rec.Snapshot()
+	states := fake.All("water/hot/state")
+	if m := states[len(states)-1]; string(snap.State) != m.Payload {
+		t.Errorf("state %s\nwant %s", snap.State, m.Payload)
+	}
+	if len(snap.Draws) == 0 || snap.Draws[0].Balanced == nil {
+		t.Fatalf("draws %+v", snap.Draws)
+	}
+	var ended string
+	for _, e := range fake.All("water/hot/events") {
+		if strings.Contains(e.Payload, `"event":"draw_ended"`) {
+			ended = e.Payload
+		}
+	}
+	if string(snap.Draws[0].Ended) != ended {
+		t.Errorf("draw %s\nwant %s", snap.Draws[0].Ended, ended)
+	}
+
+	// A reload keeps the draws, and the API shows the new behaviour.
+	d := exampleDoc(t, replace(`"recent_draws": 50,`, `"recent_draws": 40,`))
+	c.t = c.t.Add(time.Minute)
+	if _, err := s.apply(d); err != nil {
+		t.Fatal(err)
+	}
+	after := s.rec.Snapshot()
+	if len(after.Draws) != len(snap.Draws) || string(after.Behaviour) != string(d.raw) || !after.AppliedAt.Equal(c.t) {
+		t.Errorf("after the reload: %d draws, applied %v", len(after.Draws), after.AppliedAt)
+	}
+}
