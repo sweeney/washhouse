@@ -188,8 +188,9 @@ func (e *Engine) Meter(m tanktemp.Meter) []Event {
 	if h := e.meter.Health(); m.DeviceID == e.cfg.Meter.DeviceID && h.Run.Seq == m.Seq && h.Run.CountingSince.Equal(m.CountingSince) {
 		// taken: the consumer's latest message is this one, not one it
 		// refused, or a duplicate of an earlier one
-		e.meterSeen, e.meterAt, e.meterCount, e.countingSince = true, m.Timestamp, m.Count, m.CountingSince
+		e.meterSeen, e.meterCount, e.countingSince = true, m.Count, m.CountingSince
 		if m.ClockSynced {
+			e.meterAt = m.Timestamp // an unsynced time can't be trusted
 			e.see(m.Timestamp)
 		}
 	}
@@ -441,7 +442,10 @@ func (e *Engine) State() State {
 	}
 	if e.meterSeen {
 		at, n, since, l := e.meterAt, e.meterCount, e.countingSince, e.meter.Health().Litres
-		s.Meter = MeterState{At: &at, Count: &n, CountingSince: &since, Litres: &l}
+		s.Meter = MeterState{Count: &n, CountingSince: &since, Litres: &l}
+		if !at.IsZero() {
+			s.Meter.At = &at
+		}
 		if f, ok := e.meter.Flow(); ok {
 			x := flowOf(f)
 			s.Meter.ContinuousFlow = &x

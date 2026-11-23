@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"regexp"
 	"slices"
 	"time"
 
@@ -24,7 +25,8 @@ type Config struct {
 	Estimate estimate.Config
 	// Tanks: each cylinder's probes. Their order is the order the state,
 	// and every draw's attribution, list them; Thermal.Tanks and
-	// Draw.Tanks must name the same cylinders in the same order.
+	// Draw.Tanks must name the same cylinders in the same order, and
+	// Draw.OutletSplit must be OutletSplit.
 	Tanks   []tank.Config
 	Thermal thermal.Config
 	Draw    draw.Config
@@ -51,6 +53,10 @@ type Config struct {
 	RecentDraws int
 }
 
+// deviceID is a device id: its key in devices_<site>, and a segment of
+// washhouse's tank topic (docs/WIRE.md).
+var deviceID = regexp.MustCompile(`^[a-z0-9_-]+$`)
+
 // Validate reports the problems with c, or nil.
 func (c Config) Validate() error {
 	var errs []error
@@ -68,6 +74,9 @@ func (c Config) Validate() error {
 	var ids []string
 	for _, tc := range c.Tanks {
 		add(tc.Validate())
+		if tc.DeviceID != "" && !deviceID.MatchString(tc.DeviceID) {
+			add(fmt.Errorf("engine: tank %q: a device id must match [a-z0-9_-]+, since it is a topic segment", tc.DeviceID))
+		}
 		if slices.Contains(ids, tc.DeviceID) {
 			add(fmt.Errorf("engine: tank %q configured twice", tc.DeviceID))
 		}
@@ -86,6 +95,9 @@ func (c Config) Validate() error {
 		add(fmt.Errorf("engine: draw tanks %v must be the tanks %v, in order", c.Draw.Tanks, ids))
 	}
 	// The estimate and the attribution count heat alike.
+	if !slices.Equal(c.Draw.OutletSplit, c.OutletSplit) {
+		add(fmt.Errorf("engine: draw outlet split %v must be the outlet split %v", c.Draw.OutletSplit, c.OutletSplit))
+	}
 	if c.Draw.ColdC != c.Estimate.ColdC {
 		add(fmt.Errorf("engine: draw cold %v °C must be the estimate's %v °C", c.Draw.ColdC, c.Estimate.ColdC))
 	}

@@ -124,7 +124,7 @@ func drawBalancedMasked() Event {
 }
 
 func flowStarted() Event {
-	return Event{Event: EventContinuousFlowStarted, Timestamp: at("2001-01-01T00:15:12.000Z"),
+	return Event{Event: EventContinuousFlowStarted, Timestamp: at("2001-01-01T00:14:11.903Z"),
 		ContinuousFlow: &ContinuousFlow{Since: at("2001-01-01T00:01:05.217Z"), Last: at("2001-01-01T00:14:11.903Z"),
 			Litres: 2, FlowLPerMin: 0.076}}
 }
@@ -404,5 +404,89 @@ func TestEncodeEventRefusesMismatch(t *testing.T) {
 	e.DrawBalanced.Tanks[0].Litres = nil
 	if _, err := EncodeEvent(e); err == nil {
 		t.Error("a share without litres encoded")
+	}
+}
+
+// json.Unmarshal matches keys case-insensitively, so a key that differs
+// from a known one only in case would silently override it. It is refused.
+func TestDecodeRefusesACaseVariantKey(t *testing.T) {
+	raw, _ := os.ReadFile(filepath.Join("testdata", "tank-cooling.golden"))
+	bad := bytes.Replace(raw, []byte(`}`), []byte(`,"PROBES_TOTAL":9}`), 1)
+	if got, err := DecodeTank(bad); err == nil {
+		t.Errorf("decoded, probes_total %v", *got.ProbesTotal)
+	}
+	st, _ := os.ReadFile(filepath.Join("testdata", "state-draw.golden"))
+	bad = bytes.Replace(st, []byte(`"hw":false`), []byte(`"hw":false,"Hw":true`), 1)
+	if _, err := DecodeState(bad); err == nil {
+		t.Error("a nested case variant decoded")
+	}
+}
+
+// state, heat_source, volume_kind and the status event are closed: a value
+// outside them is an error, both ways. kind and reasons are open (WIRE.md,
+// Conventions).
+func TestClosedVocabularies(t *testing.T) {
+	read := func(name string) string {
+		x, _ := os.ReadFile(filepath.Join("testdata", name))
+		return string(x)
+	}
+	tank, state, ended := read("tank-cooling.golden"), read("state-draw.golden"), read("event-draw-ended.golden")
+	heating, hb := read("event-heating-started.golden"), read("status-heartbeat.golden")
+	for _, c := range []struct {
+		name, raw string
+		dec       func([]byte) error
+	}{
+		{"tank state", strings.Replace(tank, `"state":"cooling"`, `"state":"bogus"`, 1), tankDec},
+		{"empty tank state", strings.Replace(tank, `"state":"cooling"`, `"state":""`, 1), tankDec},
+		{"heat source", strings.Replace(tank, `"heat_source":null`, `"heat_source":"gas"`, 1), tankDec},
+		{"summary state", strings.Replace(state, `"state":"drawing"`, `"state":"boiling"`, 1), stateDec},
+		{"event prev", strings.Replace(heating, `"prev":"cooling"`, `"prev":"x"`, 1), eventDec},
+		{"event heat source", strings.Replace(heating, `"heat_source":"hw"`, `"heat_source":"solar"`, 1), eventDec},
+		{"volume kind", strings.Replace(ended, `"volume_kind":"metered"`, `"volume_kind":"guessed"`, 1), eventDec},
+		{"empty device id", strings.Replace(tank, `"device_id":"hot_water_cylinder_right"`, `"device_id":""`, 1), tankDec},
+		{"device id with a slash", strings.Replace(state, `"device_id":"hot_water_cylinder_left"`, `"device_id":"a/b"`, 1), stateDec},
+		{"status event", strings.Replace(hb, `"HEARTBEAT"`, `"NAP"`, 1), statusDec},
+		{"heartbeat offline", strings.Replace(hb, `"online":true`, `"online":false`, 1), statusDec},
+		{"shutdown online", strings.Replace(read("status-shutdown.golden"), `"online":false`, `"online":true`, 1), statusDec},
+		{"reason on a heartbeat", strings.Replace(hb, `]}`, `],"reason":"SIGTERM"}`, 1), statusDec},
+	} {
+		if err := c.dec([]byte(c.raw)); err == nil {
+			t.Errorf("%s: decoded", c.name)
+		}
+	}
+	// kind is open: a consumer maps one it doesn't know to unknown.
+	if err := eventDec([]byte(strings.Replace(ended, `"kind":"shower"`, `"kind":"hot_tub"`, 1))); err != nil {
+		t.Errorf("an unknown kind was refused: %v", err)
+	}
+	// The encoders refuse the same, so a publisher bug can't send it.
+	x := tankCooling()
+	x.State = "bogus"
+	if _, err := EncodeTank(x); err == nil {
+		t.Error("a bogus state encoded")
+	}
+	s := statusHeartbeat()
+	s.Online = false
+	if _, err := EncodeStatus(s); err == nil {
+		t.Error("an offline heartbeat encoded")
+	}
+}
+
+func statusDec(b []byte) error { _, err := DecodeStatus(b); return err }
+
+// The encoders turn a nil list into [], which the decoders require: what
+// one encodes, the other accepts.
+func TestEncodersFillNilLists(t *testing.T) {
+	raw, err := EncodeState(State{Timestamp: at("2001-01-01T00:00:00.000Z")})
+	if _, derr := DecodeState(raw); err != nil || derr != nil {
+		t.Errorf("state: %v, %v: %s", err, derr, raw)
+	}
+	raw, err = EncodeStatus(Status{Online: true, Event: StatusStartup, Timestamp: at("2001-01-01T00:00:00.000Z"), Version: "x"})
+	if _, derr := DecodeStatus(raw); err != nil || derr != nil {
+		t.Errorf("status: %v, %v: %s", err, derr, raw)
+	}
+	raw, err = EncodeEvent(Event{Event: EventDrawBalanced, Timestamp: at("2001-01-01T00:00:00.000Z"),
+		DrawBalanced: &DrawBalanced{DrawID: "x-1", EndedAt: at("2001-01-01T00:00:00.000Z")}})
+	if _, derr := DecodeEvent(raw); err != nil || derr != nil {
+		t.Errorf("event: %v, %v: %s", err, derr, raw)
 	}
 }

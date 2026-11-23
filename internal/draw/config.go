@@ -52,6 +52,13 @@ type Config struct {
 	// 71 L in the 460 mm bore). Every pair in Gaps is checked.
 	ThermoclineC float64
 	Gaps         []Gap
+	// OutletSplit: the fraction of every litre each tank gives through the
+	// merged outlet (the pipework's split, in Tanks order; summing to 1).
+	// When the shares are withheld (a reheat, or HW unknown, so the split
+	// the probes give measures the coil), the delivered temperature and
+	// the heat balance weight the outlet peaks by this instead. The engine
+	// sets it from its own OutletSplit.
+	OutletSplit []float64
 }
 
 // Gap names two probes by position (tanktemp's sensor positions, such as
@@ -119,6 +126,21 @@ func (c Config) Validate() error {
 			errs = append(errs, fmt.Errorf("the pair %q–%q listed twice in Gaps", g.Low, g.High))
 		}
 		seenGap[g] = true
+	}
+	if len(c.OutletSplit) != len(c.Tanks) {
+		errs = append(errs, fmt.Errorf("OutletSplit has %d fractions for %d Tanks", len(c.OutletSplit), len(c.Tanks)))
+	} else {
+		sum := 0.0
+		for _, x := range c.OutletSplit {
+			if !(x >= 0 && x <= 1) {
+				errs = append(errs, fmt.Errorf("OutletSplit %v: each fraction must be in [0, 1]", c.OutletSplit))
+				break
+			}
+			sum += x
+		}
+		if math.Abs(sum-1) > 1e-9 {
+			errs = append(errs, fmt.Errorf("OutletSplit %v sums to %v, not 1", c.OutletSplit, sum))
+		}
 	}
 	if len(errs) > 0 {
 		return fmt.Errorf("draw config: %w", errors.Join(errs...))

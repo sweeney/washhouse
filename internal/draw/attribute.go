@@ -103,8 +103,9 @@ type TankAttribution struct {
 type Attribution struct {
 	Draw  meter.Draw
 	Tanks []TankAttribution // in Config.Tanks order
-	// OutletC is the share-weighted outlet peak: the system's delivered
-	// temperature.
+	// OutletC is the outlet peaks weighted by the measured shares, or by
+	// Config.OutletSplit when the shares are withheld: the system's
+	// delivered temperature.
 	OutletC *float64
 	// InletDropC is the largest inlet drop of any tank.
 	InletDropC *float64
@@ -253,8 +254,7 @@ func Attribute(cfg Config, d meter.Draw, w Window) Attribution {
 		}
 	}
 
-	// The heat balance: the energy used by the balance sweep over what a
-	// litre at the system's outlet carries.
+	// The energy used by the balance sweep.
 	total, haveAll := 0.0, !missing
 	for _, ta := range a.Tanks {
 		if ta.SettledLostKWh == nil {
@@ -282,26 +282,37 @@ func Attribute(cfg Config, d meter.Draw, w Window) Attribution {
 	if d.Litres < cfg.MinReliableLitres {
 		reasons.add(ReasonSmall)
 	}
+	a.Reasons = reasons.list()
+	a.Reliable = len(a.Reasons) == 0
+	a.MaskedByReheat = reasons[ReasonHWOn] || reasons[ReasonGained]
+	// A reheat (or HW unknown, which can't rule one out) heats whichever
+	// tank its coil is in, so the split would measure the coil, not the
+	// pipework: the shares are left unknown, and the outlet is weighted by
+	// the configured split instead (the balance below follows it; both are
+	// unreliable).
+	withheld := a.MaskedByReheat || reasons[ReasonHWUnknown]
+	switch {
+	case withheld && !missing:
+		out := 0.0
+		for k := range a.Tanks {
+			out += cfg.OutletSplit[k] * *a.Tanks[k].PeakUsedC
+		}
+		a.OutletC = ptr(out)
+	case shares != nil:
+		for k := range a.Tanks {
+			a.Tanks[k].Share = ptr(shares[k])
+			a.Tanks[k].Litres = ptr(shares[k] * d.Litres)
+		}
+	}
+
+	// The heat balance: the energy used over what a litre at the system's
+	// outlet carries.
 	if haveAll {
 		a.EnergyKWh = ptr(total)
 		if total <= 0 {
 			a.HeatBalanceL = ptr(0)
 		} else if a.OutletC != nil && *a.OutletC > cfg.ColdC {
 			a.HeatBalanceL = ptr(max(0, total/(cfg.KWhPerLitreK*(*a.OutletC-cfg.ColdC))))
-		}
-	}
-
-	a.Reasons = reasons.list()
-	a.Reliable = len(a.Reasons) == 0
-	a.MaskedByReheat = reasons[ReasonHWOn] || reasons[ReasonGained]
-	// A reheat (or HW unknown, which can't rule one out) heats whichever
-	// tank its coil is in, so the split would measure the coil, not the
-	// pipework: the shares are left unknown. The outlet and the balance
-	// still use the computed split, and are unreliable.
-	if shares != nil && !a.MaskedByReheat && !reasons[ReasonHWUnknown] {
-		for k := range a.Tanks {
-			a.Tanks[k].Share = ptr(shares[k])
-			a.Tanks[k].Litres = ptr(shares[k] * d.Litres)
 		}
 	}
 	return a

@@ -48,7 +48,7 @@ func planConfig() engine.Config {
 			Tanks: []thermal.TankConfig{{DeviceID: left, PriorUAWPerK: 4, PriorHours: 1}, {DeviceID: right, PriorUAWPerK: 17, PriorHours: 1}}},
 		Draw: draw.Config{Tanks: []string{left, right}, ColdC: 10, KWhPerLitreK: 4.186 / 3600, ShareSettle: 60 * time.Second,
 			BalanceSettle: 8 * time.Minute, MaxSweepGap: 2 * time.Minute, MinReliableLitres: 20, GainKWh: 0.05,
-			ThermoclineC: 40, Gaps: []draw.Gap{{Low: "lower", High: "middle"}}},
+			ThermoclineC: 40, Gaps: []draw.Gap{{Low: "lower", High: "middle"}}, OutletSplit: []float64{0.11, 0.89}},
 		OutletSplit:            []float64{0.11, 0.89},
 		LowHotWaterL:           60,
 		LowHotWaterMarginL:     10,

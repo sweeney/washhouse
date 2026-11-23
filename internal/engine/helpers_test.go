@@ -109,6 +109,7 @@ func planConfig() Config {
 			GainKWh:           0.05,
 			ThermoclineC:      40,
 			Gaps:              []draw.Gap{{Low: "lower", High: "middle"}},
+			OutletSplit:       []float64{0.11, 0.89},
 		},
 		OutletSplit:            []float64{0.11, 0.89},
 		LowHotWaterL:           60,

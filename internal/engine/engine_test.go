@@ -761,3 +761,83 @@ func TestBoilerSilenceGraceAtStartup(t *testing.T) {
 		t.Errorf("a retained event, then the first sweep: hw %s, want on", boolStr(b.HW))
 	}
 }
+
+// The state's meter time is the latest synced message's: an unsynced one
+// (tanktemp booted without NTP) still counts, but its time can't be
+// trusted, so it doesn't move meter.timestamp.
+func TestMeterTimeOnlyFromSyncedMessages(t *testing.T) {
+	e := newEngine(t, planConfig())
+	m := &meterSim{since: t0}
+	e.Meter(m.msg(t0, tanktemp.TriggerSweep, tanktemp.LevelOpen))
+	u := m.msg(t0.Add(-time.Hour), tanktemp.TriggerSweep, tanktemp.LevelOpen)
+	u.ClockSynced = false
+	m.count = 3
+	u.Count = 3
+	e.Meter(u)
+	s := e.State().Meter
+	if s.At == nil || !s.At.Equal(t0) {
+		t.Errorf("meter time %v, want the synced %v", s.At, t0)
+	}
+	if s.Count == nil || *s.Count != 3 {
+		t.Errorf("count %v, want the unsynced message's 3", s.Count)
+	}
+}
+
+// With only unsynced meter messages, the meter time is unknown, not zero.
+func TestMeterTimeUnknownWhenNeverSynced(t *testing.T) {
+	e := newEngine(t, planConfig())
+	m := &meterSim{since: t0}
+	u := m.msg(t0, tanktemp.TriggerSweep, tanktemp.LevelOpen)
+	u.ClockSynced = false
+	e.Meter(u)
+	if s := e.State().Meter; s.At != nil || s.Count == nil {
+		t.Errorf("meter time %v count %v, want an unknown time and a count", s.At, s.Count)
+	}
+}
+
+// When the next draw starts before the last one's draw_ended is out (it
+// waits for the tanks' sweeps after the meter's end), active_draw goes
+// from one draw straight to the next, never null. It still changes only
+// in an input that also gives the last one's draw_ended, so a consumer
+// reconciling from State never loses a draw unended.
+func TestNextDrawReplacesActiveDrawWithItsPredecessorsEnd(t *testing.T) {
+	e := newEngine(t, planConfig())
+	m := &meterSim{since: t0}
+	var msgs []tanktemp.Meter
+	for i := 0; i < 5; i++ { // draw A: 5 litres, 10 s apart
+		msgs = append(msgs, m.litre(t0.Add(time.Duration(i)*10*time.Second), 2*time.Second)...)
+	}
+	b := t0.Add(40*time.Second + 90*time.Second) // B 90 s after A's last litre: A ended, not yet given
+	for i := 0; i < 3; i++ {
+		msgs = append(msgs, m.litre(b.Add(time.Duration(i)*10*time.Second), 2*time.Second)...)
+	}
+	var prev string
+	sawA, sawB := false, false
+	for _, x := range msgs {
+		ev := e.Meter(x)
+		cur := ""
+		if d := e.State().ActiveDraw; d != nil {
+			cur = d.DrawID
+		}
+		if prev != "" && cur != prev {
+			ended := false
+			for _, v := range ev {
+				ended = ended || (v.Type == EventDrawEnded && v.Ended.DrawID == prev)
+			}
+			if !ended {
+				t.Errorf("active_draw went %q → %q without %q's draw_ended in that input (%v)", prev, cur, prev, ev)
+			}
+			if cur == "" {
+				t.Errorf("active_draw went null between the draws")
+			}
+			sawB = cur != ""
+		}
+		if cur != "" && prev == "" {
+			sawA = true
+		}
+		prev = cur
+	}
+	if !sawA || !sawB {
+		t.Fatalf("saw A %v, B replacing it %v: the scenario didn't happen", sawA, sawB)
+	}
+}

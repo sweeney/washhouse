@@ -100,6 +100,10 @@ func checkWire(t *testing.T, out string, wantEvents int) {
 				if !e.Timestamp.After(d.EndedAt.Time) {
 					t.Errorf("line %d: draw_ended at %v, not after the last litre %v", i+1, e.Timestamp, d.EndedAt)
 				}
+			case washhouse.EventContinuousFlowStarted:
+				if !e.Timestamp.Equal(e.ContinuousFlow.Last.Time) {
+					t.Errorf("line %d: continuous_flow_started at %v, not its last creep litre %v", i+1, e.Timestamp, e.ContinuousFlow.Last)
+				}
 			case washhouse.EventDrawBalanced:
 				d := e.DrawBalanced
 				ea, ok := endedAt[d.DrawID]
@@ -134,5 +138,30 @@ func checkWire(t *testing.T, out string, wantEvents int) {
 	}
 	if bytes.Contains([]byte(out), []byte("/tanktemp/")) {
 		t.Error("published inside tanktemp's subtree")
+	}
+}
+
+// A tank judged before a draw goes back to its judgement after it, with
+// the power still unknown (WIRE.md, States): on shower-layered the right
+// tank, cooling before the 15 L draw, is cooling again after it with
+// power_kw null.
+func TestJudgementHoldsThroughADraw(t *testing.T) {
+	out := runOK(t, "-config", examplePath, "-wire", fixture)
+	found := false
+	for _, line := range strings.Split(strings.TrimSuffix(out, "\n"), "\n") {
+		topic, payload, _ := strings.Cut(line, " ")
+		if topic != "water/hot/events" {
+			continue
+		}
+		e, err := washhouse.DecodeEvent([]byte(payload))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if x := e.Tank; x != nil && x.Prev == washhouse.StateDrawing && x.State == washhouse.StateCooling && x.PowerKW == nil {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("no tank went drawing → cooling with power_kw null")
 	}
 }

@@ -21,6 +21,7 @@ func testConfig() Config {
 		GainKWh:           0.05,
 		ThermoclineC:      40,
 		Gaps:              []Gap{{Low: "lower", High: "middle"}},
+		OutletSplit:       []float64{0.11, 0.89},
 	}
 }
 
@@ -38,6 +39,10 @@ func TestConfigRefuses(t *testing.T) {
 	}{
 		{"no tanks", func(c *Config) { c.Tanks = nil }, "Tanks"},
 		{"empty tank", func(c *Config) { c.Tanks = []string{"a", ""} }, "Tanks"},
+		{"no outlet split", func(c *Config) { c.OutletSplit = nil }, "OutletSplit"},
+		{"split per tank", func(c *Config) { c.OutletSplit = []float64{1} }, "OutletSplit"},
+		{"split sums to 1", func(c *Config) { c.OutletSplit = []float64{0.2, 0.7} }, "OutletSplit"},
+		{"split in [0, 1]", func(c *Config) { c.OutletSplit = []float64{-0.5, 1.5} }, "OutletSplit"},
 		{"duplicate tank", func(c *Config) { c.Tanks = []string{"a", "a"} }, "twice"},
 		{"cold NaN", func(c *Config) { c.ColdC = math.NaN() }, "ColdC"},
 		{"heat capacity zero", func(c *Config) { c.KWhPerLitreK = 0 }, "KWhPerLitreK"},

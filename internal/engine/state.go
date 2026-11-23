@@ -86,7 +86,7 @@ type ActiveDraw struct {
 
 // MeterState is the water meter as the engine last heard it.
 type MeterState struct {
-	At            *time.Time // the latest meter message's timestamp; nil before one
+	At            *time.Time // the latest synced meter message's timestamp; nil before one
 	Count         *uint64    // the current run's count
 	CountingSince *time.Time // the current run
 	// Litres is metered since the engine started, over every run.

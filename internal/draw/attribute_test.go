@@ -590,3 +590,28 @@ func TestTankGainUsesBulkEnergy(t *testing.T) {
 		t.Errorf("a bulk gain of 0.375 kWh wasn't masked")
 	}
 }
+
+// With the shares withheld, the split the probes give measures the coil
+// (it swings from 0 to 1 across the fixtures' masked draws), so the
+// delivered temperature, and the heat balance that divides by it, are
+// weighted by the configured outlet split, the pipework's.
+func TestMaskedOutletUsesConfiguredSplit(t *testing.T) {
+	cfg := testConfig()
+	w := bigShower()
+	w.HW = []Programmer{{t0.Add(-time.Hour), boiler.On}}
+	a := Attribute(cfg, shower(), w)
+	l, r := tankOf(t, a, "hot_water_cylinder_left"), tankOf(t, a, "hot_water_cylinder_right")
+	want := 0.11**l.PeakUsedC + 0.89**r.PeakUsedC
+	if !near(a.OutletC, want, 1e-9) {
+		t.Fatalf("outlet %v, want %v at the configured split", show(a.OutletC), want)
+	}
+	if hb := *a.EnergyKWh / (cfg.KWhPerLitreK * (want - cfg.ColdC)); !near(a.HeatBalanceL, hb, 1e-9) {
+		t.Errorf("heat balance %v, want %v from that outlet", show(a.HeatBalanceL), hb)
+	}
+	// Unmasked, the measured shares weight it, as before.
+	u := Attribute(cfg, shower(), bigShower())
+	ul, ur := tankOf(t, u, "hot_water_cylinder_left"), tankOf(t, u, "hot_water_cylinder_right")
+	if m := *ul.Share**ul.PeakUsedC + *ur.Share**ur.PeakUsedC; !near(u.OutletC, m, 1e-9) || near(u.OutletC, 0.11**ul.PeakUsedC+0.89**ur.PeakUsedC, 1e-6) {
+		t.Errorf("unmasked outlet %v, want %v from the measured shares", show(u.OutletC), m)
+	}
+}

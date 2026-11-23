@@ -367,6 +367,7 @@ func (fc fileConfig) engine() (engine.Config, error) {
 		c.Thermal.Tanks = append(c.Thermal.Tanks, thermal.TankConfig{DeviceID: t.DeviceID, PriorUAWPerK: t.PriorUAWPerK, PriorHours: t.PriorHours})
 		c.Draw.Tanks = append(c.Draw.Tanks, t.DeviceID)
 		c.OutletSplit = append(c.OutletSplit, t.OutletSplit)
+		c.Draw.OutletSplit = append(c.Draw.OutletSplit, t.OutletSplit)
 	}
 	return c, c.Validate()
 }

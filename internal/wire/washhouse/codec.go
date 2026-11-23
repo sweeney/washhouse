@@ -10,6 +10,9 @@ import (
 
 // EncodeState is s's payload, with its schema set.
 func EncodeState(s State) ([]byte, error) {
+	if err := s.validate(); err != nil {
+		return nil, err
+	}
 	s.Schema = SchemaState
 	if s.Tanks == nil {
 		s.Tanks = []TankSummary{}
@@ -19,6 +22,9 @@ func EncodeState(s State) ([]byte, error) {
 
 // EncodeTank is t's payload, with its schema set.
 func EncodeTank(t Tank) ([]byte, error) {
+	if err := t.validate(); err != nil {
+		return nil, err
+	}
 	t.Schema = SchemaTank
 	return json.Marshal(t)
 }
@@ -27,7 +33,7 @@ func EncodeTank(t Tank) ([]byte, error) {
 // that isn't well formed: an unknown event, a body that isn't exactly the
 // one its event names, or a tank share without its litres.
 func EncodeEvent(e Event) ([]byte, error) {
-	if err := e.check(); err != nil {
+	if err := e.validate(); err != nil {
 		return nil, err
 	}
 	e.Schema = SchemaEvent
@@ -50,6 +56,9 @@ func EncodeStatus(s Status) ([]byte, error) {
 	if s.Event == StatusLWT {
 		return nil, fmt.Errorf("washhouse: the last will is LWT(), not a status")
 	}
+	if err := s.validate(); err != nil {
+		return nil, err
+	}
 	s.Schema = SchemaStatus
 	if s.Tanks == nil {
 		s.Tanks = []string{}
@@ -60,13 +69,19 @@ func EncodeStatus(s Status) ([]byte, error) {
 // DecodeState decodes {base}/state.
 func DecodeState(b []byte) (State, error) {
 	var s State
-	return s, decode(b, SchemaState, &s)
+	if err := decode(b, SchemaState, &s); err != nil {
+		return State{}, err
+	}
+	return s, s.validate()
 }
 
 // DecodeTank decodes {base}/tank/{device_id}.
 func DecodeTank(b []byte) (Tank, error) {
 	var t Tank
-	return t, decode(b, SchemaTank, &t)
+	if err := decode(b, SchemaTank, &t); err != nil {
+		return Tank{}, err
+	}
+	return t, t.validate()
 }
 
 // DecodeEvent decodes {base}/events. An event it doesn't know is
@@ -92,7 +107,7 @@ func DecodeEvent(b []byte) (Event, error) {
 	if err := decode(b, SchemaEvent, &e); err != nil {
 		return Event{}, err
 	}
-	if err := e.check(); err != nil {
+	if err := e.validate(); err != nil {
 		return Event{}, err
 	}
 	return e, nil
@@ -115,7 +130,10 @@ func DecodeStatus(b []byte) (Status, error) {
 		return Status{Event: StatusLWT}, nil
 	}
 	var s Status
-	return s, decode(b, SchemaStatus, &s)
+	if err := decode(b, SchemaStatus, &s); err != nil {
+		return Status{}, err
+	}
+	return s, s.validate()
 }
 
 // decode checks that b carries every key v's type requires, then decodes
@@ -164,6 +182,16 @@ func present(raw []byte, t reflect.Type, path string) error {
 		var m map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &m); err != nil {
 			return fmt.Errorf("%s: %w", path, err)
+		}
+		// json.Unmarshal matches keys ignoring case, so a key that
+		// differs from a known one only in case would override it.
+		for k := range m {
+			for i := range t.NumField() {
+				key, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+				if k != key && strings.EqualFold(k, key) {
+					return fmt.Errorf("%s.%s differs from %s only in case", path, k, key)
+				}
+			}
 		}
 		for i := range t.NumField() {
 			f := t.Field(i)
