@@ -34,6 +34,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/sweeney/washhouse/internal/behaviour"
 	"github.com/sweeney/washhouse/internal/engine"
 	"github.com/sweeney/washhouse/internal/publish"
 	"github.com/sweeney/washhouse/internal/replay"
@@ -129,13 +130,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func readConfig(path string) (fileConfig, engine.Config, error) {
+func readConfig(path string) (behaviour.Config, engine.Config, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return fileConfig{}, engine.Config{}, err
+		return behaviour.Config{}, engine.Config{}, err
 	}
 	defer f.Close()
-	return loadConfig(f)
+	return behaviour.Load(f)
 }
 
 // feed gives one recorded message to the engine.

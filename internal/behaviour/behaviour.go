@@ -1,4 +1,12 @@
-package main
+// Package behaviour is washhouse's behaviour config: the document that
+// says what the cylinders are, how the meter's litres become draws, and
+// every threshold. washreplay reads it from a file; the service will read
+// the same document from the config service's washhouse namespace.
+//
+// It is decoded strictly: every key is required, unknown keys and
+// duplicate keys (ignoring case) are refused, an integer must be written
+// as one, and a duration is a Go duration string ("60s").
+package behaviour
 
 import (
 	"bytes"
@@ -21,14 +29,11 @@ import (
 	"github.com/sweeney/washhouse/internal/vessel"
 )
 
-// fileConfig is washreplay's config file (JSON). Every key is required,
-// unknown keys and duplicate keys (ignoring case) are refused, an integer
-// must be written as one, and a duration is a Go duration string ("60s").
-// Values shared by several packages are given once: cold_c and the heat
+// Config is the behaviour document (JSON). Values shared by several packages are given once: cold_c and the heat
 // capacity (estimate and draw), and the tanks (their probes, the loss
 // fit's priors, their share of the merged outlet, and the order every list
 // uses).
-type fileConfig struct {
+type Config struct {
 	AmbientTopic           string       `json:"ambient_topic"`
 	LowHotWaterL           float64      `json:"low_hot_water_l"`
 	LowHotWaterMarginL     float64      `json:"low_hot_water_margin_l"`
@@ -140,44 +145,44 @@ func (d *duration) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// loadConfig decodes a config file strictly and builds the engine's
+// Load decodes a behaviour document strictly and builds the engine's
 // config from it, validated.
-func loadConfig(r io.Reader) (fileConfig, engine.Config, error) {
+func Load(r io.Reader) (Config, engine.Config, error) {
 	b, err := io.ReadAll(r)
 	if err != nil {
-		return fileConfig{}, engine.Config{}, err
+		return Config{}, engine.Config{}, err
 	}
 	fc, err := decodeStrict(b)
 	if err != nil {
-		return fileConfig{}, engine.Config{}, fmt.Errorf("config: %w", err)
+		return Config{}, engine.Config{}, fmt.Errorf("config: %w", err)
 	}
-	ec, err := fc.engine()
+	ec, err := fc.Engine()
 	if err != nil {
-		return fileConfig{}, engine.Config{}, fmt.Errorf("config: %w", err)
+		return Config{}, engine.Config{}, fmt.Errorf("config: %w", err)
 	}
 	return fc, ec, nil
 }
 
-func decodeStrict(b []byte) (fileConfig, error) {
+func decodeStrict(b []byte) (Config, error) {
 	var generic any
 	dec := json.NewDecoder(bytes.NewReader(b))
 	if err := dec.Decode(&generic); err != nil {
-		return fileConfig{}, err
+		return Config{}, err
 	}
 	if _, err := dec.Token(); err != io.EOF {
-		return fileConfig{}, errors.New("data after the config object")
+		return Config{}, errors.New("data after the config object")
 	}
 	if err := noDuplicates(json.NewDecoder(bytes.NewReader(b)), ""); err != nil {
-		return fileConfig{}, err
+		return Config{}, err
 	}
-	if err := present(reflect.TypeOf(fileConfig{}), generic, ""); err != nil {
-		return fileConfig{}, err
+	if err := present(reflect.TypeOf(Config{}), generic, ""); err != nil {
+		return Config{}, err
 	}
-	var fc fileConfig
+	var fc Config
 	dec = json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&fc); err != nil {
-		return fileConfig{}, err
+		return Config{}, err
 	}
 	return fc, nil
 }
@@ -300,7 +305,7 @@ func orTop(path string) string {
 }
 
 // engine builds and validates the engine's config.
-func (fc fileConfig) engine() (engine.Config, error) {
+func (fc Config) Engine() (engine.Config, error) {
 	c := engine.Config{
 		Meter: meter.Config{
 			DeviceID:             fc.Meter.DeviceID,

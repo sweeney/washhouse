@@ -1,4 +1,4 @@
-package main
+package behaviour
 
 import (
 	"os"
@@ -68,7 +68,7 @@ func readExample(t *testing.T) string {
 }
 
 func TestExampleConfigIsThePlans(t *testing.T) {
-	fc, got, err := loadConfig(strings.NewReader(readExample(t)))
+	fc, got, err := Load(strings.NewReader(readExample(t)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestConfigIsStrict(t *testing.T) {
 			if tc.name == "trailing data" {
 				s = strings.TrimRight(ex, "\n") + " {}\n"
 			}
-			_, _, err := loadConfig(strings.NewReader(s))
+			_, _, err := Load(strings.NewReader(s))
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("got %v, want an error mentioning %q", err, tc.want)
 			}
