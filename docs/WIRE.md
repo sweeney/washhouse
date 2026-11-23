@@ -44,7 +44,9 @@ thermal state, and every draw.
   (and an event's `prev`), `heat_source`, `volume_kind`, and the status
   `event`. **Open**, so a consumer accepts one it doesn't know: the event
   type (`event` on `{base}/events`, which it ignores), a draw's `kind`
-  (which it treats as unknown), and `reasons`.
+  (which it treats as unknown), and `reasons`. **Adding a value to a closed vocabulary is a breaking change** (a v2
+  `schema`): a v1 decoder refuses the whole message, so it is announced
+  here first, like a removal.
 - A `device_id` matches `[a-z0-9_-]+`. Keys are exact: a key that differs
   from a known one only in case is a decode error (Go's `encoding/json`
   would otherwise let it override the known one).
