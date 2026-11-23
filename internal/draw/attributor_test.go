@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sweeney/common/wire/boiler"
 	"github.com/sweeney/washhouse/internal/meter"
 	"github.com/sweeney/washhouse/internal/tank"
-	"github.com/sweeney/washhouse/internal/wire/boiler"
 )
 
 // newAttributor is an attributor with HW off from before every test's

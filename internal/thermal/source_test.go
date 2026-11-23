@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sweeney/washhouse/internal/wire/boiler"
+	"github.com/sweeney/common/wire/boiler"
 )
 
 const (

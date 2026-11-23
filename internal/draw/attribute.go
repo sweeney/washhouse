@@ -3,9 +3,9 @@ package draw
 import (
 	"time"
 
+	"github.com/sweeney/common/wire/boiler"
 	"github.com/sweeney/washhouse/internal/meter"
 	"github.com/sweeney/washhouse/internal/tank"
-	"github.com/sweeney/washhouse/internal/wire/boiler"
 )
 
 // Reason says why a heat balance is unreliable.

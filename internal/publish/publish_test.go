@@ -5,11 +5,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sweeney/common/wire/washhouse"
 	"github.com/sweeney/washhouse/internal/draw"
 	"github.com/sweeney/washhouse/internal/engine"
 	"github.com/sweeney/washhouse/internal/meter"
 	"github.com/sweeney/washhouse/internal/thermal"
-	"github.com/sweeney/washhouse/internal/wire/washhouse"
 )
 
 var t0 = time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)

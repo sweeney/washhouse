@@ -1,13 +1,14 @@
 # washhouse MQTT wire contract
 
-This document is normative. The golden files in
-`internal/wire/washhouse/testdata/` pin these bytes exactly, and a diff there
-is a breaking change. New fields are additive. Removing or renaming a field
+This document is normative. The golden files of `sweeney/common`'s
+`wire/washhouse` package (`wire/washhouse/testdata/`) pin these bytes
+exactly, and a diff there is a breaking change; every example here must
+decode and re-encode to itself through that package (`wiredoc_test.go`). New fields are additive. Removing or renaming a field
 is a major change, announced here first (Changes, below), and bumps the
 `schema` version.
 
-**Status: draft (phase 3), not yet published by any running service.** It is
-under review with statehouse (the first consumer) and tanktemp.
+**Status: v1, frozen 2026-11-23** (Changes, below). No running service
+publishes it yet; washhouse's service shell is phase 5.
 
 washhouse reads tanktemp's probe states and water meter
 (tanktemp's `docs/WIRE.md`, normative for those) and the boiler programmer's
@@ -443,4 +444,4 @@ or vanished.
 
 ## Changes
 
-None yet: v1 is in draft. The freeze will be recorded here, with the date and the reviews it followed.
+- **2026-11-23, v1 frozen:** after statehouse's review (no blockers; it reconciles cut draws from State and throttles on its side) and tanktemp's two reviews (12 points, all taken) on sweeney/washhouse#3. The code moved to `sweeney/common`'s `wire` module the same day; the bytes are unchanged.

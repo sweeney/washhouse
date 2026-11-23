@@ -24,7 +24,7 @@ service itself (`cmd/washhouse`) only reports its version so far.
 | `docs/washhouse-explainer.html` | Open in a browser. A simulated day (fictional times) through the planned engine. |
 | `tools/` | Live-data tools used before washhouse exists: a recorder, a smoke test for tanktemp and boiler-sensor, and a meter audit. See [`tools/README.md`](tools/README.md). |
 | `meter/` | The hot-water meter's datasheet and photos. |
-| `internal/` | The pure core: decoders, the meter consumer, the cylinder model, thermal tracking, draw attribution, `engine`, which wires them into the system's state and events, and `publish`, which turns those into the wire messages of `internal/wire/washhouse` (its goldens pin WIRE.md). |
+| `internal/` | The pure core: decoders, the meter consumer, the cylinder model, thermal tracking, draw attribution, `engine`, which wires them into the system's state and events, and `publish`, which turns those into the wire messages of `common/wire/washhouse` (in `sweeney/common`; its goldens pin WIRE.md). The decoders for washhouse's inputs are `common/wire/tanktemp` and `common/wire/boiler`. |
 | `cmd/washreplay` | Replays recordings through the engine and prints its events and states. |
 | `cmd/washhouse` | The service, a placeholder until phase 5. |
 

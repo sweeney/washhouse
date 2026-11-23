@@ -7,7 +7,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/sweeney/washhouse/internal/wire/tanktemp"
+	"github.com/sweeney/common/wire/tanktemp"
 )
 
 // Validate checks every threshold is set and consistent.

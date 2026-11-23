@@ -16,9 +16,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sweeney/common/wire/washhouse"
 	"github.com/sweeney/washhouse/internal/engine"
 	"github.com/sweeney/washhouse/internal/thermal"
-	"github.com/sweeney/washhouse/internal/wire/washhouse"
 )
 
 // Message is one MQTT publish.

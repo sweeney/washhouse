@@ -20,8 +20,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sweeney/washhouse/internal/wire/boiler"
-	"github.com/sweeney/washhouse/internal/wire/tanktemp"
+	"github.com/sweeney/common/wire/boiler"
+	"github.com/sweeney/common/wire/tanktemp"
 )
 
 // Options say which topics to read beyond the fixed ones.

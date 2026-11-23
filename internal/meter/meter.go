@@ -55,7 +55,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/sweeney/washhouse/internal/wire/tanktemp"
+	"github.com/sweeney/common/wire/tanktemp"
 )
 
 // Config holds every threshold the consumer uses. It has no defaults: the

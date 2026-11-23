@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sweeney/common/wire/tanktemp"
 	"github.com/sweeney/washhouse/internal/estimate"
 	"github.com/sweeney/washhouse/internal/profile"
 	"github.com/sweeney/washhouse/internal/vessel"
-	"github.com/sweeney/washhouse/internal/wire/tanktemp"
 )
 
 var at = time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)

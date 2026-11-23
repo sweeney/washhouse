@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sweeney/washhouse/internal/wire/washhouse"
+	"github.com/sweeney/common/wire/washhouse"
 )
 
 // -wire prints what the service would publish, one `topic payload` line

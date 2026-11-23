@@ -18,9 +18,9 @@ import (
 	"math"
 	"time"
 
+	"github.com/sweeney/common/wire/tanktemp"
 	"github.com/sweeney/washhouse/internal/estimate"
 	"github.com/sweeney/washhouse/internal/profile"
-	"github.com/sweeney/washhouse/internal/wire/tanktemp"
 )
 
 // ProbeConfig is one probe position's role and fallback height.

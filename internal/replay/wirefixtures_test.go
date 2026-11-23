@@ -1,4 +1,4 @@
-package tanktemp_test
+package replay_test
 
 import (
 	"bufio"
@@ -8,9 +8,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sweeney/washhouse/internal/wire/boiler"
-	"github.com/sweeney/washhouse/internal/wire/tanktemp"
+	"github.com/sweeney/common/wire/boiler"
+	"github.com/sweeney/common/wire/tanktemp"
 )
+
+// Every message in every recorded fixture decodes with common/wire's
+// decoders, independently of this package's reading of them.
 
 // tanktempPrefixes are the production prefix and the one before 2026-11-20
 // (WIRE.md, Changes); the recordings carry both.
@@ -53,7 +56,7 @@ func decodeFixtureMessage(topic, payload string) (known bool, err error) {
 // decoder stricter than what tanktemp (any build in the recordings) or
 // boiler-sensor really sends fails here, not in production.
 func TestEveryFixtureMessageDecodes(t *testing.T) {
-	files, err := filepath.Glob(filepath.Join("..", "..", "..", "testdata", "fixtures", "*.log.gz"))
+	files, err := filepath.Glob(filepath.Join("..", "..", "testdata", "fixtures", "*.log.gz"))
 	if err != nil {
 		t.Fatal(err)
 	}

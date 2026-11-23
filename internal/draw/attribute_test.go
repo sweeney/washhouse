@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sweeney/common/wire/boiler"
 	"github.com/sweeney/washhouse/internal/estimate"
 	"github.com/sweeney/washhouse/internal/meter"
 	"github.com/sweeney/washhouse/internal/profile"
 	"github.com/sweeney/washhouse/internal/tank"
-	"github.com/sweeney/washhouse/internal/wire/boiler"
 )
 
 const (

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sweeney/washhouse/internal/wire/tanktemp"
+	"github.com/sweeney/common/wire/tanktemp"
 )
 
 // planConfig is PLAN.md's thresholds.

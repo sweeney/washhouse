@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sweeney/common/wire/tanktemp"
 	"github.com/sweeney/washhouse/internal/profile"
-	"github.com/sweeney/washhouse/internal/wire/tanktemp"
 )
 
 // The house's two cylinders: five probes each at the same heights; the

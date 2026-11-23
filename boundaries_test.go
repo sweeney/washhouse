@@ -33,9 +33,6 @@ var core = []string{
 	"internal/tank",
 	"internal/thermal",
 	"internal/vessel",
-	"internal/wire/boiler",
-	"internal/wire/tanktemp",
-	"internal/wire/washhouse",
 }
 
 var forbiddenDirect = []string{

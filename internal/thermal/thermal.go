@@ -101,10 +101,10 @@ import (
 	"slices"
 	"time"
 
+	"github.com/sweeney/common/wire/boiler"
 	"github.com/sweeney/washhouse/internal/estimate"
 	"github.com/sweeney/washhouse/internal/profile"
 	"github.com/sweeney/washhouse/internal/tank"
-	"github.com/sweeney/washhouse/internal/wire/boiler"
 )
 
 // TankConfig is one cylinder and the prior for its loss fit.

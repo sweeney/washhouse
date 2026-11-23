@@ -4,12 +4,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sweeney/common/wire/tanktemp"
 	"github.com/sweeney/washhouse/internal/estimate"
 	"github.com/sweeney/washhouse/internal/meter"
 	"github.com/sweeney/washhouse/internal/profile"
 	"github.com/sweeney/washhouse/internal/tank"
 	"github.com/sweeney/washhouse/internal/vessel"
-	"github.com/sweeney/washhouse/internal/wire/tanktemp"
 )
 
 const (

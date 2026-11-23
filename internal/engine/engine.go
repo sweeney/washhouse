@@ -6,6 +6,8 @@ import (
 	"sort"
 	"time"
 
+	"github.com/sweeney/common/wire/boiler"
+	"github.com/sweeney/common/wire/tanktemp"
 	"github.com/sweeney/washhouse/internal/draw"
 	"github.com/sweeney/washhouse/internal/estimate"
 	"github.com/sweeney/washhouse/internal/meter"
@@ -13,8 +15,6 @@ import (
 	"github.com/sweeney/washhouse/internal/tank"
 	"github.com/sweeney/washhouse/internal/thermal"
 	"github.com/sweeney/washhouse/internal/vessel"
-	"github.com/sweeney/washhouse/internal/wire/boiler"
-	"github.com/sweeney/washhouse/internal/wire/tanktemp"
 )
 
 // Engine holds the system's in-memory state. It is not safe for concurrent

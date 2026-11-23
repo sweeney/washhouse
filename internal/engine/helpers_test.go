@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sweeney/common/wire/tanktemp"
 	"github.com/sweeney/washhouse/internal/draw"
 	"github.com/sweeney/washhouse/internal/estimate"
 	"github.com/sweeney/washhouse/internal/meter"
@@ -12,7 +13,6 @@ import (
 	"github.com/sweeney/washhouse/internal/tank"
 	"github.com/sweeney/washhouse/internal/thermal"
 	"github.com/sweeney/washhouse/internal/vessel"
-	"github.com/sweeney/washhouse/internal/wire/tanktemp"
 )
 
 const (
