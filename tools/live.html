@@ -215,7 +215,7 @@ details.guide ol { margin: 10px 0 0; padding-left: 20px; display: grid; gap: 6px
         <dt>Programmer</dt><dd id="boiler">—</dd>
         <dt>Creep</dt><dd id="creep">—</dd>
       </dl>
-      <p class="why">The meter counts one pulse a litre on the merged hot outlet: it is the truth for volume. A litre that holds the reed closed for minutes is <b>creep</b>, never a draw.</p>
+      <p class="why">The meter counts one pulse a litre on the merged hot outlet: it is the truth for volume. Lone slow litres, minutes apart, are <b>creep</b>: washhouse decides that, and says so with its continuous_flow events, never a draw.</p>
     </aside>
   </div>
 
@@ -332,6 +332,9 @@ const FLOW_MS = 10 * 60 * 1000;
 // figures) is tools/live-core.js, tested under node against the goldens.
 const {num, short, onoff, fmtDur, fmtMs, REASONS, STATE_WHY, describe, group, crossing40, lowWhy, meterNews} = LiveCore;
 const classify = topic => LiveCore.classify(topic, base, tt);
+// For HTML: a cylinder's short name, escaped (the broker is anonymous on
+// the LAN, so nothing from it goes into innerHTML unescaped).
+const sh = id => esc(short(id));
 const ts = s => s ? Date.parse(s) : NaN;
 const hhmmss = t => Number.isFinite(t) ? new Date(t).toLocaleTimeString([], {hour12: false}) : "—";
 
@@ -464,15 +467,15 @@ function renderHero() {
   if (tk.length >= 2 && tk.every(t => t.usable_l40 != null)) {
     const sum = tk.reduce((a, t) => a + t.usable_l40, 0);
     const split = lastSplit();
-    $("splitWhy").innerHTML = `Why not ${tk.map(t => `${num(t.usable_l40, 0)} (${short(t.device_id)})`).join(" + ")} = ${num(sum, 0)} L? The cylinders feed one outlet in parallel, so a tap draws ${split} from them, and the water mixes. When the cylinder that supplies most of it runs cool, there's little usable however hot the other is.`;
+    $("splitWhy").innerHTML = `Why not ${tk.map(t => `${num(t.usable_l40, 0)} (${sh(t.device_id)})`).join(" + ")} = ${num(sum, 0)} L? The cylinders feed one outlet in parallel, so a tap draws ${split} from them, and the water mixes. When the cylinder that supplies most of it runs cool, there's little usable however hot the other is.`;
   }
   const f = [];
   if (m.boiler) {
     f.push(`<span class="chip ${m.boiler.hw ? "info" : ""}">HW timer ${onoff(m.boiler.hw)}</span>`);
     f.push(`<span class="chip ${m.boiler.ch ? "info" : ""}">CH timer ${onoff(m.boiler.ch)}</span>`);
   }
-  if (m.active_draw) f.push(`<span class="chip warn">drawing ${m.active_draw.litres} L</span>`);
-  if (m.meter && m.meter.continuous_flow) f.push(`<span class="chip warn">creep ${m.meter.continuous_flow.litres} L</span>`);
+  if (m.active_draw) f.push(`<span class="chip warn">drawing ${num(m.active_draw.litres, 0)} L</span>`);
+  if (m.meter && m.meter.continuous_flow) f.push(`<span class="chip warn">creep ${num(m.meter.continuous_flow.litres, 0)} L</span>`);
   f.push(LOW == null ? `<span class="chip" title="low_hot_water_l and its margin are in washhouse's namespace, not on the wire">threshold not given: live.sh --low N --margin N</span>`
     : `<span class="chip" title="the namespace's low_hot_water_l and low_hot_water_margin_l, given to the page">threshold ${LOW} L, margin ${MARGIN ?? 0} L</span>`);
   $("facts").innerHTML = f.join("");
@@ -482,7 +485,7 @@ function lastSplit() {
   const bs = [...S.draws.values()].filter(d => d.balanced && (d.balanced.tanks || []).every(t => t.share != null));
   const b = bs.length ? bs[bs.length - 1].balanced : null;
   if (!b) return "a fixed split (about 89% right, 11% left)";
-  return "a fixed split (" + b.tanks.map(t => `${Math.round(t.share * 100)}% ${short(t.device_id)}`).join(", ") + " on the last draw)";
+  return "a fixed split (" + b.tanks.map(t => `${num(t.share * 100, 0)}% ${sh(t.device_id)}`).join(", ") + " on the last draw)";
 }
 
 function drawGauge() {
@@ -528,13 +531,13 @@ function renderInputs() {
   }
   if (m) {
     $("meterCount").textContent = `${m.count} L this run (since ${String(m.counting_since).slice(0, 16).replace("T", " ")})${st && st.meter ? " · " + st.meter.litres_since_start + " L since washhouse started" : ""}`;
-    $("meterClosed").textContent = m.last_closed_ms == null ? "—" : fmtMs(m.last_closed_ms) + (m.last_closed_ms >= 10000 ? " · long: creep?" : " · a real flow holds it 1–4 s");
+    $("meterClosed").textContent = m.last_closed_ms == null ? "—" : fmtMs(m.last_closed_ms) + " in the last litre" + (m.last_interval_ms != null ? ` · ${fmtMs(m.last_interval_ms)} since the one before` : "");
     const bad = ["noise", "short", "glitches", "lost"].filter(k => m[k]);
     $("meterHealth").textContent = (bad.length ? bad.map(k => `${k} ${m[k]}`).join(" · ") : "no noise, short, glitches or lost") +
       (S.meterSkipped ? ` · ${S.meterSkipped} messages skipped here` : "") + (S.meterNote ? " · " + S.meterNote : "");
   }
   if (st && st.boiler) $("boiler").textContent = `HW ${onoff(st.boiler.hw)} · CH ${onoff(st.boiler.ch)} (the timers, not the valves)`;
-  if (st && st.meter) $("creep").textContent = st.meter.continuous_flow ? `${st.meter.continuous_flow.litres} L since ${hhmmss(ts(st.meter.continuous_flow.since))}, ${num(st.meter.continuous_flow.flow_l_min, 3)} L/min` : "none";
+  if (st && st.meter) $("creep").textContent = st.meter.continuous_flow ? `${num(st.meter.continuous_flow.litres, 0)} L since ${hhmmss(ts(st.meter.continuous_flow.since))}, ${num(st.meter.continuous_flow.flow_l_min, 3)} L/min` : "none";
   tickAges();
 }
 function tickAges() {
@@ -618,13 +621,14 @@ function sparkPath(id, pos, x, y, w, h, stroke) {
   const last = pts[pts.length - 1];
   return `<path d="${d}" fill="none" stroke="${stroke}" stroke-width="1.2"/><circle cx="${x + w}" cy="${(y + h - (last.v - lo) / span * h).toFixed(1)}" r="2" fill="${stroke}"/>`;
 }
-// How often tanktemp is sweeping: every 30 s at rest, every 10 s during a
-// draw or a reheat, which shows as denser dots in the message flow.
+// How often tanktemp is sweeping: every 10 s during a draw or a reheat,
+// easing back to 30 s over the next 5 min, which shows as denser dots in
+// the message flow.
 function cadence(p) {
   const h = [...p.history.values()][0] || [];
   if (h.length < 2) return "";
   const gap = (ts(h[h.length - 1].ts) - ts(h[h.length - 2].ts)) / 1000;
-  return Number.isFinite(gap) && gap > 0 ? `sweeping every ${Math.round(gap)} s${gap <= 15 ? " (fast: a draw or reheat)" : ""}` : "";
+  return Number.isFinite(gap) && gap > 0 ? `sweeping every ${Math.round(gap)} s${gap < 27 ? " (faster than at rest: a draw or reheat, or easing back)" : ""}` : "";
 }
 function tankOrder() {
   const ids = (S.wstatus && S.wstatus.tanks) || (S.state && (S.state.tanks || []).map(t => t.device_id)) || [];
@@ -678,7 +682,7 @@ function renderActive() {
   if (ad) {
     const since = (now - ts(ad.last_litre_at)) / 1000;
     $("adPill").className = "pill warn"; $("adPill").textContent = "water running";
-    $("adLitres").innerHTML = `${ad.litres}<small>L</small>`;
+    $("adLitres").innerHTML = `${num(ad.litres, 0)}<small>L</small>`;
     const quiet = since > 8;
     $("adSub").textContent = `${ad.flow_l_min != null ? num(ad.flow_l_min) + " L/min · " : ""}${ad.kind} so far · started ${hhmmss(ts(ad.started_at))} · ${fmtDur((now - ts(ad.started_at)) / 1000)}` +
       (quiet ? ` · no litre for ${fmtDur(since)}: ends at ${fmtDur(Math.max(0, 60 - since))}` : "");
@@ -686,9 +690,9 @@ function renderActive() {
   } else if (recent && now - ts(recent.ended.ended_at) < 15 * 60e3) {
     const e = recent.ended, sinceEnd = (now - ts(e.ended_at)) / 1000;
     $("adPill").className = "pill " + (recent.balanced ? "ok" : "info"); $("adPill").textContent = recent.balanced ? "balanced" : "settling";
-    $("adLitres").innerHTML = `${e.litres}<small>L · ${esc(e.kind)}</small>`;
+    $("adLitres").innerHTML = `${num(e.litres, 0)}<small>L · ${esc(e.kind)}</small>`;
     $("adSub").textContent = recent.balanced ? `ended ${hhmmss(ts(e.ended_at))}; who supplied it is in the table` :
-      `ended ${hhmmss(ts(e.ended_at))}; the probes settle for about 8 min: ${fmtDur(Math.max(0, 480 - sinceEnd))} to go`;
+      `ended ${hhmmss(ts(e.ended_at))}, ${fmtDur(sinceEnd)} ago; the probes settle for about 8–10 min before draw_balanced`;
     set(recent.balanced ? ["start", "run", "end", "bal"] : ["start", "run", "end"], recent.balanced ? "" : "bal");
   } else {
     $("adPill").className = "pill off"; $("adPill").textContent = "none";
@@ -704,20 +708,20 @@ function renderDraws() {
   const left = css("--left"), right = css("--right");
   $("drawRows").innerHTML = ds.map(([id, d]) => {
     const e = d.ended, a = d.active, b = d.balanced;
-    if (!e) return `<tr><td>${hhmmss(ts(a.started_at))}…</td><td class="r">${a.litres}</td><td>${esc(a.kind)} <span class="chip">so far</span></td><td class="r">${num(a.flow_l_min)}</td><td class="r">${fmtDur((evNow() - ts(a.started_at)) / 1000)}</td><td colspan="2" class="foot">${d.gone ? "left the state without a draw_ended (a restart?)" : "running"}</td></tr>`;
-    let split = `<span class="foot">waiting for draw_balanced</span>`, check = `<span class="foot">in about ${fmtDur(Math.max(0, 480 - (evNow() - ts(e.ended_at)) / 1000))}</span>`;
+    if (!e) return `<tr><td>${hhmmss(ts(a.started_at))}…</td><td class="r">${num(a.litres, 0)}</td><td>${esc(a.kind)} <span class="chip">so far</span></td><td class="r">${num(a.flow_l_min)}</td><td class="r">${fmtDur((evNow() - ts(a.started_at)) / 1000)}</td><td colspan="2" class="foot">${d.gone ? "left the state without a draw_ended (a restart?)" : "running"}</td></tr>`;
+    let split = `<span class="foot">waiting for draw_balanced</span>`, check = `<span class="foot">about 8–10 min after the draw</span>`;
     if (b) {
       const tk = b.tanks || [];
       if (tk.length && tk.every(t => t.share != null)) {
-        split = `<div class="share" title="${tk.map(t => short(t.device_id) + " " + Math.round(t.share * 100) + "%").join(", ")}">${tk.map(t => `<span style="width:${(t.share * 100).toFixed(1)}%;background:${short(t.device_id) === "left" ? left : right}"></span>`).join("")}</div>
-          <div class="foot">${tk.map(t => `${short(t.device_id)} ${Math.round(t.share * 100)}%`).join(" · ")}</div>`;
+        split = `<div class="share" title="${tk.map(t => sh(t.device_id) + " " + num(t.share * 100, 0) + "%").join(", ")}">${tk.map(t => `<span style="width:${num(t.share * 100, 1)}%;background:${sh(t.device_id) === "left" ? left : right}"></span>`).join("")}</div>
+          <div class="foot">${tk.map(t => `${sh(t.device_id)} ${num(t.share * 100, 0)}%`).join(" · ")}</div>`;
       } else split = `<span class="chip warn">not measured</span>`;
       const rel = b.heat_balance_reliable;
-      check = `${num(b.heat_balance_l, 1)} L vs ${e.litres} metered <span class="chip ${rel ? "ok" : "warn"}">${rel ? "reliable" : "unreliable"}</span>
+      check = `${num(b.heat_balance_l, 1)} L vs ${num(e.litres, 0)} metered <span class="chip ${rel ? "ok" : "warn"}">${rel ? "reliable" : "unreliable"}</span>
         ${(b.reasons || []).map(r => `<span class="chip" title="${esc(REASONS[r] || r)}">${esc(r)}</span>`).join(" ")}
         <div class="foot">${num(b.energy_kwh, 2)} kWh · hottest at the tap ${num(b.outlet_peak_c)} °C${b.masked_by_reheat ? " · masked by a reheat" : ""}</div>`;
     }
-    return `<tr title="${esc(id)}"><td>${hhmmss(ts(e.ended_at))}</td><td class="r">${e.litres}</td><td>${esc(e.kind)}</td><td class="r">${num(e.flow_l_min)}</td><td class="r">${fmtDur(e.duration_s)}</td><td>${split}</td><td>${check}</td></tr>`;
+    return `<tr title="${esc(id)}"><td>${hhmmss(ts(e.ended_at))}</td><td class="r">${num(e.litres, 0)}</td><td>${esc(e.kind)}</td><td class="r">${num(e.flow_l_min)}</td><td class="r">${fmtDur(e.duration_s)}</td><td>${split}</td><td>${check}</td></tr>`;
   }).join("");
 }
 
@@ -802,9 +806,9 @@ function hover(c, key, ev) {
   let best = null; for (const p of g.pts) if (p.t <= t) best = p;
   if (!best) { c.tip.hidden = true; return; }
   c.tip.hidden = false;
-  c.tip.innerHTML = key === "ua" ? `${hhmmss(best.t)}<br>${Object.entries(best.v).map(([id, v]) => `${short(id)} <b>${num(v, 1)} W/K</b>`).join("<br>")}` : key === "usable"
+  c.tip.innerHTML = key === "ua" ? `${hhmmss(best.t)}<br>${Object.entries(best.v).map(([id, v]) => `${sh(id)} <b>${num(v, 1)} W/K</b>`).join("<br>")}` : key === "usable"
     ? `${hhmmss(best.t)}<br>plan on <b>${num(best.low, 0)} L</b><br>up to ${num(best.high, 0)} L${best.flag ? "<br>low hot water" : ""}${best.drawing ? "<br>drawing" : ""}${best.hw ? "<br>HW timer on" : ""}`
-    : `${hhmmss(best.t)}<br>${Object.entries(best.stored).map(([id, v]) => `${short(id)} <b>${num(v, 2)} kWh</b>`).join("<br>")}`;
+    : `${hhmmss(best.t)}<br>${Object.entries(best.stored).map(([id, v]) => `${sh(id)} <b>${num(v, 2)} kWh</b>`).join("<br>")}`;
   c.tip.style.left = Math.min(x + 12, r.width - 150) + "px"; c.tip.style.top = "8px";
 }
 for (const [key, c] of Object.entries(charts)) {

@@ -148,6 +148,11 @@ test("fmtDur and fmtMs", () => {
 // pinned, and the core loaded before its script.
 const page = fs.readFileSync(path.join(__dirname, "live.html"), "utf8");
 test("the page never publishes", () => assert.ok(!/\.publish\(/.test(page)));
+test("the page puts no broker value into HTML raw (tanktemp's review of #11)", () => {
+  // Litres and cylinder names reach innerHTML only through num() or sh()/esc().
+  assert.ok(!/\$\{[A-Za-z_.]+\.litres\}/.test(page), "a raw ${x.litres}");
+  assert.ok(!/\$\{short\(/.test(page), "a raw ${short(...)}");
+});
 test("the page subscribes at QoS 1", () => assert.match(page, /\{qos: 1\}/));
 test("the page has its own storage key and client id", () => {
   assert.match(page, /"washhouse-live"/);
