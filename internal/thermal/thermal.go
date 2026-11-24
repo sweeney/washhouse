@@ -134,6 +134,15 @@ type Config struct {
 	// on, and ends below off (0.5, 0.3 kW).
 	HeatingOnKW  float64
 	HeatingOffKW float64
+	// HeatingOnAfterDrawKW: inside PowerSettle, while the power is still
+	// unknown, a tank not yet heating is judged heating if a heat source
+	// is current (source isn't none) and its energy, from the sweeps after
+	// DrawSettle, rises at least this fast over PowerMinSpan. A draw's
+	// settling looked like up to 0.72 kW with no heat going in (CH on in
+	// ch-only-no-heat); reheats show 2–9 kW. 1.5 kW calls a reheat about 6
+	// min after a draw rather than 17 (the owner, 24 Nov 2026). Cooling
+	// still waits for the whole window. At least HeatingOnKW.
+	HeatingOnAfterDrawKW float64
 	// DrawSettle: a tank is drawing for this long after a metered draw
 	// ends (60 s).
 	DrawSettle time.Duration
@@ -200,6 +209,9 @@ func (c Config) Validate() error {
 	}
 	if !finite(c.HeatingOnKW) || c.HeatingOnKW <= 0 {
 		errs = append(errs, fmt.Errorf("thermal: heating on must be finite and above 0 kW, got %v", c.HeatingOnKW))
+	}
+	if !finite(c.HeatingOnAfterDrawKW) || c.HeatingOnAfterDrawKW < c.HeatingOnKW {
+		errs = append(errs, fmt.Errorf("thermal: heating on after a draw must be finite and at least heating on (%v kW), got %v", c.HeatingOnKW, c.HeatingOnAfterDrawKW))
 	}
 	if !finite(c.HeatingOffKW) || c.HeatingOffKW > c.HeatingOnKW {
 		errs = append(errs, fmt.Errorf("thermal: heating off must be finite and at most heating on (%v kW), got %v", c.HeatingOnKW, c.HeatingOffKW))
@@ -475,6 +487,7 @@ func (t *Tracker) Sweep(sw tank.Sweep) ([]Event, error) {
 			t.judge(tk)
 		}
 	}
+	t.judgeAfterDraw(tk, sw.At)
 	ev := t.evaluate(nil, tk, sw.At)
 	t.fit(tk)
 	return ev, nil
@@ -525,6 +538,25 @@ func (t *Tracker) decay(tk *tankTrack, at time.Time) {
 	}
 	if tk.uaAt.IsZero() || at.After(tk.uaAt) {
 		tk.uaAt = at
+	}
+}
+
+// judgeAfterDraw judges a tank heating, after a draw and
+// until its power is judged again, from the sweeps since DrawSettle after it, if a heat source
+// is current and they rise at HeatingOnAfterDrawKW or more (Config).
+func (t *Tracker) judgeAfterDraw(tk *tankTrack, at time.Time) {
+	if !t.drawEnded || t.drawRunning || (tk.power != nil && t.clear(tk.powerFrom)) || t.source(at) == SourceNone {
+		return // not after a draw, or the power is judged again already
+	}
+	from := t.drawEnd.Add(t.cfg.DrawSettle)
+	var ss []sample
+	for _, s := range tk.samples {
+		if s.at.After(from) {
+			ss = append(ss, s)
+		}
+	}
+	if p, ok := slope(ss, t.cfg.PowerMinSamples, t.cfg.PowerMinSpan); ok && p >= t.cfg.HeatingOnAfterDrawKW {
+		tk.heating, tk.decided = true, true
 	}
 }
 

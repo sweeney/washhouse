@@ -43,7 +43,7 @@ func planConfig() engine.Config {
 		Tanks: []tank.Config{{DeviceID: left, Probes: probes(profile.RoleBulk), PriorOutletUnderread: 0.16}, {DeviceID: right, Probes: probes(profile.RoleReturn), PriorOutletUnderread: 0.17}},
 		Thermal: thermal.Config{PowerWindow: 10 * time.Minute, PowerMinSpan: 5 * time.Minute, PowerMinSamples: 3,
 			PowerExclude: []profile.Role{profile.RoleInlet, profile.RoleOutlet}, MinProbes: 2, StaleAfter: 2 * time.Minute,
-			HeatingOnKW: 0.5, HeatingOffKW: 0.3, DrawSettle: 60 * time.Second, PowerSettle: 12 * time.Minute, SourceHold: 30 * time.Minute,
+			HeatingOnKW: 0.5, HeatingOffKW: 0.3, HeatingOnAfterDrawKW: 1.5, DrawSettle: 60 * time.Second, PowerSettle: 12 * time.Minute, SourceHold: 30 * time.Minute,
 			UATau: 24 * time.Hour, UAQuiet: 60 * time.Minute, UAMinDeltaK: 5, AmbientStale: 40 * time.Minute,
 			Tanks: []thermal.TankConfig{{DeviceID: left, PriorUAWPerK: 4, PriorHours: 1}, {DeviceID: right, PriorUAWPerK: 17, PriorHours: 1}}},
 		Draw: draw.Config{Tanks: []string{left, right}, ColdC: 10, KWhPerLitreK: 4.186 / 3600, ShareSettle: 60 * time.Second,

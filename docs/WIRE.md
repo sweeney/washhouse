@@ -197,7 +197,10 @@ the stored heat rises faster than a threshold, until it falls below a lower
 one (hysteresis), else `cooling`. The judgement holds through a draw and the
 power's settling after it, so after a draw the state goes back to what it
 was with `power_kw` `null` for a while: `cooling` or `heating` with no power
-is normal. `unknown` before the tank's power is first judged, and while its
+is normal. One exception: in that while, a tank that starts heating (a heat
+source current, and its stored heat rising fast since the draw: 1.5 kW,
+configured) goes to `heating` then, about 6 minutes after the draw, rather
+than when the power is known again, about 17. `unknown` before the tank's power is first judged, and while its
 data is stale (then until it is judged again).
 
 ## Events
@@ -482,6 +485,9 @@ or vanished.
 
 ## Changes
 
+- **2026-11-24, v1, sooner (not a change of shape):** a reheat that starts
+  soon after a draw shows as `heating` about 6 minutes after the draw,
+  not 17 (States). `power_kw` stays `null` until then as before.
 - **2026-11-24, v1, when State is published (not its payload):** once per
   tanktemp sweep, when every tank's state for it is in, rather than after
   each of the sweep's three messages, two of which carried a half-updated

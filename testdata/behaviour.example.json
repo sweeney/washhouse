@@ -76,6 +76,7 @@
     "stale_after": "2m",
     "heating_on_kw": 0.5,
     "heating_off_kw": 0.3,
+    "heating_on_after_draw_kw": 1.5,
     "draw_settle": "60s",
     "power_settle": "12m",
     "source_hold": "30m",

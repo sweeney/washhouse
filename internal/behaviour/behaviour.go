@@ -145,13 +145,15 @@ type thermalFile struct {
 	StaleAfter      duration `json:"stale_after"`
 	HeatingOnKW     float64  `json:"heating_on_kw"`
 	HeatingOffKW    float64  `json:"heating_off_kw"`
-	DrawSettle      duration `json:"draw_settle"`
-	PowerSettle     duration `json:"power_settle"`
-	SourceHold      duration `json:"source_hold"`
-	UATau           duration `json:"ua_tau"`
-	UAQuiet         duration `json:"ua_quiet"`
-	UAMinDeltaK     float64  `json:"ua_min_delta_k"`
-	AmbientStale    duration `json:"ambient_stale"`
+	// HeatingOnAfterDrawKW: package thermal.
+	HeatingOnAfterDrawKW float64  `json:"heating_on_after_draw_kw"`
+	DrawSettle           duration `json:"draw_settle"`
+	PowerSettle          duration `json:"power_settle"`
+	SourceHold           duration `json:"source_hold"`
+	UATau                duration `json:"ua_tau"`
+	UAQuiet              duration `json:"ua_quiet"`
+	UAMinDeltaK          float64  `json:"ua_min_delta_k"`
+	AmbientStale         duration `json:"ambient_stale"`
 }
 
 type drawFile struct {
@@ -370,20 +372,21 @@ func (fc Config) Engine() (engine.Config, error) {
 			KWhPerLitreK: fc.KWhPerLitreK, LowFactor: fc.Estimate.LowFactor,
 			DrawFromMM: fc.Estimate.DrawFromMM, DrawToMM: fc.Estimate.DrawToMM},
 		Thermal: thermal.Config{
-			PowerWindow:     time.Duration(fc.Thermal.PowerWindow),
-			PowerMinSpan:    time.Duration(fc.Thermal.PowerMinSpan),
-			PowerMinSamples: fc.Thermal.PowerMinSamples,
-			MinProbes:       fc.Thermal.MinProbes,
-			StaleAfter:      time.Duration(fc.Thermal.StaleAfter),
-			HeatingOnKW:     fc.Thermal.HeatingOnKW,
-			HeatingOffKW:    fc.Thermal.HeatingOffKW,
-			DrawSettle:      time.Duration(fc.Thermal.DrawSettle),
-			PowerSettle:     time.Duration(fc.Thermal.PowerSettle),
-			SourceHold:      time.Duration(fc.Thermal.SourceHold),
-			UATau:           time.Duration(fc.Thermal.UATau),
-			UAQuiet:         time.Duration(fc.Thermal.UAQuiet),
-			UAMinDeltaK:     fc.Thermal.UAMinDeltaK,
-			AmbientStale:    time.Duration(fc.Thermal.AmbientStale),
+			PowerWindow:          time.Duration(fc.Thermal.PowerWindow),
+			PowerMinSpan:         time.Duration(fc.Thermal.PowerMinSpan),
+			PowerMinSamples:      fc.Thermal.PowerMinSamples,
+			MinProbes:            fc.Thermal.MinProbes,
+			StaleAfter:           time.Duration(fc.Thermal.StaleAfter),
+			HeatingOnKW:          fc.Thermal.HeatingOnKW,
+			HeatingOffKW:         fc.Thermal.HeatingOffKW,
+			HeatingOnAfterDrawKW: fc.Thermal.HeatingOnAfterDrawKW,
+			DrawSettle:           time.Duration(fc.Thermal.DrawSettle),
+			PowerSettle:          time.Duration(fc.Thermal.PowerSettle),
+			SourceHold:           time.Duration(fc.Thermal.SourceHold),
+			UATau:                time.Duration(fc.Thermal.UATau),
+			UAQuiet:              time.Duration(fc.Thermal.UAQuiet),
+			UAMinDeltaK:          fc.Thermal.UAMinDeltaK,
+			AmbientStale:         time.Duration(fc.Thermal.AmbientStale),
 		},
 		Draw: draw.Config{
 			ColdC:             fc.ColdC,
