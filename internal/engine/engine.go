@@ -150,6 +150,7 @@ func (e *Engine) TankState(st tanktemp.State) ([]Event, error) {
 	ev := e.meterEvents(nil, e.meter.Tick(st.Timestamp))
 	sw, err := slot.model.Sweep(st)
 	slot.seen = true
+	e.sweepAt = st.Timestamp // a refused state still counts for its sweep
 	if err != nil {
 		slot.ok = false
 		slot.last = tank.Sweep{DeviceID: st.DeviceID, At: st.Timestamp, ClockSynced: st.ClockSynced,
@@ -157,7 +158,6 @@ func (e *Engine) TankState(st tanktemp.State) ([]Event, error) {
 		return e.done(ev), err
 	}
 	slot.ok, slot.last = true, sw
-	e.sweepAt = st.Timestamp
 	tev, err := e.thermal.Sweep(sw)
 	if err != nil {
 		return e.done(ev), err // can't happen: the tanks are the same, by Validate
@@ -357,8 +357,14 @@ func (e *Engine) learnOutlet(r draw.Result) {
 
 // sweepPending says whether the sweep the latest input was part of is
 // still arriving: a tank that isn't stale hasn't swept at its time yet.
+// The hold lasts at most Thermal.StaleAfter past the sweep's time (event
+// time moves on with later inputs and the clock's ticks), and tanktemp's
+// status or the programmer end it at once (sweepAt cleared), so a sweep
+// that never completes (one cancelled at shutdown, a lost message) can't
+// hold State indefinitely (tanktemp's review of #14). A room reading doesn't
+// end it: it comes often, and waits at most that long.
 func (e *Engine) sweepPending() bool {
-	if e.sweepAt.IsZero() {
+	if e.sweepAt.IsZero() || e.now.Sub(e.sweepAt) > e.cfg.Thermal.StaleAfter {
 		return false
 	}
 	for _, slot := range e.tanks {
@@ -420,6 +426,7 @@ func balancedOf(a draw.Attribution) DrawBalanced {
 // Status takes a tanktemp status message. The last will says only that
 // tanktemp is offline.
 func (e *Engine) Status(s tanktemp.Status) {
+	e.sweepAt = time.Time{} // no sweep's: it ends any hold
 	on := s.Online
 	st := TanktempStatus{Online: &on}
 	if s.Timestamp != nil {
@@ -436,6 +443,7 @@ func (e *Engine) Status(s tanktemp.Status) {
 // BoilerEvent takes a programmer switch event. It applies unless it is
 // older than the last programmer input applied.
 func (e *Engine) BoilerEvent(b boiler.Event) []Event {
+	e.sweepAt = time.Time{}
 	return e.done(e.programmer(b.Timestamp, b.HW, b.CH))
 }
 
@@ -448,6 +456,7 @@ func (e *Engine) BoilerEvent(b boiler.Event) []Event {
 // heartbeat changes nothing. Anything else (RECONNECTED, STARTUP, a
 // heartbeat before the GPIO baseline) changes nothing.
 func (e *Engine) BoilerSystem(s boiler.System) []Event {
+	e.sweepAt = time.Time{}
 	switch {
 	case s.ReadyHeartbeat():
 		if s.HeartbeatMS != nil && *s.HeartbeatMS > 0 && !e.older(s.Timestamp) {

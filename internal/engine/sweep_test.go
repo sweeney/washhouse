@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sweeney/common/wire/boiler"
 	"github.com/sweeney/common/wire/tanktemp"
 )
 
@@ -55,5 +56,67 @@ func TestSweepPendingSkipsAStaleTank(t *testing.T) {
 	}
 	if e.State().SweepPending {
 		t.Error("the right tank is stale: still waited for")
+	}
+}
+
+// A lone meter sweep reading with no tank states after it (a sweep
+// cancelled at shutdown, tanktemp's last reading at SHUTDOWN, a lost tank
+// message) mustn't hold State indefinitely: the hold ends StaleAfter past
+// the sweep's time, and tanktemp's status or the programmer end it at once
+// (tanktemp's review of #14).
+func TestSweepPendingIsBounded(t *testing.T) {
+	setup := func() *Engine {
+		e := newEngine(t, planConfig())
+		lowFeed(t, e, t0, rightLow)
+		m := &meterSim{since: t0.Add(-time.Hour)}
+		e.Meter(m.msg(t0.Add(30*time.Second), tanktemp.TriggerSweep, tanktemp.LevelOpen))
+		if !e.State().SweepPending {
+			t.Fatal("a lone meter sweep reading: not pending")
+		}
+		return e
+	}
+	e := setup()
+	// The clock moves event time only after a silence; a minute past the
+	// bound is past both.
+	e.Tick(t0.Add(30*time.Second + e.cfg.Thermal.StaleAfter + time.Minute))
+	if e.State().SweepPending {
+		t.Error("still pending after the clock moved on")
+	}
+	e = setup()
+	e.Status(tanktemp.Status{Online: false, Event: tanktemp.EventShutdown})
+	if e.State().SweepPending {
+		t.Error("still pending after tanktemp's status")
+	}
+	e = setup()
+	e.BoilerEvent(boiler.Event{Timestamp: t0.Add(31 * time.Second), HW: boiler.On, CH: boiler.Off})
+	if e.State().SweepPending {
+		t.Error("still pending after a programmer event")
+	}
+	// A room reading doesn't end it; the bound does.
+	e = setup()
+	e.Ambient(t0.Add(31*time.Second), 18)
+	if !e.State().SweepPending {
+		t.Error("a room reading ended the hold")
+	}
+	e.Tick(t0.Add(31*time.Second + e.cfg.Thermal.StaleAfter + time.Minute))
+	if e.State().SweepPending {
+		t.Error("still pending past StaleAfter")
+	}
+}
+
+// A tank state the model refuses (too few probes) still counts as that
+// tank's part of the sweep.
+func TestARefusedSweepCountsForTheSweep(t *testing.T) {
+	e := newEngine(t, planConfig())
+	lowFeed(t, e, t0, rightLow)
+	at := t0.Add(30 * time.Second)
+	if _, err := e.TankState(sweep(left, at, f(15), f(20), f(45), f(50), f(55))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.TankState(sweep(right, at, f(40), nil, nil, nil, nil)); err == nil {
+		t.Fatal("a one-probe sweep: no error")
+	}
+	if e.State().SweepPending {
+		t.Error("the right tank's refused state didn't count: still pending")
 	}
 }
