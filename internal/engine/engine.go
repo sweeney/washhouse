@@ -11,7 +11,6 @@ import (
 	"github.com/sweeney/washhouse/internal/draw"
 	"github.com/sweeney/washhouse/internal/estimate"
 	"github.com/sweeney/washhouse/internal/meter"
-	"github.com/sweeney/washhouse/internal/profile"
 	"github.com/sweeney/washhouse/internal/tank"
 	"github.com/sweeney/washhouse/internal/thermal"
 	"github.com/sweeney/washhouse/internal/vessel"
@@ -460,26 +459,25 @@ type systemTotals struct {
 }
 
 // system is the totals, if every tank's estimate is known: the stored
-// energy summed, the usable litres through the merged outlet.
+// energy and the usable litres, each the tanks' summed. The usable litres
+// are summed, not drawn at a fixed split: the owner's experience is that
+// with one tank cold and the other hot the taps still run hot (24 Nov
+// 2026), so the hot tank's water reaches the tap.
 func (e *Engine) system() (systemTotals, bool) {
 	var out systemTotals
 	if len(e.order) == 0 {
 		return out, false
 	}
-	ps := make([]*profile.Profile, len(e.order))
-	for k, id := range e.order {
+	for _, id := range e.order {
 		slot := e.tanks[id]
 		if !e.estimated(slot) {
 			return out, false
 		}
-		out.storedKWh += slot.last.Estimate.KWh
-		ps[k] = slot.last.Profile
+		est := slot.last.Estimate
+		out.storedKWh += est.KWh
+		out.usableL40 += est.UsableL40
+		out.usableL40Low += est.UsableL40Low
 	}
-	m, err := e.est.Merged(ps, e.cfg.OutletSplit)
-	if err != nil {
-		return out, false // can't happen: the split is validated
-	}
-	out.usableL40, out.usableL40Low = m.UsableL40, m.UsableL40Low
 	return out, true
 }
 

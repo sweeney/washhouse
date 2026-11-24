@@ -96,17 +96,16 @@
 // unknown estimate; the totals are unknown unless every tank's estimate is
 // known. The room reading is unknown once older than Thermal.AmbientStale.
 //
-// The totals: stored_kwh is the tanks summed. The usable litres are not:
-// the tanks are in parallel with one merged outlet, so a draw takes a fixed
-// split (OutletSplit) from each and the tap gets the mix. The system's
-// usable_l40 is a draw simulated at that split (estimate.Merged), and
-// usable_l40_low that × the estimate's LowFactor. One tank taking most of
-// the flow and running cold first brings the tap below MinC whatever the
-// other holds (quiet-night's morning: the right tank's top at 35.8 °C, the
-// left's at 63.1, the first litre 38.8 °C and nothing usable, against 233 L
-// summed). The split is assumed fixed by the pipework; whether buoyancy
-// shifts it towards a hotter tank is open (no fixture has a draw with one
-// tank cold).
+// The totals: stored_kwh, usable_l40 and usable_l40_low are the tanks'
+// summed. The tanks are in parallel on one outlet, and the split between
+// them isn't fixed: the owner's experience is that with one tank cold and
+// the other hot the taps still run hot, and on 24 Nov 2026 a 40 L run with
+// the left tank at 62 °C and the right at 40 °C was too hot to hold (a
+// fixed 0.89 from the right would have given 43 °C), with cold water
+// entering both tanks' inlets alike. So no fixed split limits the tap.
+// (This replaced a draw simulated at a fixed split, estimate.Merged, which
+// had called quiet-night's morning out of hot water with the left tank at
+// 63 °C.) OutletSplit is only the draw attribution's fallback.
 //
 // low_hot_water is judged for the system, never one tank, on its
 // usable_l40_low, with hysteresis: it sets below LowHotWaterL, clears above

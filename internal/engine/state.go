@@ -14,11 +14,9 @@ type State struct {
 	// Zero only before the first input.
 	At    time.Time
 	Tanks []TankState // in Config.Tanks order
-	// Totals are unknown unless every tank's estimate is known. StoredKWh
-	// is summed over the tanks; UsableL40 and UsableL40Low are a draw
-	// through the merged outlet at Config.OutletSplit (estimate.Merged),
-	// not the tanks summed: a tank taking most of the flow that runs cold
-	// first brings the tap below MinC whatever the others hold.
+	// Totals are unknown unless every tank's estimate is known. Each is
+	// the tanks' summed: no fixed split limits what reaches the tap (a hot
+	// tank supplies it while the other is cold; doc.go).
 	StoredKWh    *float64
 	UsableL40    *float64
 	UsableL40Low *float64

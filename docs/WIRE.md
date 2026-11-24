@@ -126,9 +126,9 @@ needs to spot one compares the payload.
 | Field | Meaning |
 |---|---|
 | `stored_kwh` | heat stored above the cold-feed temperature, the tanks summed. `null` unless every tank's is known |
-| `usable_l40` | litres of 40 °C water the taps could get now, mixing with cold. **Not the tanks summed:** the cylinders feed one merged outlet in parallel, so every draw takes a fixed split from each (configured; about 0.11 left, 0.89 right), and the tap gets the mix. This is a draw simulated at that split, by plug flow, until the mixed outlet falls below 40 °C. One tank taking most of the flow and running cold first leaves little usable however hot the other is. An upper bound. `null` unless every tank is known |
+| `usable_l40` | litres of 40 °C water the taps could get now, mixing with cold: the tanks' own `usable_l40` summed. The cylinders feed one outlet in parallel, and the split between them moves with their temperatures (a hot tank supplies the tap while the other is cold), so no fixed split limits it. An upper bound. `null` unless every tank is known |
 | `usable_l40_low` | `usable_l40` × a configured factor (0.85) for mixing in real tanks: the figure to plan on |
-| `low_hot_water` | `true` when `usable_l40_low` is below a configured level (60 L, provisional), with hysteresis: it clears only above that level plus a margin (10 L), and holds in between. Judged for the system, never one tank. `null` while `usable_l40_low` is unknown; when it is known again, the earlier value still holds inside the margin |
+| `low_hot_water` | `true` when `usable_l40_low` is below a configured level (`low_hot_water_l` in the behaviour document), with hysteresis: it clears only above that level plus a margin (10 L), and holds in between. Judged for the system, never one tank. `null` while `usable_l40_low` is unknown; when it is known again, the earlier value still holds inside the margin |
 | `boiler` | the programmer's `hw` and `ch`: `true` on, `false` off, `null` unknown. These are the programmer's switches only, not the stats or valves: `hw: true` means the HW timer is on, not that a tank is heating. Unknown before boiler-sensor's first heartbeat or event (its retained heartbeat gives them at once when washhouse starts), after its SHUTDOWN, and after 2.5 heartbeat intervals with nothing heard |
 | `ambient_c` | the boiler room's temperature, `null` once its last reading is older than a configured limit |
 | `active_draw` | the running draw, or `null` (Draws, below). It is also the draw the meter has just ended whose `draw_ended` isn't out yet, so `active_draw` goes to `null` in the same publish that follows `draw_ended`, never before. If the next draw starts first (a tap turned on again about a minute after the last litre), `active_draw` goes straight to the next draw, never `null`, and the last one's `draw_ended` comes in the same batch, just after the next one's `draw_started`: key on `draw_id`. Across a washhouse restart, a draw can leave `active_draw` with no `draw_ended` (Delivery). A consumer that starts mid-draw (events aren't retained) recovers it from here, with the same `draw_id` and `started_at` as its `draw_started` |
@@ -468,6 +468,14 @@ or vanished.
 
 ## Changes
 
+- **2026-11-24, v1, a change of value (not of shape):** the state's
+  `usable_l40` and `usable_l40_low` are the tanks' own summed, no longer a
+  draw simulated at a fixed outlet split. A 40 L run with one tank at
+  62 °C and the other at 40 °C was too hot to hold, where a fixed 0.89
+  from the cooler tank would have given 43 °C: the split moves with the
+  tanks' temperatures. The figures rise (both tanks hot at the start of
+  the shower fixture: 291 L before, 521 L now), and `low_hot_water` sets
+  less often. Keys, types and nulls are unchanged.
 - **2026-11-23, v1 clarified (not a change to any payload):** a behaviour
   reload restarts the engine without a STARTUP (Delivery), so a consumer
   reconciles a cut draw from `active_draw`, not from status alone.
