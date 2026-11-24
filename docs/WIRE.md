@@ -123,6 +123,11 @@ needs to spot one compares the payload.
 }
 ```
 
+The example is v1's golden in `common/wire`, from before the change of
+2026-11-24 (Changes): its `usable_l40` (263.5) is the fixed-split figure,
+not its tanks' 205.8 + 151.2. The golden is updated in common/wire's next
+release.
+
 | Field | Meaning |
 |---|---|
 | `stored_kwh` | heat stored above the cold-feed temperature, the tanks summed. `null` unless every tank's is known |
