@@ -193,7 +193,7 @@ The pure core (no OS, network or MQTT, enforced by a `boundaries_test.go` as in 
 - Publisher timestamps are sanitised as statehouse's `timeutil` does: unparseable, more than 30 days old or more than 24 h ahead is undated.
 - Behaviour comes from config.swee.net:
   - **`devices_home`**: the cylinders and probes. Add a `cylinder` block (capacity_l 200, height_mm 1498, diameter_mm 550); `common/devices` v0.2.0 already decodes it.
-  - **A new `washhouse` namespace**: inner diameter, dome depth, z0, T_cold, T_min, T_mix, the drawable band (cold inlet to hot outlet: 281–1237 mm on the STI 210, a GUESS that the outlet has no dip pipe; about 40 L outside it), per-tank probe roles by position, whether to trust suspect 85 °C readings (default no), draw thresholds, prior UA per tank, reheat priors, and topics. No geometry is built into the code: the STI 210 values exist only as test data.
+  - **A new `washhouse` namespace**: inner diameter, dome depth, z0, T_cold, T_min, T_mix, the drawable band (cold inlet to the top of the dome: 281–1412 mm on the STI 210; the outlet has an internal pipe up to the dome top, the owner said on 24 Nov 2026, replacing an earlier guess of no dip pipe and a band ending at the fitting, 1237 mm), per-tank probe roles by position, whether to trust suspect 85 °C readings (default no), draw thresholds, prior UA per tank, reheat priors, and topics. No geometry is built into the code: the STI 210 values exist only as test data.
   - The user makes the admin writes; I supply the JSON.
 
 **Probe heights** come from tanktemp's own payload (`height_mm`), with the config as fallback.

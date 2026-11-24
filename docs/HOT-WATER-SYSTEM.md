@@ -39,7 +39,7 @@ details in any public repo; the owner is strict about PII in committed files.
   | — | ~380 mm | immersion boss (read off the drawing's scale, **guess**) |
   | D | 781 mm | coil flow (so the coil spans about **241–781 mm**) |
   | A | 956 mm | **secondary return** |
-  | B | 1237 mm | hot outlet |
+  | B | 1237 mm | hot outlet: the fitting. Inside, a pipe arches up to the very top of the dome (**owner said**, 24 Nov 2026), so a draw takes the hottest water first |
 
 ### Probes
 - **Five DS18B20 probes per tank**, all at the same heights on each tank. They
@@ -79,6 +79,14 @@ details in any public repo; the owner is strict about PII in committed files.
   up to the house. The left outlet runs up and over the left tank, then drops
   to probe-5 height to join. The owner suspects a little backwash between the
   tanks at rest.
+- _Update (Nov 2026):_ **the split between the tanks isn't fixed.** The owner's
+  experience is that with one tank cold and the other hot, the taps still run
+  hot. Tested on 24 Nov 2026 (**measured**): a 40 L run at 13 L/min with the
+  left tank's outlet at 62 °C and the right's at 40 °C was too hot to hold
+  throughout. The fixed 0.11/0.89 split (from the 50 L shower, both tanks hot)
+  would have given 43 °C. Both inlets fell alike (−10 °C), so both tanks took
+  water: about half each, or more from the hot one. So the hot tank supplies the
+  tap, and washhouse counts the tanks' usable water summed.
 - **Cold feed:** both bottoms (the probe-1 fittings) take cold water during a
   draw (**measured**). Both tanks usually supply a draw together.
 - **Secondary return:** on the right tank only, fitting A (probe 4) is plumbed

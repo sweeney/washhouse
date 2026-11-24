@@ -20,7 +20,7 @@
     "mix_c": 40,
     "low_factor": 0.85,
     "draw_from_mm": 281,
-    "draw_to_mm": 1237
+    "draw_to_mm": 1412
   },
   "tanks": [
     {

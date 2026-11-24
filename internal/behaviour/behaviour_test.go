@@ -39,7 +39,7 @@ func planConfig() engine.Config {
 			CreepWindow: 2700 * time.Second, StaleAfter: 90 * time.Second, UpdateEvery: 60 * time.Second},
 		Vessel: vessel.Params{CapacityL: 200, InnerDiameterMM: 460, DomeDepthMM: 60, Z0MM: 150, SliceMM: 1},
 		Estimate: estimate.Config{ColdC: 10, MinC: 40, MixC: 40, KWhPerLitreK: 4.186 / 3600, LowFactor: 0.85,
-			DrawFromMM: 281, DrawToMM: 1237},
+			DrawFromMM: 281, DrawToMM: 1412},
 		Tanks: []tank.Config{{DeviceID: left, Probes: probes(profile.RoleBulk)}, {DeviceID: right, Probes: probes(profile.RoleReturn)}},
 		Thermal: thermal.Config{PowerWindow: 10 * time.Minute, PowerMinSpan: 5 * time.Minute, PowerMinSamples: 3,
 			PowerExclude: []profile.Role{profile.RoleInlet, profile.RoleOutlet}, MinProbes: 2, StaleAfter: 2 * time.Minute,

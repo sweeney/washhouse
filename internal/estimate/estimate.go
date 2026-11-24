@@ -9,9 +9,9 @@
 // UsableL40Low applies a configured factor (about 0.85) to UsableL40.
 //
 // Only water between DrawFromMM and DrawToMM is drawable: plug flow can't
-// push out water below the cold inlet, and water above the hot outlet only
-// if the outlet has an internal dip pipe, which nobody has confirmed (a
-// GUESS; on the STI 210 that's 281 and 1237 mm, about 40 L outside the band).
+// push out water below the cold inlet. The hot outlet has an internal pipe
+// up to the top of the dome (the owner, 24 Nov 2026), so the band runs to
+// the top of the water: 281 to 1412 mm on the STI 210, with 17 L below it.
 // avail.py counted the whole vessel; its parity test sets the band to it.
 //
 // ColdC is configured, and 10 °C matches the inlet probes' minimum during
