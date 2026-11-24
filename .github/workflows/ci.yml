@@ -47,6 +47,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # The live page's test reads the wire goldens from common/wire's module.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
       - name: install mosquitto and shellcheck
         run: sudo apt-get update && sudo apt-get install -y mosquitto mosquitto-clients shellcheck
       - name: tools tests

@@ -1,0 +1,1071 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>washhouse Live</title>
+<!--
+  A live view of the hot-water system: tanktemp's raw facts (the probes and
+  the meter) and washhouse's reading of them (the water available, each
+  cylinder's state, the draws, the events), side by side, with a line on
+  each saying what it means. Built on tanktemp's tools/live.html (its
+  cylinder drawing, message flow and log), which stays tanktemp's.
+
+  It connects over MQTT-over-WebSockets and only subscribes:
+    {tt}/+/state  {tt}/status  {tt}/meter          (tanktemp; WIRE.md there)
+    {base}/state  {base}/tank/+  {base}/events  {base}/status   (docs/WIRE.md)
+  With no broker it plays a made-up demo you can drive.
+
+  Open it with ./tools/live.sh, which reads deploy/config.local.yaml.
+  Parameters (in the URL hash): ws=ws://host:9001  base=test/water/hot
+  tt=water/hot/tanktemp  low=30  margin=10  demo=1
+  low and margin are the namespace's low_hot_water_l and
+  low_hot_water_margin_l, which aren't on the wire: they only draw the
+  threshold; washhouse's own low_hot_water is what the page reports.
+-->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/5.10.1/mqtt.min.js"></script>
+<script src="live-core.js"></script>
+<style>
+:root {
+  --bg: #eef1f3; --panel: #ffffff; --ink: #172026; --muted: #5a6872; --line: #d6dde2; --grid: #e7ecef;
+  --copper: #b2602a; --ok: #2f7d5b; --warn: #b7791f; --bad: #c0392b; --info: #2b6cb0; --off: #6b7280;
+  --glass: #f7f9fa; --left: #2b6cb0; --right: #b2602a; --hold: rgba(183,121,31,.12); --lowband: rgba(192,57,43,.10);
+  --f-display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", sans-serif;
+  --f-body: "Public Sans", "Helvetica Neue", Arial, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root {
+  --bg: #0f1418; --panel: #172026; --ink: #e4eaee; --muted: #8e9ca6; --line: #2a353d; --grid: #1f292f;
+  --copper: #e08a4f; --ok: #5cc196; --warn: #e2b04a; --bad: #ef6f61; --info: #6fb0ec; --off: #8b939c;
+  --glass: #1c262d; --left: #6fb0ec; --right: #e08a4f; --hold: rgba(226,176,74,.14); --lowband: rgba(239,111,97,.13);
+  color-scheme: dark } }
+* { box-sizing: border-box }
+[hidden] { display: none !important }
+html, body { margin: 0 }
+body { background: var(--bg); color: var(--ink); font: 14px/1.5 var(--f-body); padding: 20px max(16px, env(safe-area-inset-left, 0px)) 40px }
+.wrap { max-width: 1320px; margin: 0 auto; display: grid; gap: 16px }
+header { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; justify-content: space-between }
+h1 { font: 700 26px/1.1 var(--f-display); margin: 0; letter-spacing: -0.01em }
+h1 small { font: 500 12px var(--f-mono); color: var(--muted); letter-spacing: .05em; text-transform: uppercase; margin-left: 8px }
+h2 { font: 700 18px/1.2 var(--f-display); margin: 0 }
+form.conn { display: flex; flex-wrap: wrap; gap: 8px; align-items: center }
+input[type=text] { font: 13px var(--f-mono); color: var(--ink); background: var(--panel); border: 1.5px solid var(--line); border-radius: 7px; padding: 6px 9px; min-width: 0 }
+#ws { width: 210px } #base { width: 150px } #tt { width: 190px }
+button { font: 600 13px var(--f-body); border: 1.5px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 7px; padding: 6px 12px; cursor: pointer }
+button.primary { background: var(--copper); border-color: var(--copper); color: #fff }
+button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--info); outline-offset: 2px }
+.pill { display: inline-flex; align-items: center; gap: 6px; font: 600 12px var(--f-mono); letter-spacing: .04em; text-transform: uppercase; padding: 4px 10px; border-radius: 999px; border: 1.5px solid currentColor; white-space: nowrap }
+.pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor }
+.pill.ok { color: var(--ok) } .pill.warn { color: var(--warn) } .pill.bad { color: var(--bad) } .pill.off { color: var(--off) } .pill.info { color: var(--info) } .pill.copper { color: var(--copper) }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; min-width: 0 }
+.label { font: 600 11px var(--f-body); letter-spacing: .08em; text-transform: uppercase; color: var(--muted) }
+.why { color: var(--muted); font-size: 12.5px; margin: 6px 0 0 }
+.why b { color: var(--ink); font-weight: 600 }
+.chip { font: 500 11px var(--f-mono); padding: 1px 7px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap }
+.chip.bad { color: var(--bad); border-color: var(--bad) } .chip.warn { color: var(--warn); border-color: var(--warn) } .chip.ok { color: var(--ok); border-color: var(--ok) } .chip.info { color: var(--info); border-color: var(--info) }
+.empty { color: var(--muted); padding: 28px 8px; text-align: center; border: 1.5px dashed var(--line); border-radius: 12px }
+dl.kv { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 5px 12px; margin: 10px 0 0; font-variant-numeric: tabular-nums }
+dl.kv dt { color: var(--muted); font-size: 12.5px }
+dl.kv dd { margin: 0; font: 13px var(--f-mono); overflow-wrap: anywhere }
+
+/* the house's water */
+.top { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start }
+.hero .nums { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 22px; margin-top: 6px }
+.hero .big { font: 700 54px/1 var(--f-display); letter-spacing: -0.02em; font-variant-numeric: tabular-nums }
+.hero .big small { font: 600 18px var(--f-display); color: var(--muted); margin-left: 4px }
+.hero .sub { font: 13px var(--f-mono); color: var(--muted) }
+.hero .sub b { color: var(--ink); font-weight: 500 }
+.headline { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap }
+#gauge { display: block; width: 100%; height: auto; margin-top: 12px }
+.facts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px }
+.side { display: grid; gap: 16px }
+
+/* cylinders */
+#tanks .inputs { order: 99 }
+#tanks { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 16px }
+.tank .meta { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; font: 12px var(--f-mono); color: var(--muted); margin: 2px 0 6px }
+.tank svg { display: block; width: 100%; height: auto }
+.tank .stats { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; margin-top: 8px }
+.stat { background: var(--glass); border-radius: 8px; padding: 7px 9px; min-width: 0 }
+.stat .v { font: 600 16px/1.2 var(--f-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere }
+.stat .n { font-size: 11px; color: var(--muted) }
+.tank .flags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; min-height: 20px }
+
+/* draws */
+.draws { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 16px; align-items: start }
+.active .big { font: 700 46px/1 var(--f-display); font-variant-numeric: tabular-nums; margin-top: 8px }
+.active .big small { font: 600 16px var(--f-display); color: var(--muted); margin-left: 4px }
+.steps { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 4px }
+.steps li { font-size: 12.5px; color: var(--muted); padding-left: 18px; position: relative }
+.steps li::before { content: ""; position: absolute; left: 2px; top: 6px; width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--line) }
+.steps li.done { color: var(--ink) } .steps li.done::before { background: var(--ok); border-color: var(--ok) }
+.steps li.now { color: var(--ink); font-weight: 600 } .steps li.now::before { border-color: var(--info); background: var(--info); animation: pulse 1.2s ease-in-out infinite }
+@keyframes pulse { 50% { opacity: .35 } }
+@media (prefers-reduced-motion: reduce) { .steps li.now::before { animation: none } }
+table.dt { width: 100%; border-collapse: collapse; font: 12.5px var(--f-mono); font-variant-numeric: tabular-nums }
+table.dt th { text-align: left; font: 600 11px var(--f-body); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding: 6px 6px; border-bottom: 1px solid var(--line) }
+table.dt td { padding: 7px 6px; border-bottom: 1px solid var(--grid); vertical-align: top }
+table.dt td.r, table.dt th.r { text-align: right }
+.share { display: flex; height: 10px; border-radius: 3px; overflow: hidden; min-width: 90px; background: var(--grid); gap: 2px }
+.share span { display: block; height: 100% }
+.tablewrap { overflow-x: auto }
+
+/* charts, flow, log */
+.chart-head, .flow-head { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px; margin-bottom: 8px }
+.legend { display: flex; flex-wrap: wrap; gap: 12px; font: 12px var(--f-body); color: var(--muted) }
+.legend span::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--c); margin-right: 5px; vertical-align: -1px }
+.legend span.dash::before { border-radius: 0; height: 2px; width: 14px; vertical-align: 3px }
+.legend span.band::before { border-radius: 2px; height: 9px; width: 14px }
+.legend span.hollow::before { background: transparent; border: 1.5px solid var(--muted) }
+.seg { display: inline-flex; border: 1.5px solid var(--line); border-radius: 7px; overflow: hidden }
+.seg button { border: 0; border-radius: 0; padding: 4px 10px; font-size: 12px }
+.seg button[aria-pressed=true] { background: var(--ink); color: var(--panel) }
+.chartbox { position: relative }
+canvas.chart { width: 100%; display: block; height: 0 }
+.tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; font: 12px var(--f-mono); box-shadow: 0 4px 14px rgba(0,0,0,.12); white-space: nowrap; z-index: 2 }
+#flow { width: 100%; display: block; height: 0 }
+.log { max-height: 380px; overflow: auto; border-top: 1px solid var(--line); margin-top: 8px }
+.row { display: grid; grid-template-columns: 74px 20px minmax(0, 200px) minmax(0, 1fr); gap: 10px; align-items: baseline; padding: 5px 2px; border-bottom: 1px solid var(--grid); cursor: pointer; font: 12.5px var(--f-mono) }
+.row:hover { background: var(--glass) }
+.row .t { color: var(--muted); font-variant-numeric: tabular-nums }
+.row .k { width: 10px; height: 10px; border-radius: 50%; background: var(--c); align-self: center }
+.row .k.ret { background: transparent; border: 2px solid var(--c) }
+.row .tp { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted) }
+.row .s { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.row .m { grid-column: 4; font: 12px var(--f-body); color: var(--muted); white-space: normal; margin-top: -2px }
+.row pre { grid-column: 1 / -1; margin: 4px 0 6px; padding: 8px 10px; background: var(--glass); border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.45 var(--f-mono) }
+.filters { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted) }
+.filters label { display: inline-flex; gap: 5px; align-items: center; cursor: pointer }
+details.guide summary { cursor: pointer; font: 700 16px var(--f-display) }
+details.guide ol { margin: 10px 0 0; padding-left: 20px; display: grid; gap: 6px; max-width: 900px }
+.demo-ctl { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px }
+.foot { color: var(--muted); font-size: 12px }
+@media (max-width: 980px) { .top, .draws { grid-template-columns: minmax(0,1fr) } }
+@media (max-width: 560px) { .row { grid-template-columns: 64px 14px minmax(0,1fr) } .row .tp { display: none } .row .m { grid-column: 3 } #ws, #base, #tt { width: 100% } .hero .big { font-size: 42px } .tank .stats { grid-template-columns: repeat(2, minmax(0,1fr)) } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>washhouse live<small id="mode">idle</small></h1>
+    <form class="conn" id="conn">
+      <label class="label" for="ws">Broker</label>
+      <input type="text" id="ws" placeholder="ws://broker:9001" spellcheck="false" autocomplete="off">
+      <label class="label" for="base">washhouse</label>
+      <input type="text" id="base" value="test/water/hot" spellcheck="false" autocomplete="off">
+      <label class="label" for="tt">tanktemp</label>
+      <input type="text" id="tt" value="water/hot/tanktemp" spellcheck="false" autocomplete="off">
+      <button class="primary" id="go" type="submit">Connect</button>
+      <button id="demoBtn" type="button">Demo</button>
+      <span class="pill off" id="link">offline</span>
+    </form>
+  </header>
+
+  <!-- 1. The house's hot water, and the services behind it -->
+  <div class="top">
+    <section class="panel hero" aria-labelledby="heroTitle">
+      <div class="headline">
+        <div class="label" id="heroTitle">Hot water at the taps · washhouse's estimate</div>
+        <span class="pill off" id="lowPill">unknown</span>
+      </div>
+      <div class="nums">
+        <div class="big" id="uLow">—<small>L</small></div>
+        <div class="sub">of 40 °C water to plan on<br>up to <b id="uHigh">—</b> L if the tanks mix perfectly</div>
+        <div class="sub">stored heat <b id="stored">—</b> kWh<br>boiler room <b id="ambient">—</b></div>
+      </div>
+      <svg id="gauge" viewBox="0 0 800 92" role="img" aria-label="Usable hot water against the low threshold"></svg>
+      <p class="why" id="lowWhy">Waiting for washhouse's state.</p>
+      <p class="why" id="splitWhy"></p>
+      <div class="facts" id="facts"></div>
+    </section>
+    <div class="side">
+      <aside class="panel" aria-labelledby="whTitle">
+        <div class="headline"><div class="label" id="whTitle">washhouse · <span id="whTopic">status</span></div><span class="pill off" id="whPill">—</span></div>
+        <dl class="kv">
+          <dt>Version</dt><dd id="whVersion">—</dd>
+          <dt>Ready</dt><dd id="whReady">—</dd>
+          <dt>Uptime</dt><dd id="whUptime">—</dd>
+          <dt>Last status</dt><dd id="whAge">—</dd>
+          <dt>Event time</dt><dd id="whEvent">—</dd>
+        </dl>
+        <p class="why">washhouse runs on <b>event time</b>: every time it publishes is the time of the tanktemp sweep or litre it came from, never its own clock.</p>
+        <div class="demo-ctl" id="demoCtl" hidden>
+          <button type="button" id="dTap">Run a tap (7 L)</button>
+          <button type="button" id="dShower">Run a shower</button>
+          <button type="button" id="dReheat">Hot-water timer on</button>
+          <button type="button" id="dRestart">Restart washhouse</button>
+          <span class="seg" id="demoSpeed" role="group" aria-label="Demo speed"><button type="button" data-x="10" aria-pressed="true">10×</button><button type="button" data-x="30" aria-pressed="false">30×</button><button type="button" data-x="60" aria-pressed="false">60×</button></span>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- 2. The cylinders -->
+  <div id="tanks"><div class="empty" id="tanksEmpty">No cylinders yet. Their retained messages arrive the moment you connect; or press <b>Demo</b>.</div>
+    <aside class="panel inputs" aria-labelledby="ttTitle">
+      <div class="headline"><div class="label" id="ttTitle">Inputs · tanktemp and the programmer</div><span class="pill off" id="ttPill">—</span></div>
+      <dl class="kv">
+        <dt>tanktemp</dt><dd id="ttStatus">—</dd>
+        <dt>Meter</dt><dd id="meterCount">—</dd>
+        <dt>Last litre</dt><dd id="meterLast">—</dd>
+        <dt>Reed closed</dt><dd id="meterClosed">—</dd>
+        <dt>Meter health</dt><dd id="meterHealth">—</dd>
+        <dt>Programmer</dt><dd id="boiler">—</dd>
+        <dt>Creep</dt><dd id="creep">—</dd>
+      </dl>
+      <p class="why">The meter counts one pulse a litre on the merged hot outlet: it is the truth for volume. A litre that holds the reed closed for minutes is <b>creep</b>, never a draw.</p>
+    </aside>
+  </div>
+
+  <!-- 3. Draws -->
+  <div class="draws">
+    <section class="panel active" aria-labelledby="adTitle">
+      <div class="headline"><div class="label" id="adTitle">Draw now</div><span class="pill off" id="adPill">none</span></div>
+      <div class="big" id="adLitres">0<small>L</small></div>
+      <div class="sub" id="adSub" style="font:13px var(--f-mono);color:var(--muted);margin-top:4px">No water running.</div>
+      <ol class="steps" id="adSteps">
+        <li data-s="start">First metered litre: <b>draw_started</b></li>
+        <li data-s="run">Each litre counted: <b>draw_updated</b></li>
+        <li data-s="end">60 s with no litre, then <b>draw_ended</b>: the meter's final account</li>
+        <li data-s="bal">About 8 min later, the probes settled: <b>draw_balanced</b></li>
+      </ol>
+      <p class="why" id="adWhy">A draw is metered hot water: litres less than 60 s apart. The probes never make or size a draw; afterwards they say which cylinder supplied it.</p>
+    </section>
+    <section class="panel" aria-labelledby="dTitle">
+      <div class="headline"><div class="label" id="dTitle">Draws seen on this page</div><span class="foot" id="dCount"></span></div>
+      <div class="tablewrap">
+        <table class="dt">
+          <thead><tr><th>Ended</th><th class="r">Litres</th><th>Kind</th><th class="r">Flow</th><th class="r">Time</th><th>Supplied by</th><th>Probes' cross-check</th></tr></thead>
+          <tbody id="drawRows"><tr><td colspan="7" class="foot" style="padding:14px 6px">None yet. Events aren't retained, so this fills as draws happen: run a hot tap.</td></tr></tbody>
+        </table>
+      </div>
+      <p class="why"><b>Kind</b> comes from the meter alone: a bath is 10 L/min or more and 20 L or more; a shower 20 L or more over 3 min or more; anything else a tap. <b>Supplied by</b> is each cylinder's heat lost over what a litre from its outlet carries. The <b>cross-check</b> is the probes' own estimate of the litres: below 20 L, or during a reheat, it can't be trusted, and washhouse says so.</p>
+    </section>
+  </div>
+
+  <!-- 4. Over time -->
+  <section class="panel" aria-labelledby="cTitle">
+    <div class="chart-head">
+      <div class="label" id="cTitle">Over time · since this page opened</div>
+      <div class="seg" role="group" aria-label="Window">
+        <button type="button" data-w="15" aria-pressed="false">15 min</button>
+        <button type="button" data-w="60" aria-pressed="true">1 h</button>
+        <button type="button" data-w="180" aria-pressed="false">3 h</button>
+      </div>
+    </div>
+    <div class="legend" style="margin-bottom:6px">
+      <span style="--c:var(--ink)">to plan on (usable_l40_low)</span>
+      <span class="dash" style="--c:var(--muted)">up to (usable_l40)</span>
+      <span class="dash" style="--c:var(--bad)">low below</span>
+      <span class="band" style="--c:var(--hold)">holds between</span>
+      <span class="band" style="--c:rgba(43,108,176,.22)">a draw</span>
+      <span class="band" style="--c:rgba(178,96,42,.18)">HW timer on</span>
+    </div>
+    <div class="chartbox"><canvas class="chart" id="cUsable" aria-label="Usable hot water over time"></canvas><div class="tip" id="tipU" hidden></div></div>
+    <div class="legend" style="margin:12px 0 6px">
+      <span style="--c:var(--left)">left cylinder</span><span style="--c:var(--right)">right cylinder</span>
+      <span class="hollow">heat stored above the cold feed, kWh</span>
+    </div>
+    <div class="chartbox"><canvas class="chart" id="cStored" aria-label="Heat stored in each cylinder over time"></canvas><div class="tip" id="tipS" hidden></div></div>
+    <div class="legend" style="margin:12px 0 6px">
+      <span style="--c:var(--left)">left cylinder</span><span style="--c:var(--right)">right cylinder</span>
+      <span class="hollow">heat lost per kelvin above the boiler room, W/K (fitted as it goes)</span>
+    </div>
+    <div class="chartbox"><canvas class="chart" id="cUA" aria-label="Each cylinder's heat loss per kelvin over time"></canvas><div class="tip" id="tipA" hidden></div></div>
+    <p class="why">The right cylinder loses heat several times faster than the left: most of it is its secondary return loop shedding heat into the house's pipework. Closing that loop's valve should bring it down towards the left's, with the left as the control.</p>
+    <p class="why">The page remembers only what it has seen since it opened (Influx keeps the history). The water to plan on is the estimate × 0.85, for mixing in real tanks; washhouse judges <b>low hot water</b> on it.</p>
+  </section>
+
+  <!-- 5. Messages -->
+  <section class="panel">
+    <div class="flow-head">
+      <div class="label">Message flow · last <span id="win">10</span> min</div>
+      <div class="legend">
+        <span style="--c:var(--ok)">tanktemp sweep</span>
+        <span style="--c:var(--copper)">meter</span>
+        <span style="--c:var(--info)">washhouse state / tank</span>
+        <span style="--c:var(--warn)">draw event</span>
+        <span style="--c:var(--bad)">low / LWT</span>
+        <span style="--c:var(--off)">status</span>
+        <span class="hollow">retained replay</span>
+      </div>
+    </div>
+    <canvas id="flow" aria-label="Messages over time, one lane per topic"></canvas>
+    <div class="flow-head" style="margin-top:10px">
+      <div class="filters" id="filters">
+        <label><input type="checkbox" data-f="tt" checked> tanktemp</label>
+        <label><input type="checkbox" data-f="state" checked> washhouse state &amp; tanks</label>
+        <label><input type="checkbox" data-f="events" checked> washhouse events</label>
+        <label><input type="checkbox" data-f="status" checked> status</label>
+      </div>
+      <span class="foot">Click a row for the raw message.</span>
+    </div>
+    <div class="log" id="log" aria-live="off"></div>
+  </section>
+
+  <section class="panel">
+    <details class="guide">
+      <summary>How washhouse works, in seven steps</summary>
+      <ol>
+        <li><b>tanktemp</b> reads five probes up each cylinder every 30 s, and counts the hot-water meter's litres. It reports raw facts and interprets nothing.</li>
+        <li><b>washhouse</b> rebuilds each cylinder's temperature profile from its probes. A probe on a fitting is treated for what it is: the bottom one sits on the cold inlet, the top one on the hot outlet (it reads low at rest, so a draw's peak is the true top).</li>
+        <li>From the profile it works out the heat stored, and the litres hotter than 40 °C. Where the dashed line crosses a cylinder above, its water turns cooler than 40 °C.</li>
+        <li>The cylinders feed one outlet in parallel, so a tap draws a fixed split from each: about 89% from the right. The house's usable water is a draw simulated at that split, so a cold right cylinder leaves little usable however hot the left is.</li>
+        <li>Each cylinder's power (the rate its stored heat changes) says <b>heating</b> or <b>cooling</b>; which programmer channel caused heating is inferred from the gain, never assumed from the timer. Its loss to the room is fitted as it goes.</li>
+        <li>A <b>draw</b> is metered water: litres less than 60 s apart. Volume, flow and kind come from the meter; after the probes settle, the heat each cylinder lost says who supplied it.</li>
+        <li>Everything goes out on MQTT under <code>{base}/</code>, on event time, and into Influx. statehouse will use the draws as evidence someone is home.</li>
+      </ol>
+    </details>
+  </section>
+  <p class="foot">Read-only: subscribes to tanktemp's <code>{tt}/+/state</code>, <code>{tt}/status</code>, <code>{tt}/meter</code> and washhouse's <code>{base}/state</code>, <code>{base}/tank/+</code>, <code>{base}/events</code>, <code>{base}/status</code>. Nothing is published. The contracts are each repo's <code>docs/WIRE.md</code>.</p>
+</div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const FLOW_MS = 10 * 60 * 1000;
+// The pure part (classifying, summarising, explaining, the derived
+// figures) is tools/live-core.js, tested under node against the goldens.
+const {num, short, onoff, fmtDur, fmtMs, REASONS, STATE_WHY, describe, group, crossing40, lowWhy, meterNews} = LiveCore;
+const classify = topic => LiveCore.classify(topic, base, tt);
+const ts = s => s ? Date.parse(s) : NaN;
+const hhmmss = t => Number.isFinite(t) ? new Date(t).toLocaleTimeString([], {hour12: false}) : "—";
+
+// ---------------------------------------------------------------- state
+const S = {
+  probes: new Map(),   // device_id -> {msg, at, retained, history: Map(position -> [{ts, v}])}
+  wtanks: new Map(),   // device_id -> washhouse tank message
+  state: null, stateAt: 0, wstatus: null, wstatusAt: 0, tstatus: null, meter: null, meterAt: 0,
+  draws: new Map(),    // draw_id -> {active, ended, balanced, seenAt}
+  hist: [],            // {t, low, high, hw, drawing, stored: {id: kWh}}
+  ua: new Map(),       // device_id -> [{t, v}] when its W/K changes
+  meterSkipped: 0, meterNote: "",
+  events: [],          // {at, topic, kind, group, retained, qos, text, summary, meaning}
+  lastPayload: new Map(),
+};
+let client = null, demo = null, base = "", tt = "", LOW = null, MARGIN = null, chartMin = 60, connectedAt = 0;
+// Event time: the demo runs fast, so its "now" is its own clock.
+const evNow = () => demo ? demo.clock() : Date.now();
+
+// ---------------------------------------------------------------- settings
+function params() {
+  const p = new URLSearchParams(location.hash.slice(1));
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem("washhouse-live") || "{}") } catch {}
+  const n = k => { const v = parseFloat(p.get(k)); return Number.isFinite(v) && v >= 0 ? v : null; };
+  return { ws: p.get("ws") || saved.ws || "", base: p.get("base") || saved.base || "test/water/hot",
+    tt: p.get("tt") || saved.tt || "water/hot/tanktemp", low: n("low"), margin: n("margin"), demo: p.get("demo") === "1" };
+}
+function remember() { try { localStorage.setItem("washhouse-live", JSON.stringify({ws: $("ws").value, base: $("base").value, tt: $("tt").value})) } catch {} }
+
+const colour = k => ({SWEEP: css("--ok"), SWEEP_FAIL: css("--warn"), METER: css("--copper"), WSTATE: css("--info"), WTANK: css("--info"),
+  DRAW: css("--warn"), CREEP: css("--warn"), HEAT: css("--copper"), TANKEV: css("--info"), LOW: css("--bad"), LWT: css("--bad"), STATUS: css("--off")}[k] || css("--muted"));
+
+// ---------------------------------------------------------------- ingest
+function ingest(topic, text, retained, qos) {
+  const cls = classify(topic);
+  let m = null;
+  try { m = JSON.parse(text) } catch {}
+  // Retained topics are republished with their content unchanged when only
+  // timestamp moves (WIRE.md); show each real change once.
+  if (cls !== "w-event" && cls !== "t-meter" && S.lastPayload.get(topic) === text) return;
+  S.lastPayload.set(topic, text);
+  const at = Date.now(), d = describe(cls, m);
+  if (m) {
+    if (cls === "t-state") onProbes(m, at, retained);
+    else if (cls === "t-meter") {
+      const news = meterNews(S.meter, m);
+      if (news.dup) return;              // a retained replay of the one already seen
+      if (news.restarted && S.meter) S.meterNote = `tanktemp started a new counting run at ${hhmmss(ts(m.counting_since))}: a draw in progress then was cut`;
+      S.meterSkipped += news.skipped;
+      S.meter = m; S.meterAt = at; renderInputs();
+    }
+    else if (cls === "t-status") { S.tstatus = m; renderInputs(); }
+    else if (cls === "w-status") { S.wstatus = m; S.wstatusAt = at; renderStatus(); }
+    else if (cls === "w-tank") {
+      S.wtanks.set(m.device_id, m);
+      const t = ts(m.sweep_at || m.timestamp), h = S.ua.get(m.device_id) || [];
+      if (m.ua_w_per_k != null && Number.isFinite(t) && (!h.length || h[h.length - 1].v !== m.ua_w_per_k)) { h.push({t, v: m.ua_w_per_k}); S.ua.set(m.device_id, h); }
+      renderTanks();
+    }
+    else if (cls === "w-state") onState(m, at);
+    else if (cls === "w-event") onEvent(m, at);
+  }
+  const e = {at, topic, kind: d.kind, group: group(cls), retained, qos, text, summary: d.summary, meaning: d.meaning};
+  S.events.push(e);
+  while (S.events.length > 3000) S.events.shift();
+  addLogRow(e);
+}
+
+function onProbes(m, at, retained) {
+  let t = S.probes.get(m.device_id);
+  if (!t) { t = {history: new Map()}; S.probes.set(m.device_id, t); }
+  t.msg = m; t.at = at; t.retained = retained;
+  for (const s of m.sensors || []) {
+    const h = t.history.get(s.position) || [];
+    const last = h[h.length - 1];
+    if (!last || last.ts !== m.timestamp) h.push({ts: m.timestamp, v: s.temp_c});
+    while (h.length > 120) h.shift();
+    t.history.set(s.position, h);
+  }
+  renderTanks();
+}
+
+function onState(m, at) {
+  S.state = m; S.stateAt = at;
+  const t = ts(m.timestamp);
+  if (Number.isFinite(t)) {
+    const stored = {};
+    for (const k of m.tanks || []) stored[k.device_id] = k.stored_kwh;
+    const last = S.hist[S.hist.length - 1];
+    const p = {t, low: m.usable_l40_low, high: m.usable_l40, flag: m.low_hot_water, hw: m.boiler && m.boiler.hw === true, drawing: !!m.active_draw, stored};
+    if (last && last.t === t) S.hist[S.hist.length - 1] = p; else if (!last || t > last.t) S.hist.push(p);
+    const cut = t - 6 * 3600e3;
+    while (S.hist.length && S.hist[0].t < cut) S.hist.shift();
+  }
+  if (m.active_draw) {
+    const d = drawOf(m.active_draw.draw_id);
+    if (!d.ended) d.active = m.active_draw;
+  }
+  for (const [, d] of S.draws) if (d.active && !d.ended && (!m.active_draw || m.active_draw.draw_id !== d.active.draw_id)) d.gone = true;
+  renderHero(); renderInputs(); renderDraws(); renderStatus();
+}
+
+function drawOf(id) {
+  let d = S.draws.get(id);
+  if (!d) { d = {seenAt: Date.now()}; S.draws.set(id, d); }
+  return d;
+}
+function onEvent(m, at) {
+  if (m.active_draw) { const d = drawOf(m.active_draw.draw_id); if (!d.ended) d.active = m.active_draw; if (m.event === "draw_started") d.startedEv = true; }
+  if (m.draw_ended) { const d = drawOf(m.draw_ended.draw_id); d.ended = m.draw_ended; d.endedAt = at; }
+  if (m.draw_balanced) { const d = drawOf(m.draw_balanced.draw_id); d.balanced = m.draw_balanced; }
+  renderDraws();
+}
+
+// ---------------------------------------------------------------- the house's water
+function renderHero() {
+  const m = S.state; if (!m) return;
+  $("uLow").innerHTML = `${num(m.usable_l40_low, 0)}<small>L</small>`;
+  $("uHigh").textContent = num(m.usable_l40, 0);
+  $("stored").textContent = num(m.stored_kwh, 2);
+  $("ambient").textContent = m.ambient_c == null ? "unknown" : num(m.ambient_c) + " °C";
+  const lp = $("lowPill");
+  if (m.low_hot_water == null) { lp.className = "pill off"; lp.textContent = "unknown"; }
+  else if (m.low_hot_water) { lp.className = "pill bad"; lp.textContent = "low hot water"; }
+  else { lp.className = "pill ok"; lp.textContent = "enough hot water"; }
+  const u = m.usable_l40_low;
+  $("lowWhy").innerHTML = lowWhy(u, m.low_hot_water, LOW, MARGIN);
+  const tk = (m.tanks || []);
+  if (tk.length >= 2 && tk.every(t => t.usable_l40 != null)) {
+    const sum = tk.reduce((a, t) => a + t.usable_l40, 0);
+    const split = lastSplit();
+    $("splitWhy").innerHTML = `Why not ${tk.map(t => `${num(t.usable_l40, 0)} (${short(t.device_id)})`).join(" + ")} = ${num(sum, 0)} L? The cylinders feed one outlet in parallel, so a tap draws ${split} from them, and the water mixes. When the cylinder that supplies most of it runs cool, there's little usable however hot the other is.`;
+  }
+  const f = [];
+  if (m.boiler) {
+    f.push(`<span class="chip ${m.boiler.hw ? "info" : ""}">HW timer ${onoff(m.boiler.hw)}</span>`);
+    f.push(`<span class="chip ${m.boiler.ch ? "info" : ""}">CH timer ${onoff(m.boiler.ch)}</span>`);
+  }
+  if (m.active_draw) f.push(`<span class="chip warn">drawing ${m.active_draw.litres} L</span>`);
+  if (m.meter && m.meter.continuous_flow) f.push(`<span class="chip warn">creep ${m.meter.continuous_flow.litres} L</span>`);
+  f.push(LOW == null ? `<span class="chip" title="low_hot_water_l and its margin are in washhouse's namespace, not on the wire">threshold not given: live.sh --low N --margin N</span>`
+    : `<span class="chip" title="the namespace's low_hot_water_l and low_hot_water_margin_l, given to the page">threshold ${LOW} L, margin ${MARGIN ?? 0} L</span>`);
+  $("facts").innerHTML = f.join("");
+  drawGauge();
+}
+function lastSplit() {
+  const bs = [...S.draws.values()].filter(d => d.balanced && (d.balanced.tanks || []).every(t => t.share != null));
+  const b = bs.length ? bs[bs.length - 1].balanced : null;
+  if (!b) return "a fixed split (about 89% right, 11% left)";
+  return "a fixed split (" + b.tanks.map(t => `${Math.round(t.share * 100)}% ${short(t.device_id)}`).join(", ") + " on the last draw)";
+}
+
+function drawGauge() {
+  const m = S.state, g = $("gauge"); if (!m) return;
+  const W = 800, H = 92, x0 = 10, x1 = W - 10, y = 30, h = 22;
+  const lo = LOW, mg = MARGIN ?? 0;
+  const hi = Math.max(80, (lo ?? 0) + mg + 20, m.usable_l40 || 0) * 1.08;
+  const X = v => x0 + Math.min(Math.max(v, 0), hi) / hi * (x1 - x0);
+  const ink = css("--ink"), muted = css("--muted"), bad = css("--bad"), warn = css("--warn"), ok = css("--ok");
+  const u = m.usable_l40_low, uh = m.usable_l40;
+  const fill = m.low_hot_water ? bad : lo != null && u != null && u < lo + mg ? warn : ok;
+  let s = `<rect x="${x0}" y="${y}" width="${x1 - x0}" height="${h}" rx="5" fill="${css("--grid")}"/>`;
+  if (lo != null) s += `<rect x="${X(0)}" y="${y}" width="${X(lo) - X(0)}" height="${h}" rx="5" fill="${css("--lowband")}"/>
+    <rect x="${X(lo)}" y="${y}" width="${X(lo + mg) - X(lo)}" height="${h}" fill="${css("--hold")}"/>`;
+  if (uh != null) s += `<rect x="${x0}" y="${y + h / 2 - 2}" width="${X(uh) - x0}" height="4" rx="2" fill="${muted}" opacity=".55"/>`;
+  if (u != null) s += `<rect x="${x0}" y="${y + 3}" width="${Math.max(X(u) - x0, 2)}" height="${h - 6}" rx="4" fill="${fill}"/>`;
+  const tick = (v, label, col, above) => `<line x1="${X(v)}" y1="${y - 6}" x2="${X(v)}" y2="${y + h + 6}" stroke="${col}" stroke-width="2" stroke-dasharray="4 3"/>
+    <text x="${X(v)}" y="${above ? y - 10 : y + h + 20}" text-anchor="middle" font-family="var(--f-mono)" font-size="12" fill="${col}">${label}</text>`;
+  if (lo != null) s += tick(lo, `low below ${lo} L`, bad, true) + (mg ? tick(lo + mg, `clears above ${lo + mg} L`, warn, false) : "");
+  g.innerHTML = s;
+}
+
+// ---------------------------------------------------------------- the services
+function renderStatus() {
+  const s = S.wstatus;
+  $("whTopic").textContent = base + "/status";
+  if (s) {
+    const p = $("whPill");
+    p.className = "pill " + (s.event === "LWT" || s.online === false ? "bad" : s.ready ? "ok" : "warn");
+    p.textContent = s.event === "LWT" ? "gone (last will)" : s.online === false ? "stopped" : s.ready ? "running" : "starting";
+    $("whVersion").textContent = s.version ?? "—";
+    $("whReady").textContent = s.ready == null ? "—" : String(s.ready);
+    $("whUptime").textContent = s.uptime_s == null ? "—" : fmtDur(s.uptime_s) + " at " + s.event;
+  }
+  tickAges();
+}
+function renderInputs() {
+  const s = S.tstatus, m = S.meter, st = S.state;
+  if (s) {
+    $("ttStatus").textContent = s.event === "LWT" ? "gone (its last will)" :
+      `${s.event}${s.version ? " · " + s.version : ""}${s.uptime_s != null ? " · up " + fmtDur(s.uptime_s) : ""}${s.sensors_ok != null ? ` · ${s.sensors_ok} probes ok, ${s.sensors_failed} failed` : ""}${s.unexpected && s.unexpected.length ? " · unexpected " + s.unexpected.join(", ") : ""}`;
+    const p = $("ttPill"); p.className = "pill " + (s.online === false ? "bad" : "ok"); p.textContent = s.online === false ? "tanktemp down" : "tanktemp up";
+  }
+  if (m) {
+    $("meterCount").textContent = `${m.count} L this run (since ${String(m.counting_since).slice(0, 16).replace("T", " ")})${st && st.meter ? " · " + st.meter.litres_since_start + " L since washhouse started" : ""}`;
+    $("meterClosed").textContent = m.last_closed_ms == null ? "—" : fmtMs(m.last_closed_ms) + (m.last_closed_ms >= 10000 ? " · long: creep?" : " · a real flow holds it 1–4 s");
+    const bad = ["noise", "short", "glitches", "lost"].filter(k => m[k]);
+    $("meterHealth").textContent = (bad.length ? bad.map(k => `${k} ${m[k]}`).join(" · ") : "no noise, short, glitches or lost") +
+      (S.meterSkipped ? ` · ${S.meterSkipped} messages skipped here` : "") + (S.meterNote ? " · " + S.meterNote : "");
+  }
+  if (st && st.boiler) $("boiler").textContent = `HW ${onoff(st.boiler.hw)} · CH ${onoff(st.boiler.ch)} (the timers, not the valves)`;
+  if (st && st.meter) $("creep").textContent = st.meter.continuous_flow ? `${st.meter.continuous_flow.litres} L since ${hhmmss(ts(st.meter.continuous_flow.since))}, ${num(st.meter.continuous_flow.flow_l_min, 3)} L/min` : "none";
+  tickAges();
+}
+function tickAges() {
+  const now = Date.now();
+  if (S.state) {
+    const ev = ts(S.state.timestamp), lag = (evNow() - ev) / 1000;
+    $("whEvent").textContent = `${hhmmss(ev)} event · ${hhmmss(evNow())} now${lag > 45 ? ` · ${fmtDur(lag)} behind: no input since` : ""}`;
+  }
+  if (S.wstatusAt) $("whAge").textContent = `${S.wstatus.event}, ${fmtDur((now - S.wstatusAt) / 1000)} ago`;
+  if (S.meter && S.meter.last_pulse_at) $("meterLast").textContent = `${hhmmss(ts(S.meter.last_pulse_at))} (${fmtDur((evNow() - ts(S.meter.last_pulse_at)) / 1000)} ago)`;
+  document.querySelectorAll("[data-age]").forEach(el => {
+    const age = (now - +el.dataset.age) / 1000;
+    el.textContent = `received ${fmtDur(age)} ago`;
+    el.style.color = age > 90 ? css("--bad") : "";
+  });
+  renderActive();
+}
+
+// ---------------------------------------------------------------- cylinders
+function tempColour(c) {
+  if (c == null) return null;
+  const stops = [[5, [70, 120, 170]], [25, [90, 160, 170]], [40, [214, 170, 70]], [55, [214, 110, 50]], [70, [180, 50, 40]]];
+  if (c <= stops[0][0]) return `rgb(${stops[0][1]})`;
+  for (let i = 1; i < stops.length; i++) if (c <= stops[i][0]) {
+    const [a, ca] = stops[i-1], [b, cb] = stops[i], f = (c - a) / (b - a);
+    return `rgb(${ca.map((x, j) => Math.round(x + (cb[j] - x) * f)).join(",")})`;
+  }
+  return `rgb(${stops[stops.length-1][1]})`;
+}
+function cylinderSVG(id, m, w) {
+  const W = 380, H = 300, cx = 56, cw = 84, top = 26, bot = H - 26, dome = 16;
+  const ss = [...(m.sensors || [])].sort((a, b) => a.order - b.order);
+  const heights = ss.map(s => s.height_mm).filter(h => h != null);
+  const maxH = heights.length ? Math.max(...heights) * 1.08 : null;
+  const useHeight = heights.length === ss.length && maxH > 0;
+  const yOf = mm => bot - dome - (mm / maxH) * (bot - top - 2 * dome);
+  const ys = ss.map((s, i) => useHeight ? yOf(s.height_mm) : bot - dome - (i + 0.5) * (bot - top - 2 * dome) / ss.length);
+  const gid = "g-" + id.replace(/[^a-z0-9_-]/gi, "");
+  const known = ss.map((s, i) => ({y: ys[i], c: tempColour(s.temp_c)})).filter(p => p.c).sort((a, b) => a.y - b.y);
+  const stops = known.length ? known.map(p => `<stop offset="${((p.y - top) / (bot - top) * 100).toFixed(1)}%" stop-color="${p.c}"/>`).join("")
+                             : `<stop offset="0" stop-color="${css("--grid")}"/>`;
+  const ink = css("--ink"), muted = css("--muted"), line = css("--line"), bad = css("--bad"), warn = css("--warn");
+  const GAP = 32, ly = [...ys], byY = ys.map((_, i) => i).sort((a, b) => ys[a] - ys[b]);
+  byY.forEach((k, j) => { if (j > 0) ly[k] = Math.max(ly[k], ly[byY[j - 1]] + GAP); });
+  const over = byY.length ? ly[byY[byY.length - 1]] - (bot - 6) : 0;
+  if (over > 0) byY.forEach((k, j) => { ly[k] = Math.max(ly[k] - over, top + 12 + j * GAP); });
+  let probes = "";
+  ss.forEach((s, i) => {
+    const y = ys[i], l = ly[i], failing = s.temp_c == null;
+    const val = failing ? (s.error || "null") : `${s.temp_c.toFixed(2)} °C`;
+    probes += `<polyline points="${cx + cw},${y} ${cx + cw + 10},${y} ${cx + cw + 22},${l}" fill="none" stroke="${line}" stroke-width="1.5"/>
+      <circle cx="${cx + cw}" cy="${y}" r="5" fill="${failing ? css("--panel") : tempColour(s.temp_c)}" stroke="${failing ? bad : ink}" stroke-width="1.5"/>
+      <text x="${cx + cw + 28}" y="${l - 3}" font-family="var(--f-mono)" font-size="14" font-weight="500" fill="${failing ? bad : ink}">${esc(val)}${s.suspect ? " ⚑" : ""}</text>
+      <text x="${cx + cw + 28}" y="${l + 13}" font-family="var(--f-body)" font-size="11" fill="${muted}">${esc(s.position)}${s.height_mm != null ? " · " + s.height_mm + " mm" : ""}${s.offset_c ? " · " + (s.offset_c > 0 ? "+" : "") + s.offset_c : ""}</text>
+      ${sparkPath(id, s.position, W - 60, l - 12, 52, 20, s.suspect ? warn : muted)}`;
+  });
+  // washhouse's reading on the drawing: where the water turns cooler than
+  // 40 °C, and the top temperature it uses (a draw's outlet peak, decayed).
+  let overlay = "";
+  const c = useHeight ? crossing40(ss) : null;
+  if (c && c.mm != null) {
+    const y = yOf(c.mm);
+    overlay += `<line x1="${cx - 14}" y1="${y}" x2="${cx + cw + 4}" y2="${y}" stroke="${ink}" stroke-width="1.6" stroke-dasharray="5 4"/>
+      <text x="${cx - 16}" y="${y - 4}" text-anchor="end" font-family="var(--f-mono)" font-size="11" fill="${ink}">40 °C</text>
+      <text x="${cx - 16}" y="${y + 10}" text-anchor="end" font-family="var(--f-body)" font-size="10" fill="${muted}">${Math.round(c.mm)} mm</text>`;
+  }
+  if (w && w.top_c != null) overlay += `<text x="${cx + cw / 2}" y="${top - 8}" text-anchor="middle" font-family="var(--f-mono)" font-size="11" fill="${muted}">top ${num(w.top_c)} °C</text>`;
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(id)} cylinder with ${ss.length} probes">
+    <defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">${stops}</linearGradient></defs>
+    <path d="M${cx} ${top + dome} Q${cx} ${top} ${cx + cw / 2} ${top} Q${cx + cw} ${top} ${cx + cw} ${top + dome} L${cx + cw} ${bot - dome} Q${cx + cw} ${bot} ${cx + cw / 2} ${bot} Q${cx} ${bot} ${cx} ${bot - dome} Z"
+      fill="url(#${gid})" stroke="${ink}" stroke-width="2" opacity="${known.length ? 1 : .5}"/>
+    <line x1="${cx + 10}" y1="${top + dome}" x2="${cx + 10}" y2="${bot - dome}" stroke="#fff" stroke-opacity=".35" stroke-width="4" stroke-linecap="round"/>
+    <text x="${cx + cw / 2}" y="${bot + 18}" text-anchor="middle" font-family="var(--f-body)" font-size="11" fill="${muted}">cold in</text>
+    ${overlay}${probes}</svg>`;
+}
+function sparkPath(id, pos, x, y, w, h, stroke) {
+  const pts = (S.probes.get(id)?.history.get(pos) || []).filter(p => p.v != null);
+  if (pts.length < 2) return "";
+  const vs = pts.map(p => p.v), lo = Math.min(...vs), hi = Math.max(...vs), span = Math.max(hi - lo, 0.25);
+  const d = pts.map((p, i) => `${i ? "L" : "M"}${(x + i / (pts.length - 1) * w).toFixed(1)} ${(y + h - (p.v - lo) / span * h).toFixed(1)}`).join(" ");
+  const last = pts[pts.length - 1];
+  return `<path d="${d}" fill="none" stroke="${stroke}" stroke-width="1.2"/><circle cx="${x + w}" cy="${(y + h - (last.v - lo) / span * h).toFixed(1)}" r="2" fill="${stroke}"/>`;
+}
+// How often tanktemp is sweeping: every 30 s at rest, every 10 s during a
+// draw or a reheat, which shows as denser dots in the message flow.
+function cadence(p) {
+  const h = [...p.history.values()][0] || [];
+  if (h.length < 2) return "";
+  const gap = (ts(h[h.length - 1].ts) - ts(h[h.length - 2].ts)) / 1000;
+  return Number.isFinite(gap) && gap > 0 ? `sweeping every ${Math.round(gap)} s${gap <= 15 ? " (fast: a draw or reheat)" : ""}` : "";
+}
+function tankOrder() {
+  const ids = (S.wstatus && S.wstatus.tanks) || (S.state && (S.state.tanks || []).map(t => t.device_id)) || [];
+  const all = [...new Set([...ids, ...S.wtanks.keys(), ...S.probes.keys()])];
+  return all;
+}
+function renderTanks() {
+  const ids = tankOrder();
+  $("tanksEmpty").hidden = ids.length > 0;
+  for (const id of ids) {
+    let el = document.getElementById("tank-" + id);
+    if (!el) { el = document.createElement("div"); el.className = "panel tank"; el.id = "tank-" + id; $("tanks").appendChild(el); }
+    const p = S.probes.get(id), w = S.wtanks.get(id);
+    const stCls = {heating: "copper", drawing: "warn", cooling: "info", unknown: "off"}[w?.state] || "off";
+    const pw = w?.power_kw;
+    const flags = [];
+    if (p) {
+      if (p.msg.clock_synced === false) flags.push(`<span class="chip warn">clock not synced</span>`);
+      for (const s of p.msg.sensors || []) if (s.error) flags.push(`<span class="chip bad">${esc(s.position)}: ${esc(s.error)}</span>`);
+      for (const s of p.msg.sensors || []) if (s.suspect) flags.push(`<span class="chip warn">${esc(s.position)}: ${esc(s.suspect)}</span>`);
+    }
+    if (w && w.probes_ok != null && w.probes_ok < w.probes_total) flags.push(`<span class="chip warn">washhouse uses ${w.probes_ok} of ${w.probes_total} probes</span>`);
+    const stat = (v, n, t) => `<div class="stat" title="${esc(t || "")}"><div class="v">${v}</div><div class="n">${n}</div></div>`;
+    el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+        <h2>${esc(short(id))} cylinder</h2>
+        <span class="pill ${stCls}">${esc(w?.state || "no washhouse reading")}${w?.heat_source ? " · " + esc(w.heat_source) : ""}</span></div>
+      <div class="meta"><span>${esc(id)}</span>${p ? `<span>${cadence(p)}</span><span data-age="${p.at}"></span>` : ""}</div>
+      ${p ? cylinderSVG(id, p.msg, w) : `<div class="empty">No tanktemp sweep yet.</div>`}
+      <p class="why" style="margin-top:2px">${w ? esc(STATE_WHY[w.state] || "") : "washhouse hasn't published this cylinder yet."}</p>
+      <div class="stats">
+        ${stat(w?.usable_l40 == null ? "—" : num(w.usable_l40, 0) + " L", "40 °C water, alone", "this cylinder's usable water as if it were the only one: for display, not the house's")}
+        ${stat(w?.hot_l == null ? "—" : num(w.hot_l, 0) + " L", "at 40 °C or more", "litres in the cylinder at or above 40 °C")}
+        ${stat(w?.stored_kwh == null ? "—" : num(w.stored_kwh, 2), "kWh stored", "heat above the cold feed")}
+        ${stat(w?.mean_c == null ? "—" : num(w.mean_c) + " °C", "mean")}
+        ${stat(pw == null ? "—" : (pw > 0 ? "▲ " : "▼ ") + num(Math.abs(pw), 2) + " kW", pw == null ? "power: settling" : pw > 0 ? "gaining heat" : "losing heat", "smoothed rate of change of stored heat; unknown for about 17 min after a draw")}
+        ${stat(w?.ua_w_per_k == null ? "—" : num(w.ua_w_per_k, 1), "W/K loss", "heat lost per kelvin above the boiler room, fitted as it goes")}
+      </div>
+      <div class="flags">${flags.join("")}</div>`;
+  }
+  tickAges();
+}
+
+// ---------------------------------------------------------------- draws
+function renderActive() {
+  const m = S.state, ad = m && m.active_draw;
+  const steps = [...$("adSteps").children];
+  const set = (done, now) => steps.forEach(li => { li.className = done.includes(li.dataset.s) ? "done" : li.dataset.s === now ? "now" : ""; });
+  // The latest draw this page knows, to show the steps after the water stops.
+  const recent = [...S.draws.values()].filter(d => d.ended).sort((a, b) => ts(b.ended.ended_at) - ts(a.ended.ended_at))[0];
+  const now = evNow();
+  if (ad) {
+    const since = (now - ts(ad.last_litre_at)) / 1000;
+    $("adPill").className = "pill warn"; $("adPill").textContent = "water running";
+    $("adLitres").innerHTML = `${ad.litres}<small>L</small>`;
+    const quiet = since > 8;
+    $("adSub").textContent = `${ad.flow_l_min != null ? num(ad.flow_l_min) + " L/min · " : ""}${ad.kind} so far · started ${hhmmss(ts(ad.started_at))} · ${fmtDur((now - ts(ad.started_at)) / 1000)}` +
+      (quiet ? ` · no litre for ${fmtDur(since)}: ends at ${fmtDur(Math.max(0, 60 - since))}` : "");
+    set(["start"], quiet ? "end" : "run");
+  } else if (recent && now - ts(recent.ended.ended_at) < 15 * 60e3) {
+    const e = recent.ended, sinceEnd = (now - ts(e.ended_at)) / 1000;
+    $("adPill").className = "pill " + (recent.balanced ? "ok" : "info"); $("adPill").textContent = recent.balanced ? "balanced" : "settling";
+    $("adLitres").innerHTML = `${e.litres}<small>L · ${esc(e.kind)}</small>`;
+    $("adSub").textContent = recent.balanced ? `ended ${hhmmss(ts(e.ended_at))}; who supplied it is in the table` :
+      `ended ${hhmmss(ts(e.ended_at))}; the probes settle for about 8 min: ${fmtDur(Math.max(0, 480 - sinceEnd))} to go`;
+    set(recent.balanced ? ["start", "run", "end", "bal"] : ["start", "run", "end"], recent.balanced ? "" : "bal");
+  } else {
+    $("adPill").className = "pill off"; $("adPill").textContent = "none";
+    $("adLitres").innerHTML = `0<small>L</small>`; $("adSub").textContent = "No water running. Turn on a hot tap and watch.";
+    set([], "");
+  }
+}
+function renderDraws() {
+  renderActive();
+  const ds = [...S.draws.entries()].filter(([, d]) => d.ended || d.active).sort((a, b) => (ts(b[1].ended?.ended_at ?? b[1].active?.last_litre_at) || 0) - (ts(a[1].ended?.ended_at ?? a[1].active?.last_litre_at) || 0));
+  $("dCount").textContent = ds.length ? `${ds.length} draw${ds.length > 1 ? "s" : ""}, ${ds.reduce((a, [, d]) => a + (d.ended ? d.ended.litres : 0), 0)} L` : "";
+  if (!ds.length) return;
+  const left = css("--left"), right = css("--right");
+  $("drawRows").innerHTML = ds.map(([id, d]) => {
+    const e = d.ended, a = d.active, b = d.balanced;
+    if (!e) return `<tr><td>${hhmmss(ts(a.started_at))}…</td><td class="r">${a.litres}</td><td>${esc(a.kind)} <span class="chip">so far</span></td><td class="r">${num(a.flow_l_min)}</td><td class="r">${fmtDur((evNow() - ts(a.started_at)) / 1000)}</td><td colspan="2" class="foot">${d.gone ? "left the state without a draw_ended (a restart?)" : "running"}</td></tr>`;
+    let split = `<span class="foot">waiting for draw_balanced</span>`, check = `<span class="foot">in about ${fmtDur(Math.max(0, 480 - (evNow() - ts(e.ended_at)) / 1000))}</span>`;
+    if (b) {
+      const tk = b.tanks || [];
+      if (tk.length && tk.every(t => t.share != null)) {
+        split = `<div class="share" title="${tk.map(t => short(t.device_id) + " " + Math.round(t.share * 100) + "%").join(", ")}">${tk.map(t => `<span style="width:${(t.share * 100).toFixed(1)}%;background:${short(t.device_id) === "left" ? left : right}"></span>`).join("")}</div>
+          <div class="foot">${tk.map(t => `${short(t.device_id)} ${Math.round(t.share * 100)}%`).join(" · ")}</div>`;
+      } else split = `<span class="chip warn">not measured</span>`;
+      const rel = b.heat_balance_reliable;
+      check = `${num(b.heat_balance_l, 1)} L vs ${e.litres} metered <span class="chip ${rel ? "ok" : "warn"}">${rel ? "reliable" : "unreliable"}</span>
+        ${(b.reasons || []).map(r => `<span class="chip" title="${esc(REASONS[r] || r)}">${esc(r)}</span>`).join(" ")}
+        <div class="foot">${num(b.energy_kwh, 2)} kWh · hottest at the tap ${num(b.outlet_peak_c)} °C${b.masked_by_reheat ? " · masked by a reheat" : ""}</div>`;
+    }
+    return `<tr title="${esc(id)}"><td>${hhmmss(ts(e.ended_at))}</td><td class="r">${e.litres}</td><td>${esc(e.kind)}</td><td class="r">${num(e.flow_l_min)}</td><td class="r">${fmtDur(e.duration_s)}</td><td>${split}</td><td>${check}</td></tr>`;
+  }).join("");
+}
+
+// ---------------------------------------------------------------- charts
+const charts = {
+  usable: {el: $("cUsable"), tip: $("tipU"), H: 220},
+  stored: {el: $("cStored"), tip: $("tipS"), H: 150},
+  ua: {el: $("cUA"), tip: $("tipA"), H: 130},
+};
+// The loss per kelvin of every cylinder at each time one changed, for the hover.
+function uaRows(t0) {
+  const ts_ = [...new Set([...S.ua.values()].flat().filter(p => p.t >= t0 - 60e3).map(p => p.t))].sort((a, b) => a - b);
+  return ts_.map(t => { const v = {}; for (const [id, ps] of S.ua) { let last = null; for (const p of ps) if (p.t <= t) last = p.v; if (last != null) v[id] = last; } return {t, v}; });
+}
+function frame(c) {
+  const W = c.el.clientWidth, H = c.H, dpr = window.devicePixelRatio || 1;
+  if (c.el.style.height !== H + "px") c.el.style.height = H + "px";
+  if (c.el.width !== Math.round(W * dpr) || c.el.height !== Math.round(H * dpr)) { c.el.width = Math.round(W * dpr); c.el.height = Math.round(H * dpr); }
+  const ctx = c.el.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+  return {ctx, W, H};
+}
+function drawCharts() {
+  const now = Math.max(evNow(), S.hist.length ? S.hist[S.hist.length - 1].t : 0), t0 = now - chartMin * 60e3, padL = 44, padR = 12, padT = 10, padB = 22;
+  const pts = S.hist.filter(p => p.t >= t0 - 60e3);
+  for (const [key, c] of Object.entries(charts)) {
+    const {ctx, W, H} = frame(c);
+    const X = t => padL + (t - t0) / (now - t0) * (W - padL - padR);
+    let lo = 0, hi;
+    const upts = key === "ua" ? [...S.ua.values()].flat().filter(p => p.t >= t0 - 60e3) : [];
+    if (key === "usable") hi = Math.max((LOW ?? 0) + (MARGIN ?? 0) + 20, ...pts.map(p => p.high || 0)) * 1.1;
+    else if (key === "ua") hi = Math.max(5, ...upts.map(p => p.v)) * 1.2;
+    else { const vs = pts.flatMap(p => Object.values(p.stored).filter(v => v != null)); hi = Math.max(1, ...vs) * 1.15; }
+    const Y = v => padT + (1 - (v - lo) / (hi - lo)) * (H - padT - padB);
+    ctx.font = `11px ${css("--f-mono")}`;
+    // bands: draws and the HW timer, from the state history
+    const band = (pred, col) => { let s = null;
+      for (let i = 0; i < pts.length; i++) { const on = pred(pts[i]);
+        if (on && s == null) s = pts[i].t;
+        if ((!on || i === pts.length - 1) && s != null) { const e = on ? now : pts[i].t; ctx.fillStyle = col; ctx.fillRect(X(Math.max(s, t0)), padT, Math.max(X(e) - X(Math.max(s, t0)), 2), H - padT - padB); s = null; } } };
+    band(p => p.hw, "rgba(178,96,42,.15)");
+    band(p => p.drawing, "rgba(43,108,176,.20)");
+    // grid
+    ctx.strokeStyle = css("--grid"); ctx.fillStyle = css("--muted"); ctx.lineWidth = 1;
+    const step = chartMin <= 15 ? 5 : chartMin <= 60 ? 10 : 30;
+    for (let m = 0; m <= chartMin; m += step) { const gx = X(now - m * 60e3);
+      ctx.beginPath(); ctx.moveTo(gx, padT); ctx.lineTo(gx, H - padB); ctx.stroke(); ctx.textAlign = "center"; ctx.fillText(m ? `−${m}m` : "now", gx, H - 6); }
+    const yStep = key === "usable" ? (hi > 150 ? 50 : 20) : key === "ua" ? (hi > 20 ? 5 : 2) : (hi > 10 ? 5 : 2);
+    ctx.textAlign = "right";
+    for (let v = 0; v <= hi; v += yStep) { const gy = Y(v); ctx.strokeStyle = css("--grid"); ctx.beginPath(); ctx.moveTo(padL, gy); ctx.lineTo(W - padR, gy); ctx.stroke(); ctx.fillText(String(v), padL - 6, gy + 4); }
+    const line = (get, col, width, dash) => { ctx.strokeStyle = col; ctx.lineWidth = width; ctx.setLineDash(dash || []); ctx.beginPath(); let on = false;
+      for (const p of pts) { const v = get(p); if (v == null) { on = false; continue; } const x = X(Math.max(p.t, t0)), y = Y(v); on ? ctx.lineTo(x, y) : ctx.moveTo(x, y); on = true; }
+      if (pts.length) { const v = get(pts[pts.length - 1]); if (v != null) ctx.lineTo(X(now), Y(v)); }
+      ctx.stroke(); ctx.setLineDash([]); };
+    if (key === "usable") {
+      if (LOW != null) {
+        ctx.fillStyle = css("--hold"); ctx.fillRect(padL, Y(LOW + (MARGIN ?? 0)), W - padL - padR, Y(LOW) - Y(LOW + (MARGIN ?? 0)));
+        ctx.fillStyle = css("--lowband"); ctx.fillRect(padL, Y(LOW), W - padL - padR, Y(0) - Y(LOW));
+        ctx.strokeStyle = css("--bad"); ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(padL, Y(LOW)); ctx.lineTo(W - padR, Y(LOW)); ctx.stroke(); ctx.setLineDash([]);
+      }
+      line(p => p.high, css("--muted"), 1.5, [5, 4]);
+      line(p => p.low, css("--ink"), 2);
+    } else if (key === "ua") {
+      for (const id of tankOrder()) {
+        const ps = (S.ua.get(id) || []).filter(p => p.t >= t0 - 60e3);
+        ctx.strokeStyle = short(id) === "left" ? css("--left") : css("--right"); ctx.lineWidth = 2; ctx.beginPath();
+        ps.forEach((p, i) => { const x = X(Math.max(p.t, t0)), y = Y(p.v); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+        if (ps.length) ctx.lineTo(X(now), Y(ps[ps.length - 1].v));
+        ctx.stroke();
+      }
+    } else {
+      for (const id of tankOrder()) line(p => p.stored[id], short(id) === "left" ? css("--left") : css("--right"), 2);
+    }
+    if (!(key === "ua" ? upts.length : pts.length)) { ctx.fillStyle = css("--muted"); ctx.textAlign = "center"; ctx.fillText("waiting for washhouse's state…", W / 2, H / 2); }
+    c.geom = {X, Y, t0, now, padL, padR, W, pts: key === "ua" ? uaRows(t0) : pts};
+  }
+}
+function hover(c, key, ev) {
+  const g = c.geom; if (!g || !g.pts.length) return;
+  const r = c.el.getBoundingClientRect(), x = ev.clientX - r.left;
+  if (x < g.padL || x > g.W - g.padR) { c.tip.hidden = true; return; }
+  const t = g.t0 + (x - g.padL) / (g.W - g.padL - g.padR) * (g.now - g.t0);
+  let best = null; for (const p of g.pts) if (p.t <= t) best = p;
+  if (!best) { c.tip.hidden = true; return; }
+  c.tip.hidden = false;
+  c.tip.innerHTML = key === "ua" ? `${hhmmss(best.t)}<br>${Object.entries(best.v).map(([id, v]) => `${short(id)} <b>${num(v, 1)} W/K</b>`).join("<br>")}` : key === "usable"
+    ? `${hhmmss(best.t)}<br>plan on <b>${num(best.low, 0)} L</b><br>up to ${num(best.high, 0)} L${best.flag ? "<br>low hot water" : ""}${best.drawing ? "<br>drawing" : ""}${best.hw ? "<br>HW timer on" : ""}`
+    : `${hhmmss(best.t)}<br>${Object.entries(best.stored).map(([id, v]) => `${short(id)} <b>${num(v, 2)} kWh</b>`).join("<br>")}`;
+  c.tip.style.left = Math.min(x + 12, r.width - 150) + "px"; c.tip.style.top = "8px";
+}
+for (const [key, c] of Object.entries(charts)) {
+  c.el.addEventListener("pointermove", ev => hover(c, key, ev));
+  c.el.addEventListener("pointerleave", () => { c.tip.hidden = true; });
+}
+document.querySelectorAll(".seg button[data-w]").forEach(b => b.addEventListener("click", () => {
+  chartMin = +b.dataset.w; document.querySelectorAll(".seg button[data-w]").forEach(x => x.setAttribute("aria-pressed", String(x === b))); drawCharts();
+}));
+
+// ---------------------------------------------------------------- log and flow
+const shown = {tt: true, state: true, events: true, status: true};
+document.querySelectorAll("#filters input").forEach(i => i.addEventListener("change", () => {
+  shown[i.dataset.f] = i.checked;
+  $("log").innerHTML = ""; for (const e of S.events.slice(-300)) addLogRow(e);
+}));
+function addLogRow(e) {
+  if (!shown[e.group]) return;
+  const row = document.createElement("div");
+  row.className = "row";
+  row.style.setProperty("--c", colour(e.kind));
+  const shortTopic = e.topic.startsWith(tt + "/") ? "tanktemp/" + e.topic.slice(tt.length + 1) : e.topic.startsWith(base + "/") ? "…/" + e.topic.slice(base.length + 1) : e.topic;
+  row.innerHTML = `<span class="t">${new Date(e.at).toLocaleTimeString([], {hour12: false})}</span><span class="k ${e.retained ? "ret" : ""}" title="${e.retained ? "retained" : "live"} · QoS ${e.qos}"></span>
+    <span class="tp" title="${esc(e.topic)}">${esc(shortTopic)}</span><span class="s">${esc(e.summary)}</span>${e.meaning && e.group === "events" ? `<span class="m">${esc(e.meaning)}</span>` : ""}`;
+  if (e.meaning) row.title = e.meaning;
+  row.addEventListener("click", () => {
+    const pre = row.querySelector("pre");
+    if (pre) { pre.remove(); return; }
+    const p = document.createElement("pre");
+    let body; try { body = JSON.stringify(JSON.parse(e.text), null, 2) } catch { body = e.text }
+    p.textContent = `${e.topic}  ·  ${e.retained ? "retained" : "live"}  ·  QoS ${e.qos}\n${e.meaning ? e.meaning + "\n" : ""}\n${body}`;
+    row.appendChild(p);
+  });
+  $("log").prepend(row);
+  while ($("log").children.length > 300) $("log").lastChild.remove();
+}
+const flow = $("flow"), fctx = flow.getContext("2d");
+function lanes() {
+  const order = t => { const c = classify(t); return ["w-status", "w-events", "w-event", "w-state", "w-tank", "t-status", "t-meter", "t-state"].indexOf(c); };
+  const all = [...new Set(S.events.map(e => e.topic))].sort((a, b) => order(a) - order(b) || a.localeCompare(b));
+  return all.length ? all : [(base || "…") + "/state"];
+}
+function drawFlow() {
+  const ls = lanes(), laneH = 26, padL = Math.min(220, flow.clientWidth * 0.36), padT = 8, padB = 22;
+  const W = flow.clientWidth, H = padT + ls.length * laneH + padB, dpr = window.devicePixelRatio || 1;
+  if (flow.style.height !== H + "px") flow.style.height = H + "px";
+  if (flow.width !== Math.round(W * dpr) || flow.height !== Math.round(H * dpr)) { flow.width = Math.round(W * dpr); flow.height = Math.round(H * dpr); }
+  fctx.setTransform(dpr, 0, 0, dpr, 0, 0); fctx.clearRect(0, 0, W, H);
+  const now = Date.now(), x = t => padL + (1 - (now - t) / FLOW_MS) * (W - padL - 8);
+  fctx.font = `11px ${css("--f-mono")}`;
+  fctx.strokeStyle = css("--grid"); fctx.fillStyle = css("--muted"); fctx.lineWidth = 1;
+  for (let m = 0; m <= 10; m += 2) { const gx = x(now - m * 60000);
+    fctx.beginPath(); fctx.moveTo(gx, padT); fctx.lineTo(gx, H - padB + 4); fctx.stroke(); fctx.textAlign = "center"; fctx.fillText(m ? `−${m}m` : "now", gx, H - 6); }
+  ls.forEach((topic, i) => {
+    const y = padT + i * laneH + laneH / 2;
+    fctx.strokeStyle = css("--line"); fctx.beginPath(); fctx.moveTo(padL, y); fctx.lineTo(W - 8, y); fctx.stroke();
+    fctx.fillStyle = css("--muted"); fctx.textAlign = "right";
+    const s = topic.startsWith(tt + "/") ? "tanktemp/" + topic.slice(tt.length + 1) : topic.startsWith(base + "/") ? "washhouse/" + topic.slice(base.length + 1) : topic;
+    fctx.fillText(s.length > 32 ? "…" + s.slice(-31) : s, padL - 10, y + 4);
+  });
+  for (const e of S.events) {
+    if (now - e.at > FLOW_MS) continue;
+    const i = ls.indexOf(e.topic); if (i < 0) continue;
+    const y = padT + i * laneH + laneH / 2, ex = x(e.at), age = now - e.at;
+    const r = 4.5 + (age < 1200 ? (1 - age / 1200) * 5 : 0);
+    fctx.beginPath(); fctx.arc(ex, y, r, 0, Math.PI * 2);
+    if (e.retained) { fctx.lineWidth = 2; fctx.strokeStyle = colour(e.kind); fctx.fillStyle = css("--panel"); fctx.fill(); fctx.stroke(); }
+    else { fctx.fillStyle = colour(e.kind); fctx.fill(); }
+  }
+}
+const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+function loop() { drawFlow(); if (!reduced) requestAnimationFrame(loop); }
+if (reduced) setInterval(drawFlow, 1000);
+loop();
+setInterval(tickAges, 1000);
+// tanktemp heard but nothing from washhouse: most likely the wrong base.
+setInterval(() => {
+  if (!client || S.state || S.wstatus) return;
+  const heardTT = S.events.some(e => e.group === "tt");
+  if (heardTT && Date.now() - connectedAt > 5000)
+    $("lowWhy").innerHTML = `tanktemp is coming through, but nothing from washhouse on <code>${esc(base)}/state</code>. Is the washhouse topic right? The live shadow publishes under <code>test/water/hot</code>, the live tree under <code>water/hot</code>.`;
+}, 1000);
+setInterval(drawCharts, 2000);
+addEventListener("resize", () => { drawFlow(); drawCharts(); });
+
+// ---------------------------------------------------------------- MQTT
+function setLink(cls, text) { $("link").className = "pill " + cls; $("link").textContent = text; }
+function clearView() {
+  S.probes.clear(); S.wtanks.clear(); S.draws.clear(); S.lastPayload.clear();
+  S.state = S.wstatus = S.tstatus = S.meter = null; S.stateAt = S.wstatusAt = S.meterAt = 0;
+  S.hist.length = 0; S.events.length = 0; S.ua.clear(); S.meterSkipped = 0; S.meterNote = "";
+  document.querySelectorAll(".tank").forEach(el => el.remove());
+  $("log").innerHTML = ""; $("tanksEmpty").hidden = false;
+  for (const id of ["whVersion","whReady","whUptime","whAge","whEvent","ttStatus","meterCount","meterLast","meterClosed","meterHealth","boiler","creep","stored","ambient","uHigh"]) $(id).textContent = "—";
+  $("uLow").innerHTML = "—<small>L</small>"; $("gauge").innerHTML = ""; $("facts").innerHTML = ""; $("splitWhy").textContent = "";
+  $("lowWhy").textContent = "Waiting for washhouse's state.";
+  for (const id of ["lowPill", "whPill", "ttPill"]) { $(id).className = "pill off"; $(id).textContent = "—"; }
+  $("drawRows").innerHTML = `<tr><td colspan="7" class="foot" style="padding:14px 6px">None yet. Events aren't retained, so this fills as draws happen: run a hot tap.</td></tr>`;
+  $("dCount").textContent = "";
+  renderActive(); drawCharts();
+}
+function disconnect() {
+  if (client) { client.end(true); client = null; }
+  stopDemo();
+  setLink("off", "offline"); $("go").textContent = "Connect"; $("mode").textContent = "idle";
+}
+function connect() {
+  disconnect(); clearView();
+  LOW = P.low; MARGIN = P.margin;
+  const url = $("ws").value.trim();
+  base = $("base").value.trim().replace(/\/+$/, ""); tt = $("tt").value.trim().replace(/\/+$/, "");
+  if (!/^wss?:\/\//.test(url)) { setLink("bad", "need ws:// URL"); $("ws").focus(); return; }
+  if (typeof mqtt === "undefined") { setLink("bad", "mqtt.js didn't load"); return; }
+  remember();
+  setLink("warn", "connecting");
+  $("mode").textContent = "live"; $("go").textContent = "Disconnect";
+  client = mqtt.connect(url, {clientId: "washhouse-live-" + Math.random().toString(16).slice(2, 8), clean: true, reconnectPeriod: 3000, connectTimeout: 8000});
+  client.on("connect", () => {
+    setLink("ok", "connected"); connectedAt = Date.now();
+    client.subscribe([tt + "/+/state", tt + "/status", tt + "/meter", base + "/state", base + "/tank/+", base + "/events", base + "/status"], {qos: 1},
+      err => { if (err) setLink("bad", "subscribe failed"); });
+  });
+  client.on("reconnect", () => setLink("warn", "reconnecting"));
+  client.on("offline", () => setLink("bad", "broker unreachable"));
+  client.on("error", e => setLink("bad", (e && e.message || "error").slice(0, 40)));
+  client.on("message", (topic, payload, packet) => ingest(topic, new TextDecoder().decode(payload), !!packet.retain, packet.qos));
+}
+
+// ---------------------------------------------------------------- demo
+// A made-up pair of cylinders and a made-up washhouse, so the page shows
+// what it does with no broker. Time runs fast (10× by default, up to 60×):
+// at 10× a sweep every 3 s stands for 30 s, a draw ends 6 s after its last
+// litre, and the probes settle in 48 s. The numbers are plausible, not
+// washhouse's model. The threshold is the demo's own (30 L, margin 10).
+function startDemo() {
+  disconnect(); clearView();
+  tt = "demo/water/hot/tanktemp"; base = "demo/water/hot";
+  $("mode").textContent = "demo · made-up data"; setLink("info", "demo"); $("demoCtl").hidden = false;
+  if (LOW == null) { LOW = 30; MARGIN = 10; }
+  const T = {speed: 10, vt0: Date.now(), wt0: Date.now()};
+  const clock = () => T.vt0 + (Date.now() - T.wt0) * T.speed;  // demo time runs fast
+  const iso = t => new Date(t).toISOString();
+  const H = [265, 400, 825, 1100, 1215], POS = ["bottom", "lower", "middle", "upper", "top"];
+  const D = {
+    alive: true, hw: false, count: 412, seq: 9000, since: iso(T.vt0 - 86400e3), up: 3600, lsStart: 0,
+    tanks: {hot_water_cylinder_left: {t: [24, 38, 55, 61, 58], ua: 3.6, share: 0.13, state: "cooling", prevE: null, power: -0.12},
+            hot_water_cylinder_right: {t: [18, 24, 31, 44, 47], ua: 17.5, share: 0.87, state: "cooling", prevE: null, power: -0.42}},
+    draw: null, lastLow: null,
+  };
+  const pub = (topic, o, ret, qos) => ingest(topic, JSON.stringify(o), ret, qos);
+  const energy = t => t.t.reduce((a, c) => a + Math.max(c - 12, 0), 0) * 200 / 5 * 4.186 / 3600;   // kWh above a 12 °C feed
+  const usableAlone = t => { let l = 0; for (let i = 0; i < 5; i++) if (t.t[i] >= 40) l += 40 * (t.t[i] - 12) / 28; return l; };
+  const statusMsg = ev => ({schema: "net.swee.washhouse.status.v1", online: ev !== "SHUTDOWN", event: ev, timestamp: iso(Date.now()), version: "demo123",
+    ready: ev !== "STARTUP", uptime_s: D.up, tanks: Object.keys(D.tanks)});
+  pub(tt + "/status", {online: true, event: "HEARTBEAT", timestamp: iso(clock()), version: "tt-demo", ready: true}, true, 1);
+  pub(base + "/status", statusMsg("HEARTBEAT"), true, 1);
+  const tankMsg = (id, t, at) => ({schema: "net.swee.washhouse.tank.v1", device_id: id, timestamp: at, sweep_at: at, state: t.state, heat_source: t.state === "heating" ? "hw" : null,
+    stored_kwh: +energy(t).toFixed(3), mean_c: +(t.t.reduce((a, b) => a + b) / 5).toFixed(3), top_c: +Math.max(...t.t).toFixed(3), hot_l: +usableAlone(t).toFixed(1) * 0.7,
+    usable_l40: +usableAlone(t).toFixed(3), usable_l40_low: +(usableAlone(t) * 0.85).toFixed(3), power_kw: t.power, ua_w_per_k: t.ua, probes_ok: 5, probes_total: 5});
+  const stateMsg = at => {
+    const ids = Object.keys(D.tanks), L = D.tanks[ids[0]], R = D.tanks[ids[1]];
+    const merged = Math.min(usableAlone(R) / R.share, usableAlone(L) / L.share) * 0.9 + 10;  // the cooler share runs out first
+    const low85 = merged * 0.85;
+    if (D.lastLow == null) D.lastLow = low85 < LOW; else if (low85 < LOW) D.lastLow = true; else if (low85 > LOW + MARGIN) D.lastLow = false;
+    const ad = D.draw && !D.draw.ended ? {draw_id: D.draw.id, started_at: iso(D.draw.start), last_litre_at: iso(D.draw.last), litres: D.draw.litres, flow_l_min: D.draw.litres > 1 ? D.draw.flow : null, kind: D.draw.kindNow} : null;
+    return {schema: "net.swee.washhouse.state.v1", timestamp: at, stored_kwh: +(energy(L) + energy(R)).toFixed(3), usable_l40: +merged.toFixed(3), usable_l40_low: +low85.toFixed(3),
+      low_hot_water: D.lastLow, boiler: {hw: D.hw, ch: false}, ambient_c: 17.4, active_draw: ad,
+      meter: {timestamp: at, counting_since: D.since, count: D.count, litres_since_start: D.lsStart, continuous_flow: null},
+      tanktemp: {timestamp: at, online: true, version: "tt-demo"},
+      tanks: ids.map(id => { const t = D.tanks[id]; return {device_id: id, state: t.state, heat_source: t.state === "heating" ? "hw" : null, stored_kwh: +energy(t).toFixed(3), usable_l40: +usableAlone(t).toFixed(3), top_c: +Math.max(...t.t).toFixed(3)}; })};
+  };
+  const setState = (id, st) => { const t = D.tanks[id]; if (t.state === st) return; const prev = t.state; t.state = st;
+    pub(base + "/events", {schema: "net.swee.washhouse.event.v1", event: "tank_state_changed", timestamp: iso(clock()), tank: {device_id: id, state: st, prev, heat_source: st === "heating" ? "hw" : null, power_kw: t.power}}, false, 1);
+    if (st === "heating" || prev === "heating") pub(base + "/events", {schema: "net.swee.washhouse.event.v1", event: st === "heating" ? "heating_started" : "heating_ended", timestamp: iso(clock()), tank: {device_id: id, state: st, prev, heat_source: "hw", power_kw: t.power}}, false, 1); };
+  const sweep = () => {
+    const at = iso(clock());
+    for (const [id, t] of Object.entries(D.tanks)) {
+      if (D.hw) { for (let i = 0; i < 5; i++) t.t[i] = Math.min(t.t[i] + (i < 3 ? 0.9 : 0.5) * (id.endsWith("right") ? 1.1 : 0.7), 63); t.power = id.endsWith("right") ? 9.6 : 3.1; }
+      else { for (let i = 0; i < 5; i++) t.t[i] -= t.ua * 0.0009 * (t.t[i] - 17); if (!D.draw) t.power = -t.ua * ((t.t.reduce((a, b) => a + b) / 5) - 17) / 1000; }
+      if (D.draw && !D.draw.ended) t.power = null;
+      const sensors = t.t.map((c, i) => ({position: POS[i], order: i + 1, height_mm: H[i], rom: "28-demo" + i, temp_c: +c.toFixed(3), raw_c: +c.toFixed(3), offset_c: 0, error: null, suspect: null}));
+      pub(tt + "/" + id + "/state", {device_id: id, timestamp: at, clock_synced: true, sweep_ms: 3950, sensors}, true, 0);
+      pub(base + "/tank/" + id, tankMsg(id, t, at), true, 0);
+    }
+    pub(base + "/state", stateMsg(at), true, 0);
+  };
+  const litre = () => {
+    const d = D.draw; if (!d || d.ended || d.left <= 0) return;
+    D.count++; D.seq++; D.lsStart++; d.litres++; d.left--; d.last = clock();
+    for (const [id, t] of Object.entries(D.tanks)) { const k = t.share * 1.6; for (let i = 0; i < 5; i++) t.t[i] -= k * (i === 0 ? 1.4 : i === 4 ? 0.15 : 0.6) * (t.t[i] - 12) / 40; }
+    d.kindNow = d.litres >= 20 && d.flow >= 10 ? "bath" : d.litres >= 20 && (d.last - d.start) >= 180e3 ? "shower" : "tap";
+    pub(tt + "/meter", {device_id: "hot_water_meter", timestamp: iso(d.last).replace(/\.\d+Z$/, "Z"), clock_synced: true, trigger: "pulse", seq: D.seq, litres_per_pulse: 1, level: "closed",
+      counting_since: D.since, count: D.count, last_pulse_at: iso(d.last), last_interval_ms: Math.round(60e3 / d.flow), last_closed_ms: 1800 + Math.round(Math.random() * 1500), noise: 0, short: 0, glitches: 0, lost: 0}, true, 0);
+    const ad = {draw_id: d.id, started_at: iso(d.start), last_litre_at: iso(d.last), litres: d.litres, flow_l_min: d.litres > 1 ? d.flow : null, kind: d.kindNow};
+    if (d.litres === 1) { for (const id of Object.keys(D.tanks)) { D.tanks[id].before = D.tanks[id].state; setState(id, "drawing"); }
+      pub(base + "/events", {schema: "net.swee.washhouse.event.v1", event: "draw_started", timestamp: ad.started_at, active_draw: ad}, false, 1); }
+    else if (d.litres % 5 === 0) pub(base + "/events", {schema: "net.swee.washhouse.event.v1", event: "draw_updated", timestamp: ad.last_litre_at, active_draw: ad}, false, 1);
+    pub(base + "/state", stateMsg(iso(d.last)), true, 0);
+    if (d.left > 0) setTimeout(litre, 60e3 / d.flow / T.speed);
+    else {
+      setTimeout(() => {   // 60 s without a litre: the meter ends it
+        d.ended = true;
+        const ended = {draw_id: d.id, started_at: iso(d.start), ended_at: iso(d.last), duration_s: +((d.last - d.start) / 1000).toFixed(2), litres: d.litres, volume_kind: "metered",
+          flow_l_min: d.flow, kind: d.kindNow, meter_from: {counting_since: D.since, seq: d.seq0}, meter_to: {counting_since: D.since, seq: D.seq}};
+        pub(base + "/events", {schema: "net.swee.washhouse.event.v1", event: "draw_ended", timestamp: iso(clock()), draw_ended: ended}, false, 1);
+        pub(base + "/state", stateMsg(iso(clock())), true, 0);
+      }, 66e3 / T.speed);
+      setTimeout(() => {   // the probes settled: the attribution
+        for (const id of Object.keys(D.tanks)) setState(id, D.hw ? "heating" : "cooling");
+        const L = Object.keys(D.tanks), jitter = (Math.random() - 0.5) * 0.08, sh = [0.13 + jitter, 0.87 - jitter];
+        const hb = d.litres * (d.litres < 20 ? 1.25 + Math.random() * 0.3 : 0.95 + Math.random() * 0.08), reasons = [];
+        if (d.litres < 20) reasons.push("small", "thermocline_gap");
+        if (D.hw) reasons.unshift("hw_on");
+        const masked = D.hw;
+        pub(base + "/events", {schema: "net.swee.washhouse.event.v1", event: "draw_balanced", timestamp: iso(clock()), draw_balanced: {
+          draw_id: d.id, ended_at: iso(d.last),
+          tanks: L.map((id, i) => masked ? {device_id: id, outlet_peak_c: 58, inlet_drop_c: 9} : {device_id: id, share: +sh[i].toFixed(3), litres: +(sh[i] * d.litres).toFixed(3), outlet_peak_c: i ? 51 : 59, inlet_drop_c: i ? 14 : 6}),
+          outlet_peak_c: 52.1, inlet_drop_c: 14, energy_kwh: +(d.litres * 0.058).toFixed(3), heat_balance_l: +hb.toFixed(3), heat_balance_reliable: reasons.length === 0, reasons, masked_by_reheat: masked}}, false, 1);
+      }, 480e3 / T.speed);
+    }
+  };
+  D.run = (litres, flow) => {
+    if (D.draw && !D.draw.ended) return;
+    const start = clock();
+    D.draw = {id: D.since.replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z") + "-" + (D.seq + 1), seq0: D.seq + 1, start, last: start, litres: 0, left: litres, flow, kindNow: "tap"};
+    litre();
+  };
+  D.reheat = () => { D.hw = !D.hw; $("dReheat").textContent = D.hw ? "Hot-water timer off" : "Hot-water timer on";
+    if (D.hw) setTimeout(() => { for (const id of Object.keys(D.tanks)) if (D.tanks[id].state !== "drawing") setState(id, "heating"); }, 6000);
+    else for (const id of Object.keys(D.tanks)) if (D.tanks[id].state === "heating") setState(id, "cooling");
+    pub(base + "/state", stateMsg(iso(clock())), true, 0); };
+  D.restart = () => {
+    pub(base + "/status", statusMsg("SHUTDOWN"), true, 1);
+    D.alive = false;
+    setTimeout(() => { D.up = 0; D.lsStart = 0; pub(base + "/status", statusMsg("STARTUP"), true, 1); }, 1200);
+    setTimeout(() => { D.alive = true; pub(base + "/status", statusMsg("HEARTBEAT"), true, 1); sweep(); }, 2400);
+  };
+  sweep();
+  let n = 0;
+  const tick = () => { D.timer = setTimeout(tick, 30e3 / T.speed); if (!D.alive) return; D.up += 30; n++; sweep(); if (n % 30 === 0) pub(base + "/status", statusMsg("HEARTBEAT"), true, 1); };
+  D.timer = setTimeout(tick, 30e3 / T.speed);
+  D.clock = clock;
+  D.setSpeed = x => { T.vt0 = clock(); T.wt0 = Date.now(); T.speed = x;
+    document.querySelectorAll("#demoSpeed button").forEach(b => b.setAttribute("aria-pressed", String(+b.dataset.x === x))); };
+  // A first draw shortly after opening, so there's something to see.
+  D.kick = setTimeout(() => D.run(7, 13.4), 4000);
+  demo = D;
+}
+function stopDemo() { if (demo) { clearTimeout(demo.timer); clearTimeout(demo.kick); demo = null; LOW = P.low; MARGIN = P.margin; } $("demoCtl").hidden = true; }
+document.querySelectorAll("#demoSpeed button").forEach(b => b.addEventListener("click", () => demo && demo.setSpeed(+b.dataset.x)));
+$("dTap").onclick = () => demo && demo.run(7, 13.4);
+$("dShower").onclick = () => demo && demo.run(46, 6.2);
+$("dReheat").onclick = () => demo && demo.reheat();
+$("dRestart").onclick = () => demo && demo.restart();
+
+// ---------------------------------------------------------------- boot
+$("conn").addEventListener("submit", e => { e.preventDefault(); client ? (disconnect(), clearView()) : connect(); });
+$("demoBtn").onclick = () => demo ? (disconnect(), clearView()) : startDemo();
+const P = params();
+$("ws").value = P.ws; $("base").value = P.base; $("tt").value = P.tt; LOW = P.low; MARGIN = P.margin;
+if (P.demo || !P.ws) startDemo(); else connect();
+</script>
+</body>
+</html>
