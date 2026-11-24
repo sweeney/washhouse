@@ -18,8 +18,9 @@
 // 10 °C feed. So the tank keeps that fraction, k: Config.PriorOutletUnderread
 // until it has learned some (LearnOutletUnderread, from the engine: a rested
 // draw's outlet peak and the reading just before it), then the median of the
-// last OffsetWindow learned, so one odd draw can't replace a good value
-// (tanktemp's review of #12). For the estimate the outlet reads
+// last OffsetWindow learned, with the prior counted as one until that many
+// are learned, so one odd draw can't replace a good value (tanktemp's
+// reviews of #12). For the estimate the outlet reads
 // k/(1−k) × (its reading − the cold feed) higher, so a cold tank gets none:
 // none while water flows (Flow), and after a draw it ramps in over SetRamp's
 // time as the pipe cools. The sweep's probes stay raw, since the draw
@@ -182,13 +183,23 @@ func (t *Tank) FlowState() (running bool, lastEnded time.Time) { return t.flowin
 // SetRamp sets the time after a draw over which the offset ramps in.
 func (t *Tank) SetRamp(d time.Duration) { t.ramp = d }
 
-// underread is the median of what was learned, or the prior before any.
+// underread is the median of the prior and what was learned, over the
+// last OffsetWindow: the prior (if any) counts as one sample until
+// OffsetWindow have been learned.
 func (t *Tank) underread() float64 {
-	n := len(t.learned)
-	if n == 0 {
-		return t.c.PriorOutletUnderread
+	var xs []float64
+	if t.c.PriorOutletUnderread > 0 {
+		xs = append(xs, t.c.PriorOutletUnderread)
 	}
-	xs := slices.Sorted(slices.Values(t.learned))
+	xs = append(xs, t.learned...)
+	if len(xs) > OffsetWindow {
+		xs = xs[len(xs)-OffsetWindow:]
+	}
+	n := len(xs)
+	if n == 0 {
+		return 0
+	}
+	slices.Sort(xs)
 	if n%2 == 1 {
 		return xs[n/2]
 	}

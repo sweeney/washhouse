@@ -11,9 +11,10 @@ import (
 // low scales with how far the water is above the cold feed (on 24 Nov 2026
 // the left read 8.5 °C low at 62 and the right 6 at 46: both 0.16–0.17 of
 // the way down to the 10 °C feed), so the tank keeps that fraction, k: the
-// configured prior until it has learned some, then the median of the last
-// OffsetWindow learned (one odd draw can't replace a good value:
-// tanktemp's review of #12). For the estimate the outlet reads
+// median of the configured prior and what it has learned, over the last
+// OffsetWindow (the prior counts as one until OffsetWindow are learned, so
+// one odd draw, first or later, can't replace a good value: tanktemp's
+// reviews of #12). For the estimate the outlet reads
 // k/(1−k) × (its reading − ColdC) higher: none while water flows, ramping
 // in after a draw. The sweep's probes stay raw: the draw attribution reads
 // them. testEstimator's cold feed is 10 °C, so at k 0.2 an outlet reading
@@ -34,9 +35,11 @@ func TestOutletUnderread(t *testing.T) {
 		{name: "no prior, nothing learned", ended: end, wantTop: 40},
 		{name: "the prior, before any draw", prior: 0.2, wantTop: 47.5},
 		{name: "the prior, long after a draw", prior: 0.2, ended: end, wantTop: 47.5},
-		{name: "one learned replaces the prior", prior: 0.2, learned: []float64{0.25}, ended: end, wantTop: 50},
-		{name: "the median of what was learned", prior: 0.1, learned: []float64{0.2, 0.05, 0.25}, ended: end, wantTop: 47.5},
-		{name: "an odd one doesn't move the median", prior: 0.1, learned: []float64{0.2, 0.2, 0.05}, ended: end, wantTop: 47.5},
+		{name: "one learned: halfway from the prior", prior: 0.2, learned: []float64{0.25}, ended: end, wantTop: 40 + 0.225/0.775*30},
+		{name: "the median of the prior and what was learned", prior: 0.2, learned: []float64{0.2, 0.05, 0.25}, ended: end, wantTop: 47.5},
+		{name: "an odd one doesn't move the median", prior: 0.2, learned: []float64{0.2, 0.2, 0.05}, ended: end, wantTop: 47.5},
+		{name: "an odd first one doesn't replace the prior", prior: 0.2, learned: []float64{0.05, 0.2}, ended: end, wantTop: 47.5},
+		{name: "no prior: only what was learned", learned: []float64{0.25}, ended: end, wantTop: 50},
 		{name: "only the last OffsetWindow count", prior: 0.1, learned: []float64{0.05, 0.05, 0.05, 0.25, 0.25, 0.25, 0.25, 0.25}, ended: end, wantTop: 50},
 		{name: "water running: the probe reads true", prior: 0.2, running: true, ended: end, wantTop: 40},
 		{name: "halfway through the ramp", prior: 0.2, ended: at.Add(-4 * time.Minute), wantTop: 43.75},

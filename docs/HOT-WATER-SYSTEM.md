@@ -62,6 +62,16 @@ details in any public repo; the owner is strict about PII in committed files.
   below the water beneath it. So **at rest, probe 5 under-reads the top of the
   tank**, by an amount that depends on how long it has been since the last
   draw. Never treat probe 5's resting value as "the top of the tank".
+- _Update (Nov 2026):_ **washhouse corrects probe 5 at rest** (WIRE.md,
+  Tank). How low it reads is taken as a fraction, k, of the water's height
+  above the **cold feed** (**measured**: on 24 Nov the left read 8.5 °C low
+  at 62 °C and the right 6 at 46, both k ≈ 0.16–0.17; tanktemp's rested draws
+  over four days give 0.12–0.18). Two **guesses** in that: the probe really
+  loses heat towards the **room**, not the cold feed, so a tank at room
+  temperature still gets about 3 °C of correction (the room reading can be
+  missing, the cold feed never is); and the correction ramps in over an hour
+  after a draw (`ua_quiet`), while the probe itself falls in minutes, so for
+  most of that hour the corrected top reads low (erring safe).
 - **Accuracy:** the probes are uncalibrated (offset 0), so ±0.5 °C absolute.
   A probe reads 85 °C, or reports parasite power, for a few seconds after it
   is plugged in; that's normal. About 50 single read retries a day happen

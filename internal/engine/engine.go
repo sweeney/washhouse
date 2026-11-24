@@ -290,12 +290,14 @@ func (e *Engine) attributions(out []Event, rs []draw.Result) []Event {
 
 // drawStarts tells each tank water is flowing, and keeps the outlets'
 // resting readings if the draw followed a rest: no draw for the thermal
-// config's UAQuiet, counted from no earlier than the engine's start (what
-// came before is unknown).
+// config's UAQuiet, counted from the last draw's end, or before one from
+// the engine's start (what came before is unknown). The last draw's end
+// survives a reload (TakeOutlet); the start doesn't, so it counts only
+// when there is no draw to count from.
 func (e *Engine) drawStarts(d meter.Draw) {
-	since := e.started
-	if e.lastDrawEnd.After(since) {
-		since = e.lastDrawEnd
+	since := e.lastDrawEnd
+	if since.IsZero() {
+		since = e.started
 	}
 	rested := d.Start.Sub(since) >= e.cfg.Thermal.UAQuiet
 	for id, slot := range e.tanks {

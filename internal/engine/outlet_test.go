@@ -46,12 +46,14 @@ func topAfter(t *testing.T, e *Engine, d meter.Draw) (lt, rt float64) {
 }
 
 // A rested, flowing, unmasked draw teaches each tank its under-read (the
-// reading at rest just before, 55 and 41, below the peak, 63 and 47), so
-// the outlet then reads the peak; a reheat-masked draw, a one-litre one, or
-// one that didn't follow a rest teaches nothing, and the prior holds
-// (planConfig's 0.16 and 0.17: 55 + 0.16/0.84 × 45 and 41 + 0.17/0.83 × 31).
+// reading at rest just before, 55 and 41, below the peak, 63 and 47: 8/53
+// and 6/37 of the way to the 10 °C feed), which the median takes with the
+// prior (planConfig's 0.16 and 0.17); a reheat-masked draw, a one-litre
+// one, or one that didn't follow a rest teaches nothing, and the prior
+// holds.
 func TestOutletOffsetLearning(t *testing.T) {
-	priorL, priorR := 55+0.16/0.84*45, 41+0.17/0.83*31
+	priorL, priorR := withK(55, 0.16), withK(41, 0.17)
+	learnL, learnR := withK(55, (0.16+8.0/53)/2), withK(41, (0.17+6.0/37)/2)
 	cases := []struct {
 		name         string
 		litres       float64
@@ -59,7 +61,7 @@ func TestOutletOffsetLearning(t *testing.T) {
 		restless     bool
 		wantL, wantR float64
 	}{
-		{"rested, flowing, unmasked", 6, false, false, 63, 47},
+		{"rested, flowing, unmasked", 6, false, false, learnL, learnR},
 		{"masked by a reheat", 6, true, false, priorL, priorR},
 		{"one litre", 1, false, false, priorL, priorR},
 		{"no rest before it", 6, false, true, priorL, priorR},
@@ -109,10 +111,31 @@ func TestOutletTakenOverOnReload(t *testing.T) {
 	}
 	e := newEngine(t, planConfig())
 	e.TakeOutlet(old)
-	if l, r := topAfter(t, e, d); l != 63 || r != 47 {
-		t.Errorf("after a reload: tops %v / %v °C, want what the old engine learned (63 / 47)", l, r)
+	if l, r := topAfter(t, e, d); math.Abs(l-withK(55, (0.16+8.0/53)/2)) > 1e-9 || math.Abs(r-withK(41, (0.17+6.0/37)/2)) > 1e-9 {
+		t.Errorf("after a reload: tops %v / %v °C, want what the old engine learned", l, r)
 	}
 	if !e.lastDrawEnd.Equal(d.End) {
 		t.Errorf("last draw end %v, want %v", e.lastDrawEnd, d.End)
+	}
+}
+
+// withK is an outlet reading read corrected by under-read k (cold feed 10).
+func withK(read, k float64) float64 { return read + k/(1-k)*(read-10) }
+
+// After a reload, a draw is rested if it follows the last draw's end by
+// UAQuiet, though the new engine started since (tanktemp's re-review of
+// #12): the rest counts from the last draw's end when there is one.
+func TestRestCountsFromTheLastDrawAfterAReload(t *testing.T) {
+	old := newEngine(t, planConfig())
+	lowFeed(t, old, t0, rightLow)
+	old.lastDrawEnd = t0.Add(time.Minute)
+	e := newEngine(t, planConfig())
+	e.TakeOutlet(old)
+	lowFeed(t, e, t0.Add(old.cfg.Thermal.UAQuiet), rightLow) // the new engine starts now
+	start := t0.Add(time.Minute + e.cfg.Thermal.UAQuiet + time.Second)
+	d := meter.Draw{ID: "d1", Start: start, End: start.Add(time.Minute), Litres: 6}
+	e.drawStarts(d)
+	if e.outletRest[d.ID] == nil {
+		t.Error("a draw UAQuiet after the last draw's end, just after a reload, wasn't rested")
 	}
 }
