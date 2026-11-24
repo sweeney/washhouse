@@ -186,17 +186,17 @@ func Attribute(cfg Config, d meter.Draw, w Window) Attribution {
 			thermocline(cfg, s.before, &reasons)
 		}
 		if s.before != nil && s.share != nil {
-			ta.EarlyLostKWh = ptr(s.before.Estimate.KWh - s.share.Estimate.KWh)
+			ta.EarlyLostKWh = ptr(s.before.RawEstimate.KWh - s.share.RawEstimate.KWh)
 			ta.OutletPeakC = outletPeak(ss, d.Start, s.share.At)
 			ta.InletDropC = inletDrop(ss, s.before, s.share.At)
 			if ta.OutletPeakC != nil {
 				ta.PeakUsedC = ta.OutletPeakC
 			} else {
-				ta.PeakUsedC = ptr(s.before.Estimate.TopC)
+				ta.PeakUsedC = ptr(s.before.Estimate.TopC) // no outlet reading: nothing corrected
 				ta.OutletFromProfile = true
 			}
 			if s.bal != nil {
-				ta.SettledLostKWh = ptr(s.before.Estimate.KWh - s.bal.Estimate.KWh)
+				ta.SettledLostKWh = ptr(s.before.RawEstimate.KWh - s.bal.RawEstimate.KWh)
 			}
 		}
 		if ta.InletDropC != nil && (a.InletDropC == nil || *ta.InletDropC > *a.InletDropC) {

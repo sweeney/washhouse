@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"time"
@@ -89,6 +90,7 @@ func New(cfg Config) (*Engine, error) {
 		if err != nil {
 			return nil, err
 		}
+		m.SetRamp(cfg.Thermal.UAQuiet)
 		e.tanks[tc.DeviceID] = &tankSlot{model: m}
 		e.order = append(e.order, tc.DeviceID)
 	}
@@ -310,21 +312,58 @@ func (e *Engine) drawStarts(d meter.Draw) {
 	}
 }
 
-// learnOutlet sets each tank's outlet offset from a balanced draw that
-// followed a rest: its outlet peak during the draw less its reading at
-// rest just before, the same water flowing and still. Not from a draw a
-// reheat masked (the coil, not the pipe, moves the outlet then), nor from
-// a one-litre draw (no flow, and the outlet barely warms).
+// outletLearnLitres: a tank teaches its outlet under-read only from a draw it
+// gave at least this much of itself. Two litres is what a flow needs (the
+// meter's); a tank the other supplies sees too little through its own
+// outlet to bring the dome water past the probe (tanktemp's review of #12:
+// the cool right tank showed 1.1 and 1.5 °C).
+const outletLearnLitres = 2.0
+
+// learnOutlet teaches each tank its outlet under-read from a balanced draw
+// that followed a rest: how far its reading at rest just before the draw
+// sat below its peak during it (the same water, still and flowing), as a
+// fraction of the peak's height above the cold feed, if the tank itself
+// gave outletLearnLitres. A tank's litres are absent when its share is
+// withheld (a reheat masked the draw, or HW was unknown), so those teach
+// nothing either.
 func (e *Engine) learnOutlet(r draw.Result) {
 	rest := e.outletRest[r.Draw.ID]
 	delete(e.outletRest, r.Draw.ID)
-	if rest == nil || r.Attribution.MaskedByReheat || r.Draw.FlowLPerMin == nil {
+	if rest == nil || r.Attribution.MaskedByReheat {
 		return
 	}
 	for _, ta := range r.Attribution.Tanks {
 		pre, ok := rest[ta.DeviceID]
-		if slot := e.tanks[ta.DeviceID]; ok && slot != nil && ta.OutletPeakC != nil && *ta.OutletPeakC > pre {
-			slot.model.SetOutletOffset(*ta.OutletPeakC-pre, e.cfg.Thermal.UAQuiet)
+		slot := e.tanks[ta.DeviceID]
+		if ok && slot != nil && ta.OutletPeakC != nil && ta.Litres != nil && *ta.Litres >= outletLearnLitres {
+			peak, cold := *ta.OutletPeakC, e.est.ColdC()
+			if peak > pre && peak > cold {
+				slot.model.LearnOutletUnderread((peak - pre) / (peak - cold))
+			}
+		}
+	}
+}
+
+// TakeOutlet takes old's outlet state, for the tanks e has: what each
+// learned, whether a draw runs and when the last ended (so the correction's
+// ramp carries on), and the resting readings kept for a draw not yet
+// balanced. A reload rebuilds the engine; without this it would forget
+// what the tanks taught and jump the correction (tanktemp's review of #12).
+func (e *Engine) TakeOutlet(old *Engine) {
+	if old == nil {
+		return
+	}
+	e.lastDrawEnd = old.lastDrawEnd
+	for id, rest := range old.outletRest {
+		if e.outletRest == nil {
+			e.outletRest = map[string]map[string]float64{}
+		}
+		e.outletRest[id] = maps.Clone(rest)
+	}
+	for id, slot := range e.tanks {
+		if o := old.tanks[id]; o != nil {
+			slot.model.SetOutletUnderreads(o.model.OutletUnderreads())
+			slot.model.Flow(o.model.FlowState())
 		}
 	}
 }

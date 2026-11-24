@@ -172,7 +172,7 @@ release.
 | `sweep_at` | the tanktemp sweep the estimate comes from, `null` before the first. **Judge the estimate's freshness on this**, not on `timestamp` |
 | `state` | `heating`, `drawing`, `cooling` or `unknown` (below) |
 | `heat_source` | while `heating`: `hw` or `ch`, which programmer channel is on that the gain is put down to. Inferred from the gain observed with the channel on, never assumed from the channel alone (a CH-only call heated the right tank while its coil valve was dead, and heats neither since). `null` when not heating, or when the source can't be told |
-| `stored_kwh`, `mean_c`, `top_c`, `hot_l`, `usable_l40`, `usable_l40_low` | the estimate from the probe profile: heat stored above the cold feed, the mean and top temperature, litres at 40 °C or above, and this tank's usable litres of 40 °C mix (the drawable water runs to the top of the dome: the outlet has an internal pipe up to it). The hot-outlet probe reads low at rest, heat-sunk by its pipe, and true only while water flows; the profile carries it higher by an offset washhouse learns from a draw that follows an hour's rest (the outlet's peak during the draw less its reading just before), ramping in over the hour after each draw, none while water flows, and none until such a draw has been seen since washhouse started. `null` before a sweep, when its sweep can't be estimated (fewer than two good probes), and once it is older than a configured limit (2 min) |
+| `stored_kwh`, `mean_c`, `top_c`, `hot_l`, `usable_l40`, `usable_l40_low` | the estimate from the probe profile: heat stored above the cold feed, the mean and top temperature, litres at 40 °C or above, and this tank's usable litres of 40 °C mix (the drawable water runs to the top of the dome: the outlet has an internal pipe up to it). The hot-outlet probe reads low at rest, heat-sunk by its pipe, and true only while water flows, by a fraction of the water's height above the cold feed (about 0.16). The profile carries it that much higher: a configured prior per tank until washhouse learns its own, then the median of the last five learned, each from a draw that follows an hour's rest and that the tank gave two litres or more of itself (its reading just before the draw against its peak during it). None while water flows; after a draw it ramps in over the hour as the pipe cools. A reload keeps what was learned; a restart starts from the prior. `null` before a sweep, when its sweep can't be estimated (fewer than two good probes), and once it is older than a configured limit (2 min) |
 | `power_kw` | the smoothed rate of change of stored heat: positive heating, negative losing. `null` while unknown: at start until enough sweeps have come, and during a draw until about 17 min after the meter ends it (the inlet plume and the probes settle for 12 min, then the power needs fresh sweeps). The first value after a big draw can still carry some of that settling (−1.33 kW, 18 min after a 50 L shower, on a tank losing about 0.4 kW), so treat a value soon after a draw as indicative; the settle time is provisional |
 | `ua_w_per_k` | the tank's heat loss per kelvin against the boiler room, fitted online over quiet stretches; the configured prior until the fit has evidence. It is measured against the room, but most of the right tank's loss is its secondary loop shedding heat into the house's pipework, so it reads well above a bare cylinder's |
 | `probes_ok`, `probes_total` | probes the latest sweep's profile used, of those tanktemp reported. A suspect 85 °C reading is not used unless the config trusts suspects. `null` before a sweep |
@@ -476,9 +476,10 @@ or vanished.
 - **2026-11-24, v1, a change of value (not of shape):** the drawable water
   runs to the top of the dome, not the outlet fitting (the outlet has an
   internal pipe up to it; the owner), and the outlet probe's resting
-  under-read is corrected by a learned offset (Tank). Each tank's
-  `top_c`, `usable_l40` and `usable_l40_low` rise; `stored_kwh`,
-  `mean_c` and `hot_l` can too once an offset is learned.
+  under-read is corrected (Tank). Each tank's `top_c`, `stored_kwh`,
+  `mean_c`, `hot_l`, `usable_l40` and `usable_l40_low` rise. Draws and
+  their attribution are unchanged: it compares energy without the
+  correction.
 - **2026-11-24, v1, a change of value (not of shape):** the state's
   `usable_l40` and `usable_l40_low` are the tanks' own summed, no longer a
   draw simulated at a fixed outlet split. A 40 L run with one tank at

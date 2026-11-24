@@ -74,8 +74,8 @@ func planConfig() Config {
 		Estimate: estimate.Config{ColdC: 10, MinC: 40, MixC: 40, KWhPerLitreK: 4.186 / 3600,
 			LowFactor: 0.85, DrawFromMM: 281, DrawToMM: 1412},
 		Tanks: []tank.Config{
-			{DeviceID: left, Probes: probes(profile.RoleBulk)},
-			{DeviceID: right, Probes: probes(profile.RoleReturn)},
+			{DeviceID: left, Probes: probes(profile.RoleBulk), PriorOutletUnderread: 0.16},
+			{DeviceID: right, Probes: probes(profile.RoleReturn), PriorOutletUnderread: 0.17},
 		},
 		Thermal: thermal.Config{
 			PowerWindow:     10 * time.Minute,

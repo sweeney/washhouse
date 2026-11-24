@@ -26,6 +26,7 @@
     {
       "device_id": "hot_water_cylinder_left",
       "trust_suspect": false,
+      "prior_outlet_underread": 0.16,
       "prior_ua_w_per_k": 4,
       "prior_hours": 1,
       "outlet_split": 0.11,
@@ -40,6 +41,7 @@
     {
       "device_id": "hot_water_cylinder_right",
       "trust_suspect": false,
+      "prior_outlet_underread": 0.17,
       "prior_ua_w_per_k": 17,
       "prior_hours": 1,
       "outlet_split": 0.89,

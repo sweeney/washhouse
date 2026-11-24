@@ -111,6 +111,9 @@ func New(v *vessel.Vessel, c Config) (*Estimator, error) {
 	return &Estimator{v: v, c: c}, nil
 }
 
+// ColdC is the cold-feed temperature the estimator counts heat above.
+func (e *Estimator) ColdC() float64 { return e.c.ColdC }
+
 // Assess integrates the profile over the vessel's slices.
 //
 // The arithmetic follows avail.py term for term. The float64() conversions

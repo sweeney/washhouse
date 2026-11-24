@@ -299,6 +299,7 @@ func TestSkippedSweeps(t *testing.T) {
 	if _, err := e.TankState(uniform(left, t0, 50)); err != nil {
 		t.Fatal(err)
 	}
+	first := *e.State().Tanks[0].MeanC
 	un := uniform(left, t0.Add(time.Hour), 20)
 	un.ClockSynced = false
 	old := uniform(left, t0, 20)
@@ -308,7 +309,7 @@ func TestSkippedSweeps(t *testing.T) {
 		}
 	}
 	s := e.State()
-	if l := s.Tanks[0]; !l.At.Equal(t0) || math.Abs(*l.MeanC-50) > 1e-3 {
+	if l := s.Tanks[0]; !l.At.Equal(t0) || math.Abs(*l.MeanC-first) > 1e-9 {
 		t.Errorf("left %v at %v, want the first sweep kept", *l.MeanC, l.At)
 	}
 	if !s.At.Equal(t0) {

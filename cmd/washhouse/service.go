@@ -191,6 +191,7 @@ func (s *service) apply(d document) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	r.eng.TakeOutlet(s.eng)
 	ins := make([]admitted, 0, len(s.latest))
 	for _, a := range s.latest {
 		ins = append(ins, a)

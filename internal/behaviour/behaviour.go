@@ -104,12 +104,16 @@ type estimateFile struct {
 }
 
 type tankFile struct {
-	DeviceID     string      `json:"device_id"`
-	TrustSuspect bool        `json:"trust_suspect"`
-	PriorUAWPerK float64     `json:"prior_ua_w_per_k"`
-	PriorHours   float64     `json:"prior_hours"`
-	OutletSplit  float64     `json:"outlet_split"`
-	Probes       []probeFile `json:"probes"`
+	DeviceID     string  `json:"device_id"`
+	TrustSuspect bool    `json:"trust_suspect"`
+	PriorUAWPerK float64 `json:"prior_ua_w_per_k"`
+	PriorHours   float64 `json:"prior_hours"`
+	// PriorOutletUnderread: how low the outlet probe reads at rest, as a
+	// fraction of the water's height above the cold feed, until one is
+	// learned (package tank).
+	PriorOutletUnderread float64     `json:"prior_outlet_underread"`
+	OutletSplit          float64     `json:"outlet_split"`
+	Probes               []probeFile `json:"probes"`
 }
 
 type probeFile struct {
@@ -404,7 +408,7 @@ func (fc Config) Engine() (engine.Config, error) {
 		c.Thermal.PowerExclude = append(c.Thermal.PowerExclude, profile.Role(r))
 	}
 	for _, t := range fc.Tanks {
-		tc := tank.Config{DeviceID: t.DeviceID, TrustSuspect: t.TrustSuspect}
+		tc := tank.Config{DeviceID: t.DeviceID, TrustSuspect: t.TrustSuspect, PriorOutletUnderread: t.PriorOutletUnderread}
 		for _, p := range t.Probes {
 			tc.Probes = append(tc.Probes, tank.ProbeConfig{Position: p.Position, Role: profile.Role(p.Role), HeightMM: p.HeightMM})
 		}
