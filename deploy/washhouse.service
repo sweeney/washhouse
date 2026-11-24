@@ -10,7 +10,9 @@ Type=simple
 User=washhouse
 Group=washhouse
 
-ExecStart=/opt/washhouse/bin/washhouse -config /etc/washhouse/config.yaml
+# The current release: a build and the config it was checked with
+# (deploy/deploy.sh). The secrets the config names are in /etc/washhouse.
+ExecStart=/opt/washhouse/current/washhouse -config /opt/washhouse/current/config.yaml
 # SIGHUP fetches the behaviour namespace again (the local config needs a restart).
 ExecReload=/bin/kill -HUP $MAINPID
 WorkingDirectory=/var/lib/washhouse

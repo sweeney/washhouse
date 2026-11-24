@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Tests for deploy/bootstrap.sh. The host's side runs against a fake root
 # (WASHHOUSE_ROOT) with stubs for the commands that would change the
-# system (useradd, chown, systemctl, docker, visudo, runuser); the dev
-# machine's side runs with stubs for ssh and scp. No host, no root.
+# system (useradd, usermod, chown, systemctl, docker, visudo, runuser,
+# sudo); the dev machine's side runs with stubs for ssh and scp. No host,
+# no root.
 #
 # Usage: deploy/bootstrap_test.sh
 # shellcheck disable=SC2034 # S, RC and the like are read in expect's eval strings
@@ -18,14 +19,17 @@ stub() { printf '#!/usr/bin/env bash\n%s\n' "$2" >"$STUBS/$1"; chmod +x "$STUBS/
 # Every stub logs its call; FAKE_STATE holds what the "system" has.
 LOGIT='echo "$(basename "$0") $*" >>"$FAKE_STATE/log"'
 stub id "$LOGIT"'
-if [ "$1" = -u ] && [ $# -eq 1 ]; then echo "${FAKE_UID:-0}"; exit; fi
-[ -e "$FAKE_STATE/user" ] && echo 999'
+case "$1" in
+    -u) if [ $# -eq 1 ]; then echo "${FAKE_UID:-0}"; else [ -e "$FAKE_STATE/user" ] && echo 999; fi ;;
+    -nG) echo "$2 $(cat "$FAKE_STATE/groups" 2>/dev/null)" ;;
+esac'
 stub useradd "$LOGIT"'; touch "$FAKE_STATE/user"'
+stub usermod "$LOGIT"'; [ "$1 $2" = "-aG systemd-journal" ] && echo systemd-journal >>"$FAKE_STATE/groups"'
 stub chown "$LOGIT"
 stub stty ":"
-stub journalctl "$LOGIT"
 stub visudo "$LOGIT"'; grep -q NOPASSWD "${2:?}"'
-stub runuser "$LOGIT"'; echo "check: ok"; exit "${FAKE_CHECK_RC:-0}"'
+stub runuser "$LOGIT"'; while [ "$1" != -- ]; do shift; done; shift; "$@"'
+stub sudo "$LOGIT"'; [ "$1 $2" = "-n -l" ] && exit "${FAKE_SUDO_L_RC:-0}"; exit 1'
 stub systemctl "$LOGIT"'
 case "$1" in
     is-enabled) [ -e "$FAKE_STATE/enabled" ] ;;
@@ -35,6 +39,7 @@ esac'
 stub docker "$LOGIT"'
 case "$1 $4 $5" in
     "inspect "*) echo "${FAKE_INFLUX_RUNNING:-true}" ;;
+    "exec org list") exit "${FAKE_INFLUX_AUTH_RC:-0}" ;;
     "exec bucket list") [ -e "$FAKE_STATE/bucket" ] || { echo "Error: bucket not found" >&2; exit 1; }
         echo "[{\"id\": \"0a1b2c\", \"name\": \"washhouse\"}]" ;;
     "exec bucket create") touch "$FAKE_STATE/bucket"; echo "{\"id\": \"0a1b2c\"}" ;;
@@ -66,9 +71,9 @@ fresh() {
     UP="$WORK/up-$RANDOM"
     mkdir -p "$FAKE_STATE" "$WASHHOUSE_ROOT" "$UP"
     : >"$FAKE_STATE/log"
-    cp "$HERE/washhouse.service" "$WORK/config.yaml" "$UP/"
-    mv "$UP/config.yaml" "$UP/config.local.yaml"
-    unset FAKE_CHECK_RC FAKE_INFLUX_RUNNING FAKE_UID || true
+    cp "$HERE/washhouse.service" "$UP/"
+    cp "$WORK/config.yaml" "$UP/config.local.yaml"
+    unset FAKE_INFLUX_RUNNING FAKE_INFLUX_AUTH_RC FAKE_SUDO_L_RC FAKE_UID || true
 }
 # host [ARGS]: run the host's side, as root through sudo.
 host() {
@@ -78,8 +83,8 @@ host() {
     RC=$?
     set -e
 }
-# changed: the calls that change the system, in the last run.
-changed() { grep -E '^(useradd|chown|visudo|runuser) |^systemctl (enable|daemon-reload|restart)|^docker exec .*(create)' "$FAKE_STATE/log" || true; }
+# changed: the calls that change the system, in the run.
+changed() { grep -E '^(useradd|usermod|chown|visudo) |^systemctl (enable|daemon-reload|restart)|^docker exec .*(create)' "$FAKE_STATE/log" || true; }
 
 pass=0 fail=0
 ok() { pass=$((pass + 1)); }
@@ -90,11 +95,13 @@ expect() { if eval "$2"; then ok; else bad "$1"; fi; }
 fresh
 host --check
 expect "check: exit 0" '[ $RC -eq 0 ]'
-for want in "create the washhouse system user" "create /opt/washhouse/bin" "write the identity client secret to /etc/washhouse/client-secret" \
-    "create the Influx bucket washhouse in home" "mint a token that can only write to washhouse" "install /etc/washhouse/config.yaml" \
+for want in "create the washhouse system user" "create /opt/washhouse, /var/lib/washhouse and /etc/washhouse" \
+    "add deployer to systemd-journal" "write the identity client secret to /etc/washhouse/client-secret" \
+    "create the Influx bucket washhouse in home" "mint a token that can only write to washhouse" \
     "install the unit" "enable washhouse" "install the deploy rule for deployer" "--check: nothing changed"; do
     expect "check lists: $want" '[[ "$OUT" == *"$want"* ]]'
 done
+expect "check: the config isn't installed" '[[ "$OUT" != *"config.yaml"* ]]'
 expect "check changes nothing" '[ -z "$(changed)" ] && [ -z "$(find "$WASHHOUSE_ROOT" -mindepth 1)" ]'
 
 # --- --yes sets it all up.
@@ -103,52 +110,48 @@ host --yes
 expect "setup: exit 0" '[ $RC -eq 0 ]'
 R=$WASHHOUSE_ROOT
 expect "setup: the user" '[ -e "$FAKE_STATE/user" ]'
-expect "setup: the directories" '[ -d "$R/opt/washhouse/bin" ] && [ -d "$R/var/lib/washhouse" ] && [ -d "$R/etc/washhouse" ]'
-expect "setup: bin owned by the deploy user" 'grep -q "^chown deployer:deployer $R/opt/washhouse/bin$" "$FAKE_STATE/log"'
+expect "setup: the directories" '[ -d "$R/opt/washhouse" ] && [ -d "$R/var/lib/washhouse" ] && [ -d "$R/etc/washhouse" ]'
+expect "setup: /opt/washhouse is the deploy user's" 'grep -q "^chown deployer:deployer $R/opt/washhouse$" "$FAKE_STATE/log"'
+expect "setup: the journal group" 'grep -q "^usermod -aG systemd-journal deployer$" "$FAKE_STATE/log"'
 expect "setup: the secret" '[ "$(cat "$R/etc/washhouse/client-secret")" = s3cret ]'
 expect "setup: the secret is the service's, 640" 'grep -q "^chown root:washhouse $R/etc/washhouse/client-secret$" "$FAKE_STATE/log" && [ "$(stat -c %a "$R/etc/washhouse/client-secret" 2>/dev/null || stat -f %Lp "$R/etc/washhouse/client-secret")" = 640 ]'
 expect "setup: the bucket" 'grep -q "^docker exec influxdb influx bucket create --org home --name washhouse" "$FAKE_STATE/log"'
-expect "setup: a write-only token for that bucket" 'grep -q "^docker exec influxdb influx auth create --org home --write-bucket 0a1b2c " "$FAKE_STATE/log" && ! grep -q -- "--read-bucket\|--all-access" "$FAKE_STATE/log"'
+expect "setup: a write-only token for that bucket" 'grep -q "^docker exec influxdb influx auth create --org home --write-bucket 0a1b2c " "$FAKE_STATE/log" && ! grep -q -- "--read-bucket\|--all-access\|--write-buckets" "$FAKE_STATE/log"'
 expect "setup: the token" '[ "$(cat "$R/etc/washhouse/influx-token")" = tok-123 ]'
-expect "setup: the config" 'cmp -s "$UP/config.local.yaml" "$R/etc/washhouse/config.yaml"'
+expect "setup: no config installed" '[ ! -e "$R/etc/washhouse/config.yaml" ] && [ -z "$(find "$R/opt" -name config.yaml)" ]'
 expect "setup: the unit" 'cmp -s "$HERE/washhouse.service" "$R/etc/systemd/system/washhouse.service" && grep -q "^systemctl daemon-reload" "$FAKE_STATE/log"'
+expect "setup: the unit runs the current release" 'grep -q "^ExecStart=/opt/washhouse/current/washhouse -config /opt/washhouse/current/config.yaml$" "$R/etc/systemd/system/washhouse.service"'
 expect "setup: enabled, not started" 'grep -q "^systemctl enable washhouse" "$FAKE_STATE/log" && ! grep -q "^systemctl \(start\|restart\)" "$FAKE_STATE/log"'
 S="$R/etc/sudoers.d/washhouse-deploy"
 expect "setup: sudoers checked by visudo" 'grep -q "^visudo -cf " "$FAKE_STATE/log"'
-expect "setup: sudoers restart and journal only" 'grep -q "^deployer ALL=(root) NOPASSWD: $STUBS/systemctl restart washhouse, $STUBS/journalctl -u washhouse \*$" "$S"'
-expect "setup: sudoers -check-config as washhouse" 'grep -qF "deployer ALL=(washhouse) NOPASSWD: /opt/washhouse/bin/washhouse-* -config /etc/washhouse/config.yaml -check-config" "$S"'
-expect "setup: says to deploy" '[[ "$OUT" == *"deploy/deploy.sh installs one"* ]]'
+expect "setup: sudoers, the restart" 'grep -qxF "deployer ALL=(root) NOPASSWD: $STUBS/systemctl restart washhouse" "$S"'
+expect "setup: sudoers, the staged check" 'grep -qxF "deployer ALL=(washhouse) NOPASSWD: /opt/washhouse/next/washhouse -config /opt/washhouse/next/config.yaml -check-config" "$S"'
+expect "setup: sudoers, two rules, no wildcard, no journal" '[ "$(grep -c NOPASSWD "$S")" = 2 ] && ! grep -v "^#" "$S" | grep -q "[*?]" && ! grep -q journalctl "$S"'
+expect "setup: sudo grants it, checked" 'grep -q "^sudo -n -l $STUBS/systemctl restart washhouse$" "$FAKE_STATE/log" && [[ "$OUT" == *"sudo grants deployer the restart"* ]]'
+expect "setup: says to deploy" '[[ "$OUT" == *"deploy/deploy.sh installs one, with its config"* ]]'
 
 # --- A second run changes nothing.
 : >"$FAKE_STATE/log"
 host --yes
 expect "again: nothing" '[ $RC -eq 0 ] && [[ "$OUT" == *"nothing: washhouse is set up"* ]] && [ -z "$(changed)" ]'
 
-# --- A changed config, with a build installed and washhouse running: the
-# build checks it first, then it is installed and washhouse restarted.
-mkdir -p "$R/opt/washhouse/bin"; printf '#!/bin/sh\n' >"$R/opt/washhouse/bin/washhouse"; chmod +x "$R/opt/washhouse/bin/washhouse"
+# --- A changed unit, washhouse running: diffed, then installed and
+# washhouse restarted; asked, and answered no first.
 touch "$FAKE_STATE/active"
-sed -i.bak 's|base_topic: test/water/hot|base_topic: water/hot|' "$UP/config.local.yaml"
+printf '# a change\n' >>"$UP/washhouse.service"
 : >"$FAKE_STATE/log"
 host --check
-expect "changed check: the diff" '[[ "$OUT" == *"-  base_topic: test/water/hot"* ]] && [[ "$OUT" == *"+  base_topic: water/hot"* ]]'
-expect "changed check: the restart" '[[ "$OUT" == *"restart washhouse, so it runs the new config"* ]]'
-expect "changed check: the build checks it" 'grep -q "^runuser -u washhouse -- $R/opt/washhouse/bin/washhouse -config .* -check-config$" "$FAKE_STATE/log"'
-expect "changed check: nothing else" '[ -z "$(changed | grep -v ^runuser)" ] && grep -q "base_topic: test/water/hot" "$R/etc/washhouse/config.yaml"'
-
-FAKE_CHECK_RC=1 host --yes
-expect "refused: exit 1" '[ $RC -eq 1 ] && [[ "$OUT" == *"the installed build refuses the new config; nothing changed"* ]]'
-expect "refused: the config kept" 'grep -q "base_topic: test/water/hot" "$R/etc/washhouse/config.yaml"'
-expect "refused: no restart" '! grep -q "^systemctl restart" "$FAKE_STATE/log"'
-
-# Asked, and answered no, then yes.
+expect "unit check: the diff and the restart" '[[ "$OUT" == *"+# a change"* ]] && [[ "$OUT" == *"restart washhouse, so it runs the new unit"* ]] && [ -z "$(changed)" ]'
 echo n >"$WORK/no"; echo y >"$WORK/yes"
 STDIN="$WORK/no" host
-expect "no: nothing changed" '[ $RC -eq 1 ] && grep -q "base_topic: test/water/hot" "$R/etc/washhouse/config.yaml"'
-: >"$FAKE_STATE/log"
+expect "unit no: nothing changed" '[ $RC -eq 1 ] && [[ "$OUT" == *"nothing changed"* ]] && [ -z "$(changed)" ]'
 STDIN="$WORK/yes" host
-expect "yes: installed" '[ $RC -eq 0 ] && cmp -s "$UP/config.local.yaml" "$R/etc/washhouse/config.yaml"'
-expect "yes: restarted" 'grep -q "^systemctl restart washhouse" "$FAKE_STATE/log"'
+expect "unit yes: installed, restarted" '[ $RC -eq 0 ] && cmp -s "$UP/washhouse.service" "$R/etc/systemd/system/washhouse.service" && grep -q "^systemctl restart washhouse" "$FAKE_STATE/log"'
+
+# --- sudo doesn't grant the rule (the host's policy overrides it).
+fresh
+FAKE_SUDO_L_RC=1 host --yes
+expect "sudo -l refuses: exit 1" '[ $RC -eq 1 ] && [[ "$OUT" == *"sudo doesn'"'"'t grant deployer"* ]]'
 
 # --- Refusals before anything changes.
 fresh
@@ -158,9 +161,11 @@ SUDO_AS="" host --yes
 expect "not through sudo" '[ $RC -eq 1 ] && [[ "$OUT" == *"run through sudo"* ]] && [ -z "$(changed)" ]'
 FAKE_INFLUX_RUNNING=false host --yes
 expect "influx down" '[ $RC -eq 1 ] && [[ "$OUT" == *"the influxdb container isn'"'"'t running"* ]] && [ -z "$(changed)" ]'
+FAKE_INFLUX_AUTH_RC=1 host --yes
+expect "influx CLI not an operator" '[ $RC -eq 1 ] && [[ "$OUT" == *"can'"'"'t see the org home"* ]] && [ -z "$(changed)" ]'
 sed -i.bak '/client_secret_file/d' "$UP/config.local.yaml"
 host --yes
-expect "no secret file in the config" '[ $RC -eq 1 ] && [[ "$OUT" == *"no identity.client_secret_file"* ]]'
+expect "no secret file in the config" '[ $RC -eq 1 ] && [[ "$OUT" == *"no identity.client_secret_file"* ]] && [ -z "$(changed)" ]'
 
 # --- No secret given: the steps before it are done, and it says to rerun.
 fresh
@@ -176,8 +181,7 @@ LOCAL="$WORK/local/deploy"
 mkdir -p "$LOCAL"
 cp "$HERE/bootstrap.sh" "$HERE/washhouse.service" "$LOCAL/"
 stub ssh "$LOGIT"'
-case "$*" in *mktemp*) echo /tmp/washhouse-bootstrap.abc ;; esac
-exit "${FAKE_SSH_RC:-0}"'
+case "$*" in *mktemp*) echo /tmp/washhouse-bootstrap.abc ;; esac'
 stub scp "$LOGIT"
 local_run() { set +e; OUT=$(PATH="$STUBS:$PATH" bash "$LOCAL/bootstrap.sh" "$@" 2>&1 </dev/null); RC=$?; set -e; }
 fresh

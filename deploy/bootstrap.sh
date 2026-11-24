@@ -1,29 +1,32 @@
 #!/usr/bin/env bash
 #
-# Sets washhouse up on its host, the first time and whenever the config or
-# the unit changes. Run it from the dev machine:
+# Sets washhouse's host up: the first time, and whenever the unit or the
+# deploy rule changes. Run it from the dev machine:
 #
 #   deploy/bootstrap.sh --check   # what it would change; changes nothing
 #   deploy/bootstrap.sh           # change it, after one prompt
 #   deploy/bootstrap.sh --yes     # without the prompt
 #
-# The host is the first line of deploy/host, and the config is
-# deploy/config.local.yaml (both gitignored). The script copies itself, the
-# unit and the config to a temporary directory on the host and runs there
-# as root (sudo asks for your password). On the host it:
-#   - creates the washhouse user and its directories;
+# The host is the first line of deploy/host (gitignored). The script copies
+# itself, the unit and deploy/config.local.yaml (gitignored; read for the
+# secret's path and the Influx section, not installed: deploy.sh carries
+# the config with each build) to a temporary directory on the host, and
+# runs there as root (sudo asks for your password). On the host it:
+#   - creates the washhouse user, /opt/washhouse (the deploy user's: the
+#     builds and their configs), /var/lib/washhouse and /etc/washhouse
+#     (the secrets);
+#   - puts the deploy user in systemd-journal, so deploy.sh reads the
+#     journal without sudo;
 #   - writes the identity client secret to identity.client_secret_file,
 #     if it isn't there (asked for, hidden, or WASHHOUSE_CLIENT_SECRET);
 #   - creates influx.bucket in the influxdb container and mints a token
 #     that can only write to it, into influx.token_file, if not there;
-#   - installs the config, showing the diff. When a build is installed,
-#     that build checks the new config first, and a refused config changes
-#     nothing;
 #   - installs and enables the unit, but doesn't start it: deploy.sh does,
-#     with a binary;
-#   - installs the deploy user's sudoers rule: restarting washhouse,
-#     reading its journal, and running -check-config as washhouse;
-#   - restarts washhouse, if it is running and its config or unit changed.
+#     with a build;
+#   - installs the deploy user's sudoers rule, two commands without
+#     wildcards: restarting washhouse, and the staged build's
+#     -check-config as washhouse. It checks that sudo grants the restart;
+#   - restarts washhouse, if it is running and its unit changed.
 # A second run changes nothing.
 #
 # Tests: deploy/bootstrap_test.sh.
@@ -72,7 +75,7 @@ fi
 # ---------------------------------------------------------------------------
 # On the host, as root. WASHHOUSE_ROOT prefixes every path, for the tests.
 trap 'echo "bootstrap: failed at line $LINENO: $BASH_COMMAND" >&2' ERR
-PATH="$PATH:/usr/sbin:/sbin" # useradd, visudo, runuser, whatever sudo's path
+PATH="$PATH:/usr/sbin:/sbin" # useradd, usermod, visudo, runuser, whatever sudo's path
 R="${WASHHOUSE_ROOT:-}"
 [ "$(id -u)" -eq 0 ] || die "run as root (deploy/bootstrap.sh does, through sudo)"
 DEPLOY_USER="${SUDO_USER:-}"
@@ -81,7 +84,7 @@ CONFIG="$ON_HOST/config.local.yaml"
 UNIT="$ON_HOST/$SERVICE.service"
 [ -s "$CONFIG" ] || die "no config at $CONFIG"
 [ -s "$UNIT" ] || die "no unit at $UNIT"
-for c in systemctl journalctl useradd visudo runuser; do
+for c in systemctl useradd usermod visudo runuser sudo; do
     command -v "$c" >/dev/null || die "$c is missing"
 done
 
@@ -99,60 +102,59 @@ SECRET_FILE=$(yaml_get identity client_secret_file)
 INFLUX_ORG=$(yaml_get influx org)
 INFLUX_BUCKET=$(yaml_get influx bucket)
 TOKEN_FILE=$(yaml_get influx token_file)
+influx() { docker exec "$INFLUX_CONTAINER" influx "$@"; }
 if [ -n "$INFLUX_BUCKET$TOKEN_FILE" ]; then
     [ -n "$INFLUX_ORG" ] && [ -n "$INFLUX_BUCKET" ] && [ -n "$TOKEN_FILE" ] ||
         die "the config's influx section needs org, bucket and token_file"
     command -v docker >/dev/null || die "docker is missing (Influx runs in the $INFLUX_CONTAINER container)"
     [ "$(docker inspect -f '{{.State.Running}}' "$INFLUX_CONTAINER" 2>/dev/null)" = true ] ||
         die "the $INFLUX_CONTAINER container isn't running"
+    # The CLI in the container must act as an operator of the org: it
+    # creates the bucket and mints the token.
+    influx org list --name "$INFLUX_ORG" --json >/dev/null 2>&1 ||
+        die "the influx CLI in $INFLUX_CONTAINER can't see the org $INFLUX_ORG (is its operator config there?)"
 fi
 
-ETC="$R/etc/$SERVICE"
-BIN_DIR="$R/opt/$SERVICE/bin"
+APP="$R/opt/$SERVICE"
 STATE_DIR="$R/var/lib/$SERVICE"
+ETC="$R/etc/$SERVICE"
 UNIT_FILE="$R/etc/systemd/system/$SERVICE.service"
 SUDOERS_FILE="$R/etc/sudoers.d/$SERVICE-deploy"
 SYSTEMCTL=$(command -v systemctl)
-JOURNALCTL=$(command -v journalctl)
+STAGED=/opt/$SERVICE/next
 
+# The rule: exact commands, no wildcards (a wildcard in a sudoers rule's
+# arguments matches anything).
 sudoers() {
     cat <<EOF
-# washhouse's deploy (deploy/deploy.sh): restart it, read its journal, and
-# check a new build's config as washhouse before switching to it.
-$DEPLOY_USER ALL=(root) NOPASSWD: $SYSTEMCTL restart $SERVICE, $JOURNALCTL -u $SERVICE *
-$DEPLOY_USER ALL=($SERVICE) NOPASSWD: /opt/$SERVICE/bin/$SERVICE-* -config /etc/$SERVICE/config.yaml -check-config
+# washhouse's deploy (deploy/deploy.sh): restart it, and have a staged
+# build check its config as washhouse before the switch.
+$DEPLOY_USER ALL=(root) NOPASSWD: $SYSTEMCTL restart $SERVICE
+$DEPLOY_USER ALL=($SERVICE) NOPASSWD: $STAGED/$SERVICE -config $STAGED/config.yaml -check-config
 EOF
 }
 
 bucket_id() {
-    docker exec "$INFLUX_CONTAINER" influx bucket list --org "$INFLUX_ORG" --name "$INFLUX_BUCKET" --json 2>/dev/null |
+    influx bucket list --org "$INFLUX_ORG" --name "$INFLUX_BUCKET" --json 2>/dev/null |
         sed -nE 's/.*"id": *"([a-f0-9]+)".*/\1/p' | head -n 1 || true
 }
 
 # ---------------------------------------------------------------------------
-# The plan: each step that would change something, and why.
+# The plan: each step that would change something.
 PLAN=()
 plan() { PLAN+=("$1"); echo "  - $2"; }
 
 echo "=== What would change ==="
 id -u "$SERVICE" >/dev/null 2>&1 || plan user "create the $SERVICE system user"
-for d in "$BIN_DIR" "$STATE_DIR" "$ETC"; do
-    if [ ! -d "$d" ]; then plan dirs "create /opt/$SERVICE/bin, /var/lib/$SERVICE and /etc/$SERVICE"; break; fi
+for d in "$APP" "$STATE_DIR" "$ETC"; do
+    if [ ! -d "$d" ]; then plan dirs "create /opt/$SERVICE, /var/lib/$SERVICE and /etc/$SERVICE"; break; fi
 done
+id -nG "$DEPLOY_USER" | tr ' ' '\n' | grep -qx systemd-journal ||
+    plan journal "add $DEPLOY_USER to systemd-journal, to read washhouse's journal"
 [ -s "$R$SECRET_FILE" ] || plan secret "write the identity client secret to $SECRET_FILE"
 if [ -n "$INFLUX_BUCKET" ]; then
     [ -n "$(bucket_id)" ] || plan bucket "create the Influx bucket $INFLUX_BUCKET in $INFLUX_ORG"
     [ -s "$R$TOKEN_FILE" ] || plan token "mint a token that can only write to $INFLUX_BUCKET, into $TOKEN_FILE"
-fi
-CONFIG_CHANGED=""
-if ! cmp -s "$CONFIG" "$ETC/config.yaml"; then
-    CONFIG_CHANGED=1
-    if [ -f "$ETC/config.yaml" ]; then
-        plan config "replace /etc/$SERVICE/config.yaml:"
-        diff -u "$ETC/config.yaml" "$CONFIG" | tail -n +3 | sed 's/^/      /' || true
-    else
-        plan config "install /etc/$SERVICE/config.yaml"
-    fi
 fi
 UNIT_CHANGED=""
 if ! cmp -s "$UNIT" "$UNIT_FILE"; then
@@ -166,44 +168,21 @@ if ! cmp -s "$UNIT" "$UNIT_FILE"; then
 fi
 systemctl is-enabled --quiet "$SERVICE" 2>/dev/null || plan enable "enable $SERVICE (deploy.sh starts it)"
 sudoers | cmp -s - "$SUDOERS_FILE" || plan sudoers "install the deploy rule for $DEPLOY_USER in /etc/sudoers.d/$SERVICE-deploy"
-RUNNING=""
-if systemctl is-active --quiet "$SERVICE" 2>/dev/null; then
-    RUNNING=1
-    [ -z "$CONFIG_CHANGED$UNIT_CHANGED" ] || plan restart "restart $SERVICE, so it runs the new config and unit"
+if [ -n "$UNIT_CHANGED" ] && systemctl is-active --quiet "$SERVICE" 2>/dev/null; then
+    plan restart "restart $SERVICE, so it runs the new unit"
 fi
 
 if [ ${#PLAN[@]} -eq 0 ]; then
     echo "  nothing: $SERVICE is set up"
     exit 0
 fi
-
-# The installed build checks a changed config before anything changes,
-# as washhouse, with the secrets it would run with.
-if [ -n "$CONFIG_CHANGED" ] && [ -x "$BIN_DIR/$SERVICE" ]; then
-    if [ -s "$R$SECRET_FILE" ] && { [ -z "$INFLUX_BUCKET" ] || [ -s "$R$TOKEN_FILE" ]; }; then
-        echo "=== The installed build checks the new config ==="
-        tmp=$(mktemp "${TMPDIR:-/tmp}/$SERVICE-config.XXXXXX")
-        cp "$CONFIG" "$tmp"
-        chmod 644 "$tmp"
-        if ! out=$(runuser -u "$SERVICE" -- "$BIN_DIR/$SERVICE" -config "$tmp" -check-config 2>&1); then
-            rm -f "$tmp"
-            printf '%s\n' "$out" | sed 's/^/  /'
-            die "the installed build refuses the new config; nothing changed"
-        fi
-        rm -f "$tmp"
-        printf '%s\n' "$out" | sed "s|$tmp|the new config|; s/^/  /"
-    else
-        echo "  (the installed build checks the config once its secrets are in place: run this again)"
-    fi
-fi
-
 if [ -n "$CHECK" ]; then
     echo "--check: nothing changed"
     exit 0
 fi
 if [ -z "$YES" ]; then
     printf 'Make these changes? [y/N] '
-    read -r answer
+    read -r answer || true
     case "$answer" in y | Y | yes) ;; *) die "nothing changed" ;; esac
 fi
 
@@ -217,11 +196,15 @@ if has user; then
     echo "  created the $SERVICE user"
 fi
 if has dirs; then
-    mkdir -p "$BIN_DIR" "$STATE_DIR" "$ETC"
-    chown "$DEPLOY_USER:$DEPLOY_USER" "$BIN_DIR"
+    mkdir -p "$APP" "$STATE_DIR" "$ETC"
+    chown "$DEPLOY_USER:$DEPLOY_USER" "$APP"; chmod 755 "$APP"
     chown "$SERVICE:$SERVICE" "$STATE_DIR"; chmod 700 "$STATE_DIR"
     chown "root:$SERVICE" "$ETC"; chmod 750 "$ETC"
     echo "  created the directories"
+fi
+if has journal; then
+    usermod -aG systemd-journal "$DEPLOY_USER"
+    echo "  added $DEPLOY_USER to systemd-journal (from their next login)"
 fi
 if has secret; then
     secret="${WASHHOUSE_CLIENT_SECRET:-}"
@@ -238,25 +221,19 @@ if has secret; then
     echo "  wrote $SECRET_FILE"
 fi
 if has bucket; then
-    docker exec "$INFLUX_CONTAINER" influx bucket create --org "$INFLUX_ORG" --name "$INFLUX_BUCKET" --json >/dev/null
+    influx bucket create --org "$INFLUX_ORG" --name "$INFLUX_BUCKET" --json >/dev/null
     [ -n "$(bucket_id)" ] || die "created the bucket $INFLUX_BUCKET, but can't find it"
     echo "  created the bucket $INFLUX_BUCKET"
 fi
 if has token; then
     bid=$(bucket_id)
     [ -n "$bid" ] || die "no bucket $INFLUX_BUCKET in $INFLUX_ORG"
-    tok=$(docker exec "$INFLUX_CONTAINER" influx auth create --org "$INFLUX_ORG" --write-bucket "$bid" \
+    tok=$(influx auth create --org "$INFLUX_ORG" --write-bucket "$bid" \
         --description "$SERVICE: write $INFLUX_BUCKET" --json | sed -nE 's/.*"token": *"([^"]+)".*/\1/p' | head -n 1)
     [ -n "$tok" ] || die "minting the Influx token failed"
     (umask 077; mkdir -p "$(dirname "$R$TOKEN_FILE")"; printf '%s\n' "$tok" >"$R$TOKEN_FILE")
     secure "$R$TOKEN_FILE"
     echo "  minted a write-only token for $INFLUX_BUCKET into $TOKEN_FILE"
-fi
-if has config; then
-    cp "$CONFIG" "$ETC/config.yaml.new"
-    secure "$ETC/config.yaml.new"
-    mv "$ETC/config.yaml.new" "$ETC/config.yaml"
-    echo "  installed /etc/$SERVICE/config.yaml"
 fi
 if has unit; then
     mkdir -p "$(dirname "$UNIT_FILE")"
@@ -277,6 +254,11 @@ if has sudoers; then
     chmod 440 "$tmp"
     mv "$tmp" "$SUDOERS_FILE"
     echo "  installed /etc/sudoers.d/$SERVICE-deploy"
+    # What the stubs can't show: that sudo, with the host's whole policy,
+    # grants the deploy user the restart without a password.
+    runuser -u "$DEPLOY_USER" -- sudo -n -l "$SYSTEMCTL" restart "$SERVICE" >/dev/null ||
+        die "sudo doesn't grant $DEPLOY_USER '$SYSTEMCTL restart $SERVICE' without a password; see /etc/sudoers.d/$SERVICE-deploy"
+    echo "  sudo grants $DEPLOY_USER the restart"
 fi
 if has restart; then
     systemctl restart "$SERVICE"
@@ -284,6 +266,6 @@ if has restart; then
 fi
 
 echo "=== Done ==="
-if [ -z "$RUNNING" ] && [ ! -x "$BIN_DIR/$SERVICE" ]; then
-    echo "  No build is installed yet: deploy/deploy.sh installs one and starts it."
+if [ ! -e "$APP/current" ]; then
+    echo "  No build is installed yet: deploy/deploy.sh installs one, with its config, and starts it."
 fi

@@ -92,8 +92,8 @@ To change the behaviour, check the new document with the installed build
 first, write it to the namespace, then send SIGHUP:
 
 ```
-washhouse -check-behaviour new-behaviour.json
-kill -HUP "$(pidof washhouse)"   # the unit's reload, once phase 6 has one
+/opt/washhouse/current/washhouse -check-behaviour new-behaviour.json
+sudo systemctl reload washhouse   # the unit's reload is SIGHUP
 ```
 
 On SIGHUP, washhouse fetches the namespace again. A fetch that fails, or a
@@ -170,24 +170,35 @@ deploy/deploy.sh              # deploy HEAD
 deploy/deploy.sh --rollback   # back to the build before
 ```
 
-`bootstrap.sh` copies itself, the unit and the config to the host and
-runs there as root. It creates the `washhouse` user and directories,
-writes the identity client secret (asked for, hidden), creates the Influx
-bucket and a token that can only write to it, installs the config
-(showing the diff, and checked by the installed build first, if there is
-one) and the unit, and a sudoers rule that lets the deploy user restart
-washhouse, read its journal and run `-check-config` as `washhouse`,
-nothing more. It doesn't start washhouse. Rerun it to change the config;
-a second run changes nothing.
+A release is a build and its config together: `deploy.sh` carries
+`deploy/config.local.yaml` with each build to
+`/opt/washhouse/releases/<time>-<commit>/`, and `/opt/washhouse/current`
+links to the one that runs. So a config change is deployed like a code
+change, the build that checks a config is the build that runs it, and a
+rollback takes both back. The secrets the config names stay in
+`/etc/washhouse`.
+
+`bootstrap.sh` copies itself, the unit and the config (read for the
+secret's path and the Influx section, not installed) to the host and runs
+there as root. It creates the `washhouse` user and directories, adds the
+deploy user to `systemd-journal`, writes the identity client secret
+(asked for, hidden), creates the Influx bucket and a token that can only
+write to it, installs the unit, and installs a sudoers rule of two exact
+commands with no wildcards: restarting washhouse, and the staged build's
+`-check-config` as `washhouse`. It then checks that sudo grants the
+restart. It doesn't start washhouse, and a second run changes nothing.
 
 `deploy.sh` deploys HEAD only when it is committed and on `origin/main`,
-so the hash on `/healthz` is settled. The new build is uploaded beside the
-running one and checks the installed config as `washhouse` (the config,
-the behaviour namespace, the Influx token) before anything is switched. A
-refused config leaves the running build as it was. Once switched,
-washhouse must be active, and both the host's `/healthz` and the public
-URL's (`http.public_url`) must show the new commit. The last three builds
-are kept.
+so the hash on `/healthz` is settled. It stages the build and the config
+in `/opt/washhouse/next`, shows how the config differs from the running
+release's, and has the new build check the new config there as
+`washhouse` (the config, the behaviour namespace, the Influx token)
+before anything is switched. A refused one leaves the running release as
+it was. The switch renames a new link over `current`. Then washhouse must
+be active within 45 s (past its own 30 s wait for the namespace), and the
+host's `/healthz` and the public URL's (`http.public_url`) must both show
+the new commit. Three releases are kept, and each `--rollback` steps one
+further back.
 
 Before the first deploy, washhouse needs an identity client (client
 credentials), the `washhouse` namespace holding the behaviour document

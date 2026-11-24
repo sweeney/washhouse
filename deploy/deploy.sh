@@ -1,36 +1,45 @@
 #!/usr/bin/env bash
 #
-# Builds washhouse at HEAD and deploys it to its host:
+# Builds washhouse at HEAD and deploys it, with its config, to its host:
 #
-#   deploy/deploy.sh --check      # build, and have the new build check the
-#                                 # host's config; switches nothing
+#   deploy/deploy.sh --check      # build, stage, and have the new build
+#                                 # check the new config; switches nothing
 #   deploy/deploy.sh              # deploy, after one prompt
 #   deploy/deploy.sh --yes        # without the prompt
-#   deploy/deploy.sh --rollback   # back to the previous build, after a prompt
+#   deploy/deploy.sh --rollback   # back one release, after a prompt
 #
-# The host is the first line of deploy/host, or DEPLOY_HOST. The port and
-# the public URL come from deploy/config.local.yaml, the config
-# deploy/bootstrap.sh installed (both files gitignored); run bootstrap.sh
-# first.
+# The host is the first line of deploy/host, or DEPLOY_HOST; the config is
+# deploy/config.local.yaml (both gitignored). Run deploy/bootstrap.sh
+# first: it sets up the user, the secrets, the unit and the sudo rule.
+#
+# A release is a build and its config, together: /opt/washhouse/releases/
+# <time>-<commit>/{washhouse,config.yaml}, and /opt/washhouse/current links
+# to the one that runs. A config change is deployed like a code change, so
+# the build that checks a config is always the build that runs it, and a
+# rollback takes both back.
 #
 # The rollout order is enforced: HEAD must be committed and on origin/main,
 # so its hash (stamped into the build, and shown on /healthz) is settled.
-# The new build is uploaded beside the running one, and checks the
-# installed config as washhouse (-check-config: the config, the behaviour
-# namespace, the Influx token) before anything is switched. A refused
-# config leaves the running build as it was. --check uploads the build
-# only for that check, then removes it.
+# The release is staged in /opt/washhouse/next, and the new build checks
+# the new config there as washhouse (-check-config: the config, the
+# behaviour namespace, the Influx token) before anything is switched. A
+# refused one leaves the running release as it was. --check stops there,
+# and removes what it staged.
 #
-# After the switch, washhouse must be active, its /healthz on the host
-# must show the new commit, and so must the public URL. The last three
-# builds are kept for --rollback.
+# After the switch, washhouse must be active, and its /healthz on the host
+# and at the public URL must show the new commit. Three releases are kept.
 #
 # Tests: deploy/deploy_test.sh.
 set -euo pipefail
 
 SERVICE=washhouse
-DEPLOY_DIR=/opt/$SERVICE/bin
+APP=/opt/$SERVICE
+NEXT=$APP/next
+RELEASES=$APP/releases
 KEEP=3
+# Longer than washhouse's own wait for its behaviour namespace (bootWait,
+# 30 s), plus a restart.
+WAIT=45
 
 usage() { sed -n '3,9p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 die() { echo "deploy: $*" >&2; exit 1; }
@@ -56,7 +65,7 @@ if [ -z "$HOST" ]; then
     HOST=$(head -n 1 "$HERE/host")
 fi
 CONFIG="$HERE/config.local.yaml"
-[ -s "$CONFIG" ] || die "no deploy/config.local.yaml: it is the config bootstrap.sh installs"
+[ -s "$CONFIG" ] || die "no deploy/config.local.yaml: the config each release carries"
 
 # yaml_get SECTION KEY, as bootstrap.sh's.
 yaml_get() {
@@ -80,34 +89,36 @@ version_of() { sed -nE 's/.*"version": *"([^"]*)".*/\1/p' <<<"$1" | head -n 1; }
 running_version() { version_of "$(on_host "curl -fsS --max-time 5 $LOCAL_HEALTH" 2>/dev/null || true)"; }
 
 # The journal from just before the switch, for a failure; a cursor, since
-# a bare --since is read in the host's local time.
+# a bare --since is read in the host's local time. The deploy user reads
+# it as a member of systemd-journal (bootstrap.sh), not through sudo.
 CURSOR=""
 mark_journal() {
-    CURSOR=$(on_host "sudo -n journalctl -u $SERVICE -n 1 --show-cursor --no-pager 2>/dev/null" | sed -n 's/^-- cursor: //p' || true)
+    CURSOR=$(on_host "journalctl -u $SERVICE -n 1 --show-cursor --no-pager 2>/dev/null" | sed -n 's/^-- cursor: //p' || true)
 }
 journal() {
     if [ -n "$CURSOR" ]; then
-        on_host "sudo -n journalctl -u $SERVICE --after-cursor '$CURSOR' --no-pager" 2>/dev/null | tail -n 30 || true
+        on_host "journalctl -u $SERVICE --after-cursor '$CURSOR' --no-pager" 2>/dev/null | tail -n 30 || true
     else
-        on_host "sudo -n journalctl -u $SERVICE -n 30 --no-pager" 2>/dev/null || true
+        on_host "journalctl -u $SERVICE -n 30 --no-pager" 2>/dev/null || true
     fi
 }
 
-# switch_to BUILD COMMIT: point the link at BUILD, restart, and check it
-# serves COMMIT on the host and in public.
+# switch_to RELEASE COMMIT: point current at RELEASE (a new link renamed
+# over the old, so there is never no link), restart, and check it serves
+# COMMIT on the host and in public.
 switch_to() {
-    local build=$1 commit=$2 i body
+    local release=$1 commit=$2 i body
     mark_journal
-    on_host "ln -sfn $build $DEPLOY_DIR/$SERVICE && sudo -n systemctl restart $SERVICE"
+    on_host "ln -sfn releases/$release $APP/current.new && mv -T $APP/current.new $APP/current && sudo -n systemctl restart $SERVICE"
     echo "=== Checking ==="
-    for i in $(seq 1 15); do
+    for i in $(seq 1 "$WAIT"); do
         if on_host "systemctl is-active --quiet $SERVICE" && [ "$(running_version)" = "$commit" ]; then
             break
         fi
-        [ "$i" -lt 15 ] || {
-            echo "  ✗ $SERVICE isn't serving $commit on the host. Its journal:" >&2
+        [ "$i" -lt "$WAIT" ] || {
+            echo "  ✗ $SERVICE isn't serving $commit on the host after ${WAIT}s. Its journal:" >&2
             journal | sed 's/^/    /' >&2
-            echo "  The previous build is one command away: deploy/deploy.sh --rollback" >&2
+            echo "  The release before is one command away: deploy/deploy.sh --rollback" >&2
             exit 1
         }
         sleep 1
@@ -142,20 +153,22 @@ confirm() {
 echo "=== $HOST ==="
 arch=$(on_host "uname -m") || die "can't reach $HOST"
 [ "$arch" = x86_64 ] || die "$HOST is $arch; this builds linux/amd64"
-on_host "systemctl is-enabled --quiet $SERVICE && test -w $DEPLOY_DIR" ||
-    die "$SERVICE isn't set up on $HOST (or $DEPLOY_DIR isn't writable): run deploy/bootstrap.sh"
+on_host "systemctl is-enabled --quiet $SERVICE && test -w $APP" ||
+    die "$SERVICE isn't set up on $HOST (or $APP isn't writable): run deploy/bootstrap.sh"
 WAS=$(running_version)
-echo "  running: ${WAS:-nothing}"
+CURRENT=$(on_host "readlink $APP/current" 2>/dev/null || true)
+CURRENT=${CURRENT#releases/}
+echo "  running: ${WAS:-nothing}${CURRENT:+ ($CURRENT)}"
 
 # ---------------------------------------------------------------------------
 if [ -n "$ROLLBACK" ]; then
-    current=$(on_host "readlink $DEPLOY_DIR/$SERVICE" || true)
-    builds=$(on_host "cd $DEPLOY_DIR && ls -t $SERVICE-2* 2>/dev/null" || true)
-    prev=$(grep -vxF "${current:-none}" <<<"$builds" | head -n 1 || true)
-    [ -n "$prev" ] || die "no earlier build on $HOST to go back to"
+    [ -n "$CURRENT" ] || die "no release is current on $HOST"
+    # The release just older than the current one, so rollbacks step back.
+    prev=$(on_host "cd $RELEASES && ls -t" | sed -n "/^$CURRENT\$/{n;p;q;}" || true)
+    [ -n "$prev" ] || die "no release older than $CURRENT on $HOST to go back to"
     commit=${prev##*-}
     echo "  back to: $prev"
-    confirm "Switch $SERVICE from ${WAS:-nothing} back to $commit and restart it?"
+    confirm "Switch $SERVICE from ${WAS:-nothing} back to $commit, with its config, and restart it?"
     switch_to "$prev" "$commit"
     echo "=== Rolled back to $commit ==="
     exit 0
@@ -169,32 +182,46 @@ git fetch --quiet origin main || die "can't fetch origin/main"
 git merge-base --is-ancestor HEAD origin/main ||
     die "HEAD isn't on origin/main: merge and push it first, so the hash the build carries is settled"
 COMMIT=$(git rev-parse --short HEAD)
-BUILD="$SERVICE-$(date -u +%Y%m%dT%H%M%SZ)-$COMMIT"
+RELEASE="$(date -u +%Y%m%dT%H%M%SZ)-$COMMIT"
 echo "=== Building $COMMIT (linux/amd64) ==="
 mkdir -p bin
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-X main.version=$COMMIT" -o "bin/$SERVICE-linux-amd64" ./cmd/$SERVICE
 echo "  built bin/$SERVICE-linux-amd64"
 
-echo "=== The new build checks the host's config ==="
-scp -q "bin/$SERVICE-linux-amd64" "$HOST:$DEPLOY_DIR/$BUILD"
-on_host "chmod 755 $DEPLOY_DIR/$BUILD"
-if ! out=$(on_host "cd / && sudo -n -u $SERVICE $DEPLOY_DIR/$BUILD -config /etc/$SERVICE/config.yaml -check-config" 2>&1); then
-    on_host "rm -f $DEPLOY_DIR/$BUILD" || true
+echo "=== Staging it, with deploy/config.local.yaml ==="
+on_host "rm -rf $NEXT && mkdir $NEXT"
+scp -q "bin/$SERVICE-linux-amd64" "$HOST:$NEXT/$SERVICE"
+scp -q "$CONFIG" "$HOST:$NEXT/config.yaml"
+on_host "chmod 755 $NEXT $NEXT/$SERVICE && chmod 644 $NEXT/config.yaml"
+if [ -n "$CURRENT" ]; then
+    d=$(on_host "diff -u $APP/current/config.yaml $NEXT/config.yaml" || true)
+    if [ -n "$d" ]; then
+        echo "  the config changes:"
+        tail -n +3 <<<"$d" | sed 's/^/    /'
+    else
+        echo "  the config is the running release's"
+    fi
+fi
+
+echo "=== The new build checks the new config ==="
+if ! out=$(on_host "cd / && sudo -n -u $SERVICE $NEXT/$SERVICE -config $NEXT/config.yaml -check-config" 2>&1); then
+    on_host "rm -rf $NEXT" || true
     printf '%s\n' "$out" | sed 's/^/  /' >&2
-    die "the new build refuses the host's config; $SERVICE still runs ${WAS:-nothing}"
+    die "the new build refuses the new config; $SERVICE still runs ${WAS:-nothing}"
 fi
 printf '%s\n' "$out" | sed 's/^/  /'
 
 if [ -n "$CHECK" ]; then
-    on_host "rm -f $DEPLOY_DIR/$BUILD"
+    on_host "rm -rf $NEXT"
     echo "--check: $COMMIT would deploy; nothing switched"
     exit 0
 fi
 
 confirm "Switch $SERVICE from ${WAS:-nothing} to $COMMIT and restart it?"
-echo "=== Switching to $BUILD ==="
-switch_to "$BUILD" "$COMMIT"
+echo "=== Switching to $RELEASE ==="
+on_host "mkdir -p $RELEASES && mv $NEXT $RELEASES/$RELEASE"
+switch_to "$RELEASE" "$COMMIT"
 
-echo "=== Keeping the last $KEEP builds ==="
-on_host "cd $DEPLOY_DIR && ls -t $SERVICE-2* | tail -n +$((KEEP + 1)) | xargs -r rm -f --"
+echo "=== Keeping $KEEP releases ===" # the newest is the one just switched to
+on_host "cd $RELEASES && ls -t | tail -n +$((KEEP + 1)) | xargs -r rm -rf --"
 echo "=== Deployed $COMMIT ==="
