@@ -246,16 +246,6 @@ func TestRun(t *testing.T) {
 	if m, _ := c.Find("water/hot/state"); !strings.Contains(m.Payload, `"boiler":{"hw":true,"ch":false}`) {
 		t.Errorf("state %s", m.Payload)
 	}
-	// ... and its history.
-	waitFor(t, "the state's point", func() bool {
-		for _, l := range fi.delivered() {
-			if strings.HasPrefix(l, "hot_water_system,site=home ") && strings.Contains(l, "boiler_hw=1i") {
-				return true
-			}
-		}
-		return false
-	})
-
 	// tanktemp's meter, dated now: /healthz is ok only once tanktemp is heard.
 	for _, l := range readLines(t, showerFixture) {
 		if l.topic == "water/hot/tanktemp/meter" {
@@ -302,7 +292,7 @@ func TestRun(t *testing.T) {
 		t.Errorf("/api/v1/state: %d %s", code, b)
 	}
 	for _, want := range []string{`"status": "ok"`, `"version": "abc1234"`, `"mqtt_connected": true`, `"ready": true`, `"received": 2`,
-		`"influx": {`, `"last_queued_at": "`} {
+		`"influx": {`, `"dropped": 0`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("%s isn't in /healthz:\n%s", want, body)
 		}
@@ -343,6 +333,15 @@ func TestRun(t *testing.T) {
 	}
 	if !c.Closed {
 		t.Error("the connection wasn't closed")
+	}
+	// The state's history: its last row, held for its final content, is
+	// written at shutdown.
+	hist := false
+	for _, l := range fi.delivered() {
+		hist = hist || strings.HasPrefix(l, "hot_water_system,site=home ") && strings.Contains(l, "boiler_hw=1i")
+	}
+	if !hist {
+		t.Errorf("no state row in Influx: %q", fi.delivered())
 	}
 	if fi.flushed != 1 {
 		t.Errorf("Influx flushed %d times at shutdown", fi.flushed)

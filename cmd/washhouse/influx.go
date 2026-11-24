@@ -51,7 +51,8 @@ type influxSink struct {
 
 	mu     sync.Mutex
 	st     influxStatus
-	closed bool // the queue is
+	rows   influx.Rows // the rows waiting for their final content
+	closed bool        // the queue is
 }
 
 // influxStatus is the sink on /healthz.
@@ -113,7 +114,8 @@ func (s *influxSink) failed(err error) {
 	s.st.LastError, s.st.LastErrorAt = err.Error(), &at
 }
 
-// write queues the points for what was just published. A nil sink is
+// write queues the points for what was just published; a tank's or the
+// system's row waits for its final content (influx.Rows). A nil sink is
 // Influx off.
 func (s *influxSink) write(msgs []publish.Message) {
 	if s == nil {
@@ -122,31 +124,35 @@ func (s *influxSink) write(msgs []publish.Message) {
 	for _, m := range msgs {
 		ps, err := s.mapper.Points(m)
 		at := s.wall().UTC()
+		s.mu.Lock()
 		if err != nil {
-			s.mu.Lock()
 			s.st.Unmapped++
 			s.st.LastError, s.st.LastErrorAt = err.Error(), &at
-			s.mu.Unlock()
-			continue
 		}
 		for _, p := range ps {
-			wp := write.NewPoint(p.Measurement, p.Tags, p.Fields, p.Time)
-			s.mu.Lock()
-			queued := false
-			if !s.closed {
-				select {
-				case s.queue <- wp:
-					queued = true
-				default:
-				}
+			s.enqueue(s.rows.Add(p), at)
+		}
+		s.mu.Unlock()
+	}
+}
+
+// enqueue queues ps without waiting, dropping what the queue can't hold
+// or what comes after shutdown. s.mu is held.
+func (s *influxSink) enqueue(ps []influx.Point, at time.Time) {
+	for _, p := range ps {
+		queued := false
+		if !s.closed {
+			select {
+			case s.queue <- write.NewPoint(p.Measurement, p.Tags, p.Fields, p.Time):
+				queued = true
+			default:
 			}
-			if queued {
-				s.st.Queued++
-				s.st.LastQueuedAt = &at
-			} else {
-				s.st.Dropped++
-			}
-			s.mu.Unlock()
+		}
+		if queued {
+			s.st.Queued++
+			s.st.LastQueuedAt = &at
+		} else {
+			s.st.Dropped++
 		}
 	}
 }
@@ -166,8 +172,8 @@ func (s *influxSink) status() influxStatus {
 	return s.st
 }
 
-// shutdown hands the client what is queued, flushes it, then closes the
-// client; it gives up after wait (Influx down or hanging), leaving the
+// shutdown queues the rows still held, hands the client what is queued,
+// flushes it, then closes the client; it gives up after wait (Influx down or hanging), leaving the
 // client open as the process exits. Later writes are dropped.
 func (s *influxSink) shutdown(wait time.Duration) {
 	if s == nil {
@@ -175,6 +181,7 @@ func (s *influxSink) shutdown(wait time.Duration) {
 	}
 	s.mu.Lock()
 	if !s.closed {
+		s.enqueue(s.rows.Flush(), s.wall().UTC())
 		s.closed = true
 		close(s.queue)
 	}

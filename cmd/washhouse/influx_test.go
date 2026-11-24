@@ -159,10 +159,18 @@ func TestPointWriterContract(t *testing.T) {
 	})
 }
 
-var messages = []publish.Message{
-	{Topic: "water/hot/state", Payload: []byte(`{"schema":"net.swee.washhouse.state.v1","timestamp":"2001-01-01T00:00:00.000Z","stored_kwh":null,"usable_l40":null,"usable_l40_low":null,"low_hot_water":null,"boiler":{"hw":true,"ch":null},"ambient_c":null,"active_draw":null,"meter":{"timestamp":null,"counting_since":null,"count":null,"litres_since_start":null,"continuous_flow":null},"tanktemp":{"timestamp":null,"online":null,"version":null},"tanks":[]}`), Retained: true},
-	{Topic: "water/hot/status", Payload: []byte(`{}`), Retained: true},
+// stateAt is a state published i seconds into the fake epoch, and a
+// status (which has no points). A state's row is held until a later one
+// arrives (influx.Rows), so the tests publish at successive times.
+func stateAt(i int) []publish.Message {
+	ts := time.Date(2001, 1, 1, 0, 0, i, 0, time.UTC).Format("2006-01-02T15:04:05.000Z")
+	return []publish.Message{
+		{Topic: "water/hot/state", Payload: []byte(`{"schema":"net.swee.washhouse.state.v1","timestamp":"` + ts + `","stored_kwh":null,"usable_l40":null,"usable_l40_low":null,"low_hot_water":null,"boiler":{"hw":true,"ch":null},"ambient_c":null,"active_draw":null,"meter":{"timestamp":null,"counting_since":null,"count":null,"litres_since_start":null,"continuous_flow":null},"tanktemp":{"timestamp":null,"online":null,"version":null},"tanks":[]}`), Retained: true},
+		{Topic: "water/hot/status", Payload: []byte(`{}`), Retained: true},
+	}
 }
+
+var messages = stateAt(0)
 
 // The sink maps what was published and queues it, and counts what it
 // queued and what failed, for /healthz.
@@ -173,7 +181,11 @@ func TestInfluxSink(t *testing.T) {
 	if st := s.status(); st.Queued != 0 || st.LastQueuedAt != nil || st.Failed != 0 {
 		t.Errorf("before: %+v", st)
 	}
-	s.write(messages)
+	s.write(stateAt(0))
+	if st := s.status(); st.Queued != 0 {
+		t.Errorf("the row is held for its final content: %+v", st)
+	}
+	s.write(stateAt(1))
 	waitFor(t, "the point", func() bool { return len(f.delivered()) == 1 })
 	if got := f.delivered(); got[0] != `hot_water_system,site=home boiler_hw=1i,continuous_flow=0i,drawing=0i 978307200000000000` {
 		t.Errorf("delivered %q", got)
@@ -183,7 +195,7 @@ func TestInfluxSink(t *testing.T) {
 	}
 
 	f.fail(true)
-	s.write(messages)
+	s.write(stateAt(2))
 	waitFor(t, "the failure counted", func() bool { return s.status().Failed == 1 })
 	if st := s.status(); st.LastError != "fake: write failed" || st.LastErrorAt == nil || !st.LastErrorAt.Equal(now) {
 		t.Errorf("after a failure: %+v", st)
@@ -216,8 +228,8 @@ func TestInfluxSinkNeverBlocks(t *testing.T) {
 	s := newInfluxSink(f, nil, influx.Mapper{Base: "water/hot"}, time.Now)
 	done := make(chan struct{})
 	go func() {
-		for range influxQueue + 10 {
-			s.write(messages[:1])
+		for i := range influxQueue + 11 { // the last is held
+			s.write(stateAt(i)[:1])
 		}
 		close(done)
 	}()
@@ -255,8 +267,8 @@ func TestInfluxSinkShutdown(t *testing.T) {
 	f = newFakeInflux()
 	f.stuck = make(chan struct{})
 	s = newInfluxSink(f, nil, influx.Mapper{Base: "water/hot"}, time.Now)
-	for range 3 {
-		s.write(messages[:1])
+	for i := range 3 { // two queued, the last held: all three before the flush
+		s.write(stateAt(i)[:1])
 	}
 	time.AfterFunc(50*time.Millisecond, func() { close(f.stuck) })
 	s.shutdown(5 * time.Second)
@@ -285,8 +297,8 @@ func TestInfluxSinkConcurrent(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		for range 20 {
-			s.write(messages)
+		for i := range 21 { // the last is held
+			s.write(stateAt(i))
 		}
 	}()
 	go func() {

@@ -18,7 +18,9 @@ import (
 // no field changes type within a measurement (Influx refuses the batch
 // that does, statehouse's review); every point has a field; and each
 // draw's draw_balanced lands on its draw_ended's row (same tags, same
-// time), never on a row of its own.
+// time), never on a row of its own. Through Rows, merged as Influx merges
+// a write at a row's time, no tank or system row is written twice, and
+// no row keeps a field its last write left out but a draw's.
 func TestPointsOverTheFixtures(t *testing.T) {
 	f, err := os.Open("../../testdata/behaviour.example.json")
 	if err != nil {
@@ -37,7 +39,30 @@ func TestPointsOverTheFixtures(t *testing.T) {
 	types := map[string]string{} // measurement.field → its Go type
 	measurements := map[string]int{}
 	balanced := 0
+	var written map[string]map[string]any // row → its fields, merged, per fixture
+	merge := func(path string, p Point) {
+		key := series(p) + " " + p.Time.Format(time.RFC3339Nano)
+		was, ok := written[key]
+		if !ok {
+			written[key] = map[string]any{}
+			was = written[key]
+		} else if p.Measurement == "hot_water_tank" || p.Measurement == "hot_water_system" {
+			t.Errorf("%s: %s written twice", filepath.Base(path), key)
+		}
+		if p.Measurement != "hot_water_draw" {
+			for k := range was {
+				if _, ok := p.Fields[k]; !ok {
+					t.Errorf("%s: %s keeps %s, which its last write left out", filepath.Base(path), key, k)
+				}
+			}
+		}
+		for k, v := range p.Fields {
+			was[k] = v
+		}
+	}
 	for _, path := range paths {
+		var rows Rows
+		written = map[string]map[string]any{}
 		eng, err := engine.New(ec)
 		if err != nil {
 			t.Fatal(err)
@@ -50,7 +75,7 @@ func TestPointsOverTheFixtures(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		rows := map[string]time.Time{} // draw_id → its draw_ended row's time
+		drawRows := map[string]time.Time{} // draw_id → its draw_ended row's time
 		after := func(ev []engine.Event) {
 			out, err := pub.After(eng.State(), ev)
 			if err != nil {
@@ -62,6 +87,9 @@ func TestPointsOverTheFixtures(t *testing.T) {
 					t.Fatalf("%s: %v", filepath.Base(path), err)
 				}
 				for _, p := range ps {
+					for _, w := range rows.Add(p) {
+						merge(path, w)
+					}
 					measurements[p.Measurement]++
 					if len(p.Fields) == 0 {
 						t.Errorf("%s: a %s point with no fields", filepath.Base(path), p.Measurement)
@@ -85,11 +113,11 @@ func TestPointsOverTheFixtures(t *testing.T) {
 						t.Errorf("draw %s tags %v", id, p.Tags)
 					}
 					if _, ok := p.Fields["litres"]; ok { // draw_ended
-						rows[id] = p.Time
+						drawRows[id] = p.Time
 						continue
 					}
 					balanced++
-					if row, ok := rows[id]; !ok || !row.Equal(p.Time) {
+					if row, ok := drawRows[id]; !ok || !row.Equal(p.Time) {
 						t.Errorf("%s: draw %s balanced at %v, its row is at %v (%v)", filepath.Base(path), id, p.Time, row, ok)
 					}
 				}
@@ -101,6 +129,9 @@ func TestPointsOverTheFixtures(t *testing.T) {
 		}
 		if eng.Pending() {
 			after(eng.Tick(eng.State().At.Add(eng.Settle())))
+		}
+		for _, w := range rows.Flush() {
+			merge(path, w)
 		}
 	}
 	for _, name := range []string{"hot_water_tank", "hot_water_system", "hot_water_draw", "hot_water_draw_tank", "hot_water_continuous_flow"} {

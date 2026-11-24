@@ -112,14 +112,20 @@ With an `influx` section in the local config, washhouse writes what it
 publishes to Influx (`internal/influx`), so the history is what went out
 on the wire. Each point is tagged `site` (`site.id`, required), at event
 time (the publisher timestamp WIRE.md gives, never the wall clock). Retained
-topics are written when they are published, so on a change. An unknown
+topics are written when they are published, so on a change. A tank's or
+the system's row is written once, with its last content at that
+timestamp: Influx merges a second write at a row's time and keeps the
+fields it leaves out, and WIRE.md publishes a topic more than once at one
+timestamp, so each series holds its latest row until a later one arrives
+(or washhouse stops). A row lands one publish late, and a crash loses at
+most the held row per series. An unknown
 (`null`) value is left out. A boolean is written as `0`/`1`, so a `mean`
 over a window is the fraction of it spent so. A field's type never changes:
 quantities are floats even when whole, counts integers, words strings.
 
 | Measurement | Tags | Time | Fields |
 |---|---|---|---|
-| `hot_water_tank` | `device_id` | the tank's `timestamp` | `state`, `heat_source` (strings), `stored_kwh`, `mean_c`, `top_c`, `hot_l`, `usable_l40`, `usable_l40_low`, `power_kw`, `ua_w_per_k`, `probes_ok`, `probes_total` |
+| `hot_water_tank` | `device_id` | the tank's `timestamp` | `state`, `heat_source` (strings), `stored_kwh`, `mean_c`, `top_c` (the decayed P5 draw peak, not P5 at rest), `hot_l`, `usable_l40`, `usable_l40_low`, `power_kw`, `ua_w_per_k`, `probes_ok` (probes washhouse uses: not tanktemp's `ok`, since a suspect 85 °C reading is left out), `probes_total` |
 | `hot_water_system` | | the state's `timestamp` | `stored_kwh`, `usable_l40`, `usable_l40_low`, `low_hot_water`, `boiler_hw`, `boiler_ch`, `ambient_c`, `drawing`, `continuous_flow`, `tanktemp_online` |
 | `hot_water_draw` | | the draw's `ended_at` | from `draw_ended`: `draw_id`, `kind`, `litres`, `duration_s`, `flow_l_min`; from `draw_balanced`, minutes later, into the same row: `energy_kwh`, `heat_balance_l`, `heat_balance_reliable`, `masked_by_reheat`, `reasons` (comma-separated), `outlet_peak_c`, `inlet_drop_c` |
 | `hot_water_draw_tank` | `device_id` | the draw's `ended_at` | from `draw_balanced`: `draw_id`, `share`, `litres` (both absent when withheld), `outlet_peak_c`, `inlet_drop_c` |
