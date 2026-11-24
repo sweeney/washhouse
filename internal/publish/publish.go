@@ -6,7 +6,11 @@
 // topics (the state and each tank) are published when their content
 // changes, the timestamp aside; events always. Within one input the order
 // is events, then tanks, then the state, so the state that drops a draw's
-// active_draw follows its draw_ended.
+// active_draw follows its draw_ended. While a tanktemp sweep is still
+// arriving (engine.State's SweepPending: its meter reading and each tank's
+// state come as separate inputs with one timestamp) the state is held, so
+// one state goes out per sweep, complete; an input that made events
+// publishes it at once.
 package publish
 
 import (
@@ -75,6 +79,9 @@ func (p *Publisher) After(s engine.State, ev []engine.Event) ([]Message, error) 
 			return nil, err
 		}
 		out = append(out, m...)
+	}
+	if s.SweepPending && len(ev) == 0 {
+		return out, nil
 	}
 	m, err := p.retained(washhouse.StateTopic(p.base), s.At, func(at time.Time) ([]byte, error) {
 		x := s

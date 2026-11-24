@@ -245,3 +245,36 @@ func TestNoneSourceIsNull(t *testing.T) {
 		t.Errorf("got %s, %v", b, err)
 	}
 }
+
+// While a sweep is still arriving the state is held, so one goes out per
+// sweep (the owner, 24 Nov 2026); a tank's own message still goes. An
+// input that made events publishes the state at once: the state that drops
+// active_draw follows draw_ended in the same publish (WIRE.md).
+func TestStateHeldWhileASweepArrives(t *testing.T) {
+	p := newP(t)
+	if _, err := p.After(state(t0), nil); err != nil {
+		t.Fatal(err)
+	}
+	s := state(t0.Add(30 * time.Second))
+	s.StoredKWh = f(21)
+	s.Tanks[0].PowerKW = f(-0.3)
+	s.SweepPending = true
+	ms, _ := p.After(s, nil)
+	if got := topics(ms); got != "test/water/hot/tank/"+left {
+		t.Errorf("pending: topics %q, want the left tank's only", got)
+	}
+	s.SweepPending = false
+	ms, _ = p.After(s, nil)
+	if got := topics(ms); got != "test/water/hot/state" {
+		t.Errorf("the sweep in: topics %q, want the held state", got)
+	}
+	// With an event, the pending state goes anyway.
+	s = state(t0.Add(time.Minute))
+	s.StoredKWh = f(19)
+	s.SweepPending = true
+	ev := engine.Event{Type: engine.EventTankStateChanged, At: s.At, Tank: &engine.TankEvent{DeviceID: left, State: thermal.StateCooling, Prev: thermal.StateUnknown}}
+	ms, _ = p.After(s, []engine.Event{ev})
+	if got := topics(ms); !strings.HasPrefix(got, "test/water/hot/events ") || !strings.HasSuffix(got, " test/water/hot/state") {
+		t.Errorf("pending with an event: topics %q, want the event first and the state last", got)
+	}
+}

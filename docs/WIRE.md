@@ -68,21 +68,25 @@ is tanktemp's (statehouse's tanktemp adapter would parse it).
 
 | Topic | Payload | When | QoS | Retained |
 |---|---|---|---|---|
-| `{base}/state` | State | when anything in it changes, other than `timestamp` | 0 | yes |
+| `{base}/state` | State | when anything in it changes, other than `timestamp`; once per tanktemp sweep, when every tank's state for it is in | 0 | yes |
 | `{base}/tank/{device_id}` | Tank | when anything in that tank's message changes, other than `timestamp` | 0 | yes |
 | `{base}/events` | Event | as each is decided | 1 | no |
 | `{base}/status` | Status | STARTUP, HEARTBEAT, SHUTDOWN; the last will | 1 | yes |
 
 `device_id` is the cylinder's key in `devices_<site>` (`[a-z0-9_-]+`), the
-same as tanktemp's. State and tank messages change with nearly every input
-(the meter's and tanks' times are in them), so in practice they go out about
-every sweep, and with every metered litre during a draw.
+same as tanktemp's. tanktemp sends each sweep as separate messages with one
+timestamp (the meter's reading, then each tank's state); State waits until
+every tank that isn't stale has sent its state for that sweep, so it goes
+out once per sweep, complete. Tank messages go out as each tank's own state
+arrives. A metered litre, or any event, publishes State at once (the state
+that drops `active_draw` follows `draw_ended` in the same publish), so
+during a draw it goes out with every litre too.
 
-**Don't de-duplicate on `timestamp` alone.** Two publishes of one topic can
-share a `timestamp` with different content: tanktemp stamps both tanks'
-sweeps with the same time, so State goes out once for each. A retained
-replay is byte-identical to the message it repeats, and a consumer that
-needs to spot one compares the payload.
+**Don't de-duplicate on `timestamp` alone.** Two publishes of State can
+still share a `timestamp` with different content: a litre and a sweep in
+the same second, or an event mid-sweep. A retained replay is byte-identical
+to the message it repeats, and a consumer that needs to spot one compares
+the payload.
 
 ## State
 
@@ -473,6 +477,12 @@ or vanished.
 
 ## Changes
 
+- **2026-11-24, v1, when State is published (not its payload):** once per
+  tanktemp sweep, when every tank's state for it is in, rather than after
+  each of the sweep's three messages, two of which carried a half-updated
+  state under the sweep's timestamp (the owner noticed them as
+  duplicates). Litres and events still publish it at once. The shower
+  fixture's States fall from 954 to 437; its events are unchanged.
 - **2026-11-24, v1, a change of value (not of shape):** the drawable water
   runs to the top of the dome, not the outlet fitting (the outlet has an
   internal pipe up to it; the owner), and the outlet probe's resting

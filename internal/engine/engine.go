@@ -61,6 +61,10 @@ type Engine struct {
 	// rest.
 	lastDrawEnd time.Time
 	outletRest  map[string]map[string]float64
+
+	// sweepAt is the time of the tanktemp sweep the latest input was part
+	// of (its meter reading or a tank's state); zero if it was no sweep's.
+	sweepAt time.Time
 }
 
 // tankSlot is one cylinder's model and its latest sweep.
@@ -153,6 +157,7 @@ func (e *Engine) TankState(st tanktemp.State) ([]Event, error) {
 		return e.done(ev), err
 	}
 	slot.ok, slot.last = true, sw
+	e.sweepAt = st.Timestamp
 	tev, err := e.thermal.Sweep(sw)
 	if err != nil {
 		return e.done(ev), err // can't happen: the tanks are the same, by Validate
@@ -200,6 +205,10 @@ func (e *Engine) Meter(m tanktemp.Meter) []Event {
 		if m.ClockSynced {
 			e.meterAt = m.Timestamp // an unsynced time can't be trusted
 			e.see(m.Timestamp)
+		}
+		e.sweepAt = time.Time{}
+		if m.Trigger == tanktemp.TriggerSweep && m.ClockSynced {
+			e.sweepAt = m.Timestamp
 		}
 	}
 	out := e.meterEvents(nil, ev)
@@ -344,6 +353,23 @@ func (e *Engine) learnOutlet(r draw.Result) {
 			}
 		}
 	}
+}
+
+// sweepPending says whether the sweep the latest input was part of is
+// still arriving: a tank that isn't stale hasn't swept at its time yet.
+func (e *Engine) sweepPending() bool {
+	if e.sweepAt.IsZero() {
+		return false
+	}
+	for _, slot := range e.tanks {
+		if !slot.seen {
+			continue // never heard: nothing to wait for
+		}
+		if at := slot.last.At; at.Before(e.sweepAt) && e.sweepAt.Sub(at) <= e.cfg.Thermal.StaleAfter {
+			return true
+		}
+	}
+	return false
 }
 
 // TakeOutlet takes old's outlet state, for the tanks e has: what each
@@ -515,7 +541,7 @@ func (e *Engine) Pending() bool {
 
 // State reports the system as of the latest input.
 func (e *Engine) State() State {
-	s := State{At: e.now, Tanktemp: e.tanktemp}
+	s := State{At: e.now, Tanktemp: e.tanktemp, SweepPending: e.sweepPending()}
 	for _, id := range e.order {
 		s.Tanks = append(s.Tanks, e.tankState(id))
 	}
