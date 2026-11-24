@@ -1,0 +1,44 @@
+# The washhouse unit; deploy/bootstrap.sh installs it from this file.
+[Unit]
+Description=washhouse: hot-water state from tanktemp's probes and meter
+After=network-online.target
+Wants=network-online.target
+Documentation=https://github.com/sweeney/washhouse
+
+[Service]
+Type=simple
+User=washhouse
+Group=washhouse
+
+ExecStart=/opt/washhouse/bin/washhouse -config /etc/washhouse/config.yaml
+# SIGHUP fetches the behaviour namespace again (the local config needs a restart).
+ExecReload=/bin/kill -HUP $MAINPID
+WorkingDirectory=/var/lib/washhouse
+
+# washhouse refuses to start without its behaviour namespace; systemd retries.
+Restart=always
+RestartSec=5
+# The Influx flush at shutdown is bounded at 5 s.
+TimeoutStopSec=20
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/washhouse
+ReadOnlyPaths=/etc/washhouse
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+MemoryDenyWriteExecute=true
+LockPersonality=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=washhouse
+
+[Install]
+WantedBy=multi-user.target

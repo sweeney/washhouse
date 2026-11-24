@@ -31,6 +31,7 @@ config service, and writes its history to Influx; deploying it is next.
 | `cmd/washhouse` | The service: subscribes, runs the engine, publishes, and serves the API and `/healthz`. |
 | `internal/influx` | The Influx points for each published message (below). |
 | `internal/httpapi` | The HTTP API and its spec (`openapi.yaml`), which a test checks against every response over every fixture. |
+| `deploy/` | Setting up the host and deploying to it (below); the unit, `washhouse.service`. |
 | `deploy/config.example.yaml` | The service's local config: the broker, HTTP, the topics, where the behaviour document is (the config service, read with identity client credentials), the site, and Influx. |
 | `testdata/behaviour.example.json` | The behaviour document (cylinders, meter rules, thresholds) with the plan's values: the shape of the `washhouse` namespace. |
 
@@ -153,6 +154,48 @@ undercounts what was lost. `-check-config` reads the token file.
 
 statehouse writes its booleans as Influx booleans, not `0`/`1`; a query
 across both services' measurements must allow for that.
+
+## Deploy
+
+The host is the first line of `deploy/host`, and its config is
+`deploy/config.local.yaml` (both gitignored; the shape is
+`deploy/config.example.yaml`'s). Every script takes `--check` first,
+which changes nothing, and `--yes` to skip its one prompt.
+
+```
+deploy/bootstrap.sh --check   # what setting the host up would change
+deploy/bootstrap.sh           # set it up (sudo on the host asks for your password)
+deploy/deploy.sh --check      # build HEAD; the new build checks the host's config
+deploy/deploy.sh              # deploy HEAD
+deploy/deploy.sh --rollback   # back to the build before
+```
+
+`bootstrap.sh` copies itself, the unit and the config to the host and
+runs there as root. It creates the `washhouse` user and directories,
+writes the identity client secret (asked for, hidden), creates the Influx
+bucket and a token that can only write to it, installs the config
+(showing the diff, and checked by the installed build first, if there is
+one) and the unit, and a sudoers rule that lets the deploy user restart
+washhouse, read its journal and run `-check-config` as `washhouse`,
+nothing more. It doesn't start washhouse. Rerun it to change the config;
+a second run changes nothing.
+
+`deploy.sh` deploys HEAD only when it is committed and on `origin/main`,
+so the hash on `/healthz` is settled. The new build is uploaded beside the
+running one and checks the installed config as `washhouse` (the config,
+the behaviour namespace, the Influx token) before anything is switched. A
+refused config leaves the running build as it was. Once switched,
+washhouse must be active, and both the host's `/healthz` and the public
+URL's (`http.public_url`) must show the new commit. The last three builds
+are kept.
+
+Before the first deploy, washhouse needs an identity client (client
+credentials), the `washhouse` namespace holding the behaviour document
+(check it first with `washhouse -check-behaviour FILE`) and readable by
+that client, and a route from `http.public_url` to `http.listen`.
+
+Tests: `deploy/bootstrap_test.sh` and `deploy/deploy_test.sh` (in
+`make check`) run both scripts against stubs and a fake host.
 
 The tools tests need `python3`, `mosquitto`, `mosquitto_sub`/`mosquitto_pub`
 and `shellcheck`. Conventions for changes are in [`CLAUDE.md`](CLAUDE.md).
