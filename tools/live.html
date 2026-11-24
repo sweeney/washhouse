@@ -310,9 +310,9 @@ details.guide ol { margin: 10px 0 0; padding-left: 20px; display: grid; gap: 6px
       <summary>How washhouse works, in seven steps</summary>
       <ol>
         <li><b>tanktemp</b> reads five probes up each cylinder every 30 s, and counts the hot-water meter's litres. It reports raw facts and interprets nothing.</li>
-        <li><b>washhouse</b> rebuilds each cylinder's temperature profile from its probes. A probe on a fitting is treated for what it is: the bottom one sits on the cold inlet, the top one on the hot outlet (it reads low at rest, so a draw's peak is the true top).</li>
+        <li><b>washhouse</b> rebuilds each cylinder's temperature profile from its probes. A probe on a fitting is treated for what it is: the bottom one sits on the cold inlet, the top one on the hot outlet, whose internal pipe reaches the top of the dome (it reads low at rest, so washhouse learns how low from a draw and corrects it).</li>
         <li>From the profile it works out the heat stored, and the litres hotter than 40 °C. Where the dashed line crosses a cylinder above, its water turns cooler than 40 °C.</li>
-        <li>The cylinders feed one outlet in parallel, so a tap draws a fixed split from each: about 89% from the right. The house's usable water is a draw simulated at that split, so a cold right cylinder leaves little usable however hot the left is.</li>
+        <li>The cylinders feed one outlet side by side. The split between them isn't fixed: a hot cylinder keeps the tap hot while the other is cold (tested: a 40 L run with one at 62 °C and the other at 40 °C was too hot to hold). So the house's usable water is the cylinders' added together.</li>
         <li>Each cylinder's power (the rate its stored heat changes) says <b>heating</b> or <b>cooling</b>; which programmer channel caused heating is inferred from the gain, never assumed from the timer. Its loss to the room is fitted as it goes.</li>
         <li>A <b>draw</b> is metered water: litres less than 60 s apart. Volume, flow and kind come from the meter; after the probes settle, the heat each cylinder lost says who supplied it.</li>
         <li>Everything goes out on MQTT under <code>{base}/</code>, on event time, and into Influx. statehouse will use the draws as evidence someone is home.</li>
@@ -465,9 +465,7 @@ function renderHero() {
   $("lowWhy").innerHTML = lowWhy(u, m.low_hot_water, LOW, MARGIN);
   const tk = (m.tanks || []);
   if (tk.length >= 2 && tk.every(t => t.usable_l40 != null)) {
-    const sum = tk.reduce((a, t) => a + t.usable_l40, 0);
-    const split = lastSplit();
-    $("splitWhy").innerHTML = `Why not ${tk.map(t => `${num(t.usable_l40, 0)} (${sh(t.device_id)})`).join(" + ")} = ${num(sum, 0)} L? The cylinders feed one outlet in parallel, so a tap draws ${split} from them, and the water mixes. When the cylinder that supplies most of it runs cool, there's little usable however hot the other is.`;
+    $("splitWhy").innerHTML = `That's the cylinders added: ${tk.map(t => `${num(t.usable_l40, 0)} L (${sh(t.device_id)})`).join(" + ")}. They feed one outlet side by side, and the split between them moves with their temperatures${lastSplit()}: a hot cylinder keeps the tap hot while the other is cold.`;
   }
   const f = [];
   if (m.boiler) {
@@ -481,11 +479,11 @@ function renderHero() {
   $("facts").innerHTML = f.join("");
   drawGauge();
 }
+// The last measured split, as a parenthesis, or "" before one.
 function lastSplit() {
   const bs = [...S.draws.values()].filter(d => d.balanced && (d.balanced.tanks || []).every(t => t.share != null));
   const b = bs.length ? bs[bs.length - 1].balanced : null;
-  if (!b) return "a fixed split (about 89% right, 11% left)";
-  return "a fixed split (" + b.tanks.map(t => `${num(t.share * 100, 0)}% ${sh(t.device_id)}`).join(", ") + " on the last draw)";
+  return b ? " (" + b.tanks.map(t => `${num(t.share * 100, 0)}% ${sh(t.device_id)}`).join(", ") + " on the last draw)" : "";
 }
 
 function drawGauge() {
