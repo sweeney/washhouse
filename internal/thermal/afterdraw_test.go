@@ -17,6 +17,11 @@ func afterDraw(t *testing.T, riseKW float64, hw boiler.Switch) time.Duration {
 
 // afterDrawFrom is afterDraw with HW as before the draw ends, then as at it.
 func afterDrawFrom(t *testing.T, riseKW float64, before, hw boiler.Switch) time.Duration {
+	return afterDrawWith(t, riseKW, before, hw, boiler.Off)
+}
+
+// afterDrawWith is afterDrawFrom with CH as at the draw's end.
+func afterDrawWith(t *testing.T, riseKW float64, before, hw, ch boiler.Switch) time.Duration {
 	t.Helper()
 	cfg := planConfig()
 	tr := newTracker(t, cfg)
@@ -33,7 +38,7 @@ func afterDrawFrom(t *testing.T, riseKW float64, before, hw boiler.Switch) time.
 	tr.MeteredDraw(at, true)
 	end := at.Add(2 * time.Minute)
 	tr.MeteredDraw(end, false)
-	tr.Programmer(end, hw, boiler.Off)
+	tr.Programmer(end, hw, ch)
 	perSweep := riseKW / kwhPerK / 3600 * 30 // °C per 30 s sweep
 	temp -= 5                                // a big draw: its sweeps mustn't count
 	for at = end.Add(10 * time.Second); at.Before(end.Add(cfg.PowerSettle + cfg.PowerMinSpan + 2*time.Minute)); at = at.Add(30 * time.Second) {
@@ -78,5 +83,15 @@ func TestAfterDrawNeedsAChannelOnNow(t *testing.T) {
 	cfg := planConfig()
 	if d := afterDrawFrom(t, 4, boiler.On, boiler.Off); d >= 0 && d < cfg.PowerSettle+cfg.PowerMinSpan {
 		t.Errorf("4 kW just after HW went off: heating at %v, inside the hold", d)
+	}
+}
+
+// CH heats neither tank since the right's valve was replaced, and with CH
+// on and HW off the coil's afterglow reached 1.48 kW (tanktemp's review of
+// #15): the fast rule needs HW on. A CH-only rise waits for the power.
+func TestAfterDrawNeedsHW(t *testing.T) {
+	cfg := planConfig()
+	if d := afterDrawWith(t, 4, boiler.Off, boiler.Off, boiler.On); d >= 0 && d < cfg.PowerSettle+cfg.PowerMinSpan {
+		t.Errorf("4 kW with only CH on: heating at %v, inside the hold", d)
 	}
 }
