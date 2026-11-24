@@ -19,12 +19,15 @@
 set -euo pipefail
 
 TOPICS=(
-    'water/hot/#'                                   # tanktemp (probes, status, meter); washhouse later
+    'water/hot/#'                                   # tanktemp (probes, status, meter); washhouse once live there
+    'test/water/hot/#'                              # washhouse's live shadow (its state, tanks, events, status)
     'energy/boiler/#'                               # programmer HW/CH: events + system heartbeat
     'zigbee2mqtt/climate_groundfloor_boiler-room'   # ambient for UA
     'house/state/devices/climate_groundfloor_boiler-room'
     'house/state/devices/hot_water'                 # statehouse's view, before/after its changes
     'house/state/devices/central_heating'
+    'house/state/devices/climate_weatherstation'    # outdoors: how cold weather drives heating and loss
+    'tempest/#'                                     # the weather station's own feed
 )
 
 DIR="${WASHHOUSE_RECORDINGS:-$HOME/washhouse-recordings}"
