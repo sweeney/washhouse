@@ -135,8 +135,8 @@ type Config struct {
 	HeatingOnKW  float64
 	HeatingOffKW float64
 	// HeatingOnAfterDrawKW: inside PowerSettle, while the power is still
-	// unknown, a tank not yet heating is judged heating if a heat source
-	// is current (source isn't none) and its energy, from the sweeps after
+	// unknown, a tank not yet heating is judged heating if a programmer
+	// channel is on now and its energy, from the sweeps after
 	// DrawSettle, rises at least this fast over PowerMinSpan. A draw's
 	// settling looked like up to 0.72 kW with no heat going in (CH on in
 	// ch-only-no-heat); reheats show 2–9 kW. 1.5 kW calls a reheat about 6
@@ -541,11 +541,13 @@ func (t *Tracker) decay(tk *tankTrack, at time.Time) {
 	}
 }
 
-// judgeAfterDraw judges a tank heating, after a draw and
-// until its power is judged again, from the sweeps since DrawSettle after it, if a heat source
-// is current and they rise at HeatingOnAfterDrawKW or more (Config).
+// judgeAfterDraw judges a tank heating, after a draw and until its power is
+// judged again, from the sweeps since DrawSettle after it, if a programmer
+// channel is on now and they rise at HeatingOnAfterDrawKW or more (Config).
+// On now, not within SourceHold: the coil's afterglow after HW switches off
+// reached 1.5 kW (tanktemp's review of #15).
 func (t *Tracker) judgeAfterDraw(tk *tankTrack, at time.Time) {
-	if !t.drawEnded || t.drawRunning || (tk.power != nil && t.clear(tk.powerFrom)) || t.source(at) == SourceNone {
+	if !t.drawEnded || t.drawRunning || (tk.power != nil && t.clear(tk.powerFrom)) || (t.hw.sw != boiler.On && t.ch.sw != boiler.On) {
 		return // not after a draw, or the power is judged again already
 	}
 	from := t.drawEnd.Add(t.cfg.DrawSettle)

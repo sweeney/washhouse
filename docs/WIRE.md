@@ -197,9 +197,9 @@ the stored heat rises faster than a threshold, until it falls below a lower
 one (hysteresis), else `cooling`. The judgement holds through a draw and the
 power's settling after it, so after a draw the state goes back to what it
 was with `power_kw` `null` for a while: `cooling` or `heating` with no power
-is normal. One exception: in that while, a tank that starts heating (a heat
-source current, and its stored heat rising fast since the draw: 1.5 kW,
-configured) goes to `heating` then, about 6 minutes after the draw, rather
+is normal. One exception: in that while, a tank that starts heating (a
+programmer channel on, and its stored heat rising fast since the draw:
+1.5 kW, configured) goes to `heating` then, about 6 minutes after the draw, rather
 than when the power is known again, about 17. `unknown` before the tank's power is first judged, and while its
 data is stale (then until it is judged again).
 

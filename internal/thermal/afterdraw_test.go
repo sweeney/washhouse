@@ -12,11 +12,16 @@ import (
 // the draw on, with the programmer's HW as hw; it returns when (after the
 // draw's end) the tank was first judged heating, or -1.
 func afterDraw(t *testing.T, riseKW float64, hw boiler.Switch) time.Duration {
+	return afterDrawFrom(t, riseKW, hw, hw)
+}
+
+// afterDrawFrom is afterDraw with HW as before the draw ends, then as at it.
+func afterDrawFrom(t *testing.T, riseKW float64, before, hw boiler.Switch) time.Duration {
 	t.Helper()
 	cfg := planConfig()
 	tr := newTracker(t, cfg)
 	s := newSynth(t)
-	tr.Programmer(t0, boiler.Off, boiler.Off)
+	tr.Programmer(t0, before, boiler.Off)
 	temp := 55.0
 	at := t0
 	for ; at.Before(t0.Add(time.Hour)); at = at.Add(30 * time.Second) {
@@ -63,5 +68,15 @@ func TestHeatingJudgedSoonAfterADraw(t *testing.T) {
 	}
 	if d := afterDraw(t, 1, boiler.On); d >= 0 && d < hold {
 		t.Errorf("1 kW with HW on (below the after-draw threshold): heating at %v, inside the %v hold", d, hold)
+	}
+}
+
+// The coil keeps heating for a while after HW switches off (its afterglow
+// reached 1.5 kW on the right; tanktemp's review of #15), so the fast rule
+// needs a channel on now: within SourceHold of one isn't enough.
+func TestAfterDrawNeedsAChannelOnNow(t *testing.T) {
+	cfg := planConfig()
+	if d := afterDrawFrom(t, 4, boiler.On, boiler.Off); d >= 0 && d < cfg.PowerSettle+cfg.PowerMinSpan {
+		t.Errorf("4 kW just after HW went off: heating at %v, inside the hold", d)
 	}
 }
