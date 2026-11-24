@@ -77,7 +77,10 @@ is tanktemp's (statehouse's tanktemp adapter would parse it).
 same as tanktemp's. tanktemp sends each sweep as separate messages with one
 timestamp (the meter's reading, then each tank's state); State waits until
 every tank that isn't stale has sent its state for that sweep, so it goes
-out once per sweep, complete. Tank messages go out as each tank's own state
+out once per sweep, complete. If a tank's state for a sweep never comes (a
+lost message, or a tank whose clock isn't synced), State is held until that
+tank goes stale, at most 2 minutes (`thermal.stale_after` in the behaviour document), so size a
+staleness window on State to that, not to the 30 s sweep. Tank messages go out as each tank's own state
 arrives. A metered litre, or any event, publishes State at once (the state
 that drops `active_draw` follows `draw_ended` in the same publish), so
 during a draw it goes out with every litre too.
