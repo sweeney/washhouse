@@ -9,6 +9,16 @@
 // config's as the fallback. A failed read is unknown; so is a suspect one
 // (85c_unverified) unless the config trusts suspects (package profile).
 //
+// The hot-outlet probe is heat-sunk by its pipe: at rest it reads low, and
+// only while water flows does it read the water's true temperature (the
+// outlet's internal pipe reaches the top of the dome, so a draw brings the
+// hottest water past it; the owner, 24 Nov 2026). For the estimate, the
+// tank adds a learned offset to it (SetOutletOffset, from the engine: a
+// draw's outlet peak less the probe's resting reading once settled): none
+// while water flows (Flow), ramping in after a draw over the time the
+// offset was measured across, and none before a draw has been seen. The
+// sweep's probes stay raw, since the draw attribution reads their peaks.
+//
 // It is pure: no I/O and no clock. The time of a sweep is tanktemp's.
 package tank
 
@@ -112,6 +122,40 @@ type Tank struct {
 	c   Config
 	by  map[string]ProbeConfig
 	est *estimate.Estimator
+
+	// The outlet probe's heat-sink correction (see the package doc).
+	offsetC float64       // learned; 0 for none
+	ramp    time.Duration // how long after a draw it applies in full
+	flowing bool          // a metered draw is running
+	ended   time.Time     // when the last draw ended; zero before one
+}
+
+// SetOutletOffset sets the outlet probe's heat-sink offset, in °C, and the
+// time after a draw over which it ramps in. An offset at or below 0 is none.
+func (t *Tank) SetOutletOffset(offsetC float64, ramp time.Duration) {
+	t.offsetC, t.ramp = math.Max(offsetC, 0), ramp
+}
+
+// Flow tells the tank whether a metered draw is running, and when the last
+// one ended.
+func (t *Tank) Flow(running bool, lastEnded time.Time) {
+	t.flowing, t.ended = running, lastEnded
+}
+
+// outletCorrection is what to add to the outlet probe at at: the offset,
+// scaled by how far after the last draw at is, through the ramp.
+func (t *Tank) outletCorrection(at time.Time) float64 {
+	if t.offsetC == 0 || t.flowing || t.ended.IsZero() {
+		return 0
+	}
+	since := at.Sub(t.ended)
+	if since <= 0 {
+		return 0
+	}
+	if t.ramp <= 0 || since >= t.ramp {
+		return t.offsetC
+	}
+	return t.offsetC * float64(since) / float64(t.ramp)
 }
 
 // New validates c and returns a Tank estimating with est.
@@ -157,6 +201,15 @@ func (t *Tank) Sweep(st tanktemp.State) (Sweep, error) {
 		}
 		pp = append(pp, profile.Probe{HeightMM: h, TempC: p.TempC, Role: p.Role, Suspect: p.Suspect})
 	}
+	// The profiles get the outlet corrected (sw.Probes keep the raw
+	// reading); the bulk energy below leaves the outlet out anyway.
+	if corr := t.outletCorrection(st.Timestamp); corr > 0 {
+		for k := range pp {
+			if pp[k].Role == profile.RoleOutlet && pp[k].TempC != nil {
+				pp[k].TempC = ptr(*pp[k].TempC + corr)
+			}
+		}
+	}
 	prof, err := profile.New(pp, profile.Options{TrustSuspect: t.c.TrustSuspect})
 	if err != nil {
 		return Sweep{}, fmt.Errorf("tank: %s: %w", st.DeviceID, err)
@@ -173,3 +226,5 @@ func (t *Tank) Sweep(st tanktemp.State) (Sweep, error) {
 	}
 	return sw, nil
 }
+
+func ptr(x float64) *float64 { return &x }

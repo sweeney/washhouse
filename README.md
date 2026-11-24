@@ -126,7 +126,7 @@ quantities are floats even when whole, counts integers, words strings.
 
 | Measurement | Tags | Time | Fields |
 |---|---|---|---|
-| `hot_water_tank` | `device_id` | the tank's `timestamp` | `state`, `heat_source` (strings), `stored_kwh`, `mean_c`, `top_c` (the decayed P5 draw peak, not P5 at rest), `hot_l`, `usable_l40`, `usable_l40_low`, `power_kw`, `ua_w_per_k`, `probes_ok` (probes washhouse uses: not tanktemp's `ok`, since a suspect 85 °C reading is left out), `probes_total` |
+| `hot_water_tank` | `device_id` | the tank's `timestamp` | `state`, `heat_source` (strings), `stored_kwh`, `mean_c`, `top_c` (from the outlet probe corrected for its heat sink, not its low reading at rest; WIRE.md, Tank), `hot_l`, `usable_l40`, `usable_l40_low`, `power_kw`, `ua_w_per_k`, `probes_ok` (probes washhouse uses: not tanktemp's `ok`, since a suspect 85 °C reading is left out), `probes_total` |
 | `hot_water_system` | | the state's `timestamp` | `stored_kwh`, `usable_l40`, `usable_l40_low`, `low_hot_water`, `boiler_hw`, `boiler_ch`, `ambient_c`, `drawing`, `continuous_flow`, `tanktemp_online` |
 | `hot_water_draw` | | the draw's `ended_at` | from `draw_ended`: `draw_id`, `kind`, `litres`, `duration_s`, `flow_l_min`; from `draw_balanced`, minutes later, into the same row: `energy_kwh`, `heat_balance_l`, `heat_balance_reliable`, `masked_by_reheat`, `reasons` (comma-separated), `outlet_peak_c`, `inlet_drop_c` |
 | `hot_water_draw_tank` | `device_id` | the draw's `ended_at` | from `draw_balanced`: `draw_id`, `share`, `litres` (both absent when withheld), `outlet_peak_c`, `inlet_drop_c` |

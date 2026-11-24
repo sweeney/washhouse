@@ -134,7 +134,7 @@ needs to spot one compares the payload.
 | `active_draw` | the running draw, or `null` (Draws, below). It is also the draw the meter has just ended whose `draw_ended` isn't out yet, so `active_draw` goes to `null` in the same publish that follows `draw_ended`, never before. If the next draw starts first (a tap turned on again about a minute after the last litre), `active_draw` goes straight to the next draw, never `null`, and the last one's `draw_ended` comes in the same batch, just after the next one's `draw_started`: key on `draw_id`. Across a washhouse restart, a draw can leave `active_draw` with no `draw_ended` (Delivery). A consumer that starts mid-draw (events aren't retained) recovers it from here, with the same `draw_id` and `started_at` as its `draw_started` |
 | `meter` | the hot-water meter as washhouse last heard it. `counting_since` and `count` are tanktemp's (its current counting run), `null` before the first meter message; `timestamp` is the latest message's whose clock was synced, `null` before one (an unsynced message still counts, but its time can't be trusted). `litres_since_start` is metered since **washhouse** started, across tanktemp's runs, so it resets when washhouse restarts. `continuous_flow` is the running creep (Continuous flow, below), or `null` |
 | `tanktemp` | tanktemp's latest status: its `timestamp`, `online` (`false` after its SHUTDOWN or last will) and `version`. `timestamp` and `version` are `null` before a status, and after the last will (which has neither). `online` is `null` before a status |
-| `tanks` | a summary of each cylinder, in config order, from its tank message (below): `device_id`, `state`, `heat_source`, `stored_kwh`, `usable_l40` (that tank alone, as if it were the only one: for display, not for the system's water) and `top_c` |
+| `tanks` | a summary of each cylinder, in config order, from its tank message (below): `device_id`, `state`, `heat_source`, `stored_kwh`, `usable_l40` (that tank's; the system's is these summed) and `top_c` |
 
 ## Tank
 
@@ -167,7 +167,7 @@ needs to spot one compares the payload.
 | `sweep_at` | the tanktemp sweep the estimate comes from, `null` before the first. **Judge the estimate's freshness on this**, not on `timestamp` |
 | `state` | `heating`, `drawing`, `cooling` or `unknown` (below) |
 | `heat_source` | while `heating`: `hw` or `ch`, which programmer channel is on that the gain is put down to. Inferred from the gain observed with the channel on, never assumed from the channel alone (a CH-only call heated the right tank while its coil valve was dead, and heats neither since). `null` when not heating, or when the source can't be told |
-| `stored_kwh`, `mean_c`, `top_c`, `hot_l`, `usable_l40`, `usable_l40_low` | the estimate from the probe profile: heat stored above the cold feed, the mean and top temperature, litres at 40 °C or above, and this tank's usable litres of 40 °C mix as if it were alone (see State's `usable_l40` for the system). `null` before a sweep, when its sweep can't be estimated (fewer than two good probes), and once it is older than a configured limit (2 min) |
+| `stored_kwh`, `mean_c`, `top_c`, `hot_l`, `usable_l40`, `usable_l40_low` | the estimate from the probe profile: heat stored above the cold feed, the mean and top temperature, litres at 40 °C or above, and this tank's usable litres of 40 °C mix (the drawable water runs to the top of the dome: the outlet has an internal pipe up to it). The hot-outlet probe reads low at rest, heat-sunk by its pipe, and true only while water flows; the profile carries it higher by an offset washhouse learns from a draw that follows an hour's rest (the outlet's peak during the draw less its reading just before), ramping in over the hour after each draw, none while water flows, and none until such a draw has been seen since washhouse started. `null` before a sweep, when its sweep can't be estimated (fewer than two good probes), and once it is older than a configured limit (2 min) |
 | `power_kw` | the smoothed rate of change of stored heat: positive heating, negative losing. `null` while unknown: at start until enough sweeps have come, and during a draw until about 17 min after the meter ends it (the inlet plume and the probes settle for 12 min, then the power needs fresh sweeps). The first value after a big draw can still carry some of that settling (−1.33 kW, 18 min after a 50 L shower, on a tank losing about 0.4 kW), so treat a value soon after a draw as indicative; the settle time is provisional |
 | `ua_w_per_k` | the tank's heat loss per kelvin against the boiler room, fitted online over quiet stretches; the configured prior until the fit has evidence. It is measured against the room, but most of the right tank's loss is its secondary loop shedding heat into the house's pipework, so it reads well above a bare cylinder's |
 | `probes_ok`, `probes_total` | probes the latest sweep's profile used, of those tanktemp reported. A suspect 85 °C reading is not used unless the config trusts suspects. `null` before a sweep |
@@ -468,6 +468,12 @@ or vanished.
 
 ## Changes
 
+- **2026-11-24, v1, a change of value (not of shape):** the drawable water
+  runs to the top of the dome, not the outlet fitting (the outlet has an
+  internal pipe up to it; the owner), and the outlet probe's resting
+  under-read is corrected by a learned offset (Tank). Each tank's
+  `top_c`, `usable_l40` and `usable_l40_low` rise; `stored_kwh`,
+  `mean_c` and `hot_l` can too once an offset is learned.
 - **2026-11-24, v1, a change of value (not of shape):** the state's
   `usable_l40` and `usable_l40_low` are the tanks' own summed, no longer a
   draw simulated at a fixed outlet split. A 40 L run with one tank at

@@ -794,3 +794,81 @@ func TestFixtureRetainedStateFacts(t *testing.T) {
 		}
 	}
 }
+
+// The outlet probe is heat-sunk and reads low at rest (the owner; on 24
+// Nov 2026 a 40 L run showed the right's 6 °C low and the left's 8.5). The
+// engine learns each tank's offset from a draw that followed a rest (no
+// draw for the thermal config's UAQuiet, since the engine started too) and
+// had a flow (two litres or more): the
+// outlet's peak during the draw less its raw reading just before it, the
+// same water flowing and at rest. From the draw's end the tank's profile
+// carries the outlet that much higher, ramping in over UAQuiet as the pipe
+// cools; the sweep's raw readings stay as they are.
+func TestFixtureOutletOffsetIsLearned(t *testing.T) {
+	cfg := planConfig()
+	quiet := cfg.Thermal.UAQuiet
+	learned := 0
+	for _, name := range allFixtures {
+		r := replayOne(t, name)
+		for di, d := range r.ended {
+			var b *DrawBalanced
+			for i := range r.balanced {
+				if r.balanced[i].DrawID == d.DrawID {
+					b = &r.balanced[i]
+				}
+			}
+			prev := r.start
+			if di > 0 {
+				prev = r.ended[di-1].EndedAt
+			}
+			// A one-litre draw has no flow, and barely warms the outlet: it
+			// teaches nothing (creep-evening's single litres would give 0.06 °C).
+			if b == nil || b.MaskedByReheat || d.FlowLPerMin == nil || d.StartedAt.Sub(prev) < quiet {
+				continue
+			}
+			next := r.states[len(r.states)-1].At
+			if di+1 < len(r.ended) {
+				next = r.ended[di+1].StartedAt
+			}
+			for _, ta := range b.Tanks {
+				ss := r.sweeps[ta.DeviceID]
+				var before *sweepSnap
+				for i := range ss {
+					if ss[i].at.Before(d.StartedAt) {
+						before = &ss[i]
+					}
+				}
+				pre, ok := before.raw["top"]
+				if ta.OutletPeakC == nil || !ok || *ta.OutletPeakC <= pre {
+					continue
+				}
+				offset := *ta.OutletPeakC - pre
+				learned++
+				t.Logf("%s %s: outlet %.2f °C at rest, peak %.2f °C: offset %.2f °C", name, ta.DeviceID, pre, *ta.OutletPeakC, offset)
+				checked := 0
+				for _, sn := range ss {
+					top, ok := sn.raw["top"]
+					// From the balance on (the offset is learned then), until the next draw.
+					// Sweep times are whole seconds; the next draw's first litre
+					// can close within the second of the sweep that sees it.
+					if !ok || sn.at.Before(d.EndedAt.Add(10*time.Minute)) || !sn.at.Before(next.Truncate(time.Second)) {
+						continue
+					}
+					frac := min(1, float64(sn.at.Sub(d.EndedAt))/float64(quiet))
+					if got, want := sn.profile["top"], top+offset*frac; got < want-1e-6 {
+						t.Errorf("%s %s +%v: profile at the outlet %.2f °C, want at least %.2f (raw %.2f + %.0f%% of %.2f)",
+							name, ta.DeviceID, r.ofs(sn.at), got, want, top, frac*100, offset)
+						break
+					}
+					checked++
+				}
+				if checked == 0 {
+					t.Errorf("%s %s: no sweep after the balance to check", name, ta.DeviceID)
+				}
+			}
+		}
+	}
+	if learned == 0 {
+		t.Error("no fixture taught an offset")
+	}
+}

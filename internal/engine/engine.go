@@ -53,6 +53,13 @@ type Engine struct {
 	tanktemp TanktempStatus
 
 	recent []DrawRecord // a ring of the last RecentDraws, oldest first
+
+	// The outlet probes' heat-sink offset (learnOutlet): when the last
+	// draw ended, and each draw's outlet readings at rest just before it
+	// started, by draw then tank, kept only for a draw that followed a
+	// rest.
+	lastDrawEnd time.Time
+	outletRest  map[string]map[string]float64
 }
 
 // tankSlot is one cylinder's model and its latest sweep.
@@ -206,10 +213,15 @@ func (e *Engine) meterEvents(out []Event, ev []meter.Event) []Event {
 		case meter.EventDrawStarted, meter.EventDrawUpdated:
 			out = append(out, Event{Type: EventType(x.Type), At: x.At, Draw: activeOf(*x.Draw)})
 			if x.Type == meter.EventDrawStarted {
+				e.drawStarts(*x.Draw)
 				out = e.thermalEvents(out, e.thermal.MeteredDraw(x.At, true))
 			}
 			out = e.attributions(out, e.attr.Meter(x))
 		case meter.EventDrawEnded:
+			e.lastDrawEnd = x.Draw.End
+			for _, slot := range e.tanks {
+				slot.model.Flow(false, x.Draw.End)
+			}
 			e.held = append(e.held, *x.Draw)
 			out = e.thermalEvents(out, e.thermal.MeteredDraw(x.At, false))
 			out = e.attributions(out, e.attr.Meter(x))
@@ -260,6 +272,7 @@ func (e *Engine) attributions(out []Event, rs []draw.Result) []Event {
 			e.recent = append(e.recent, DrawRecord{DrawEnded: d})
 			out = append(out, Event{Type: EventDrawEnded, At: e.now, Ended: &d})
 		case draw.StageBalanced:
+			e.learnOutlet(r)
 			b := balancedOf(r.Attribution)
 			for i := range e.recent {
 				if e.recent[i].DrawID == b.DrawID {
@@ -271,6 +284,49 @@ func (e *Engine) attributions(out []Event, rs []draw.Result) []Event {
 		}
 	}
 	return out
+}
+
+// drawStarts tells each tank water is flowing, and keeps the outlets'
+// resting readings if the draw followed a rest: no draw for the thermal
+// config's UAQuiet, counted from no earlier than the engine's start (what
+// came before is unknown).
+func (e *Engine) drawStarts(d meter.Draw) {
+	since := e.started
+	if e.lastDrawEnd.After(since) {
+		since = e.lastDrawEnd
+	}
+	rested := d.Start.Sub(since) >= e.cfg.Thermal.UAQuiet
+	for id, slot := range e.tanks {
+		slot.model.Flow(true, e.lastDrawEnd)
+		if o := slot.last.Outlet(); rested && slot.ok && o != nil {
+			if e.outletRest == nil {
+				e.outletRest = map[string]map[string]float64{}
+			}
+			if e.outletRest[d.ID] == nil {
+				e.outletRest[d.ID] = map[string]float64{}
+			}
+			e.outletRest[d.ID][id] = *o
+		}
+	}
+}
+
+// learnOutlet sets each tank's outlet offset from a balanced draw that
+// followed a rest: its outlet peak during the draw less its reading at
+// rest just before, the same water flowing and still. Not from a draw a
+// reheat masked (the coil, not the pipe, moves the outlet then), nor from
+// a one-litre draw (no flow, and the outlet barely warms).
+func (e *Engine) learnOutlet(r draw.Result) {
+	rest := e.outletRest[r.Draw.ID]
+	delete(e.outletRest, r.Draw.ID)
+	if rest == nil || r.Attribution.MaskedByReheat || r.Draw.FlowLPerMin == nil {
+		return
+	}
+	for _, ta := range r.Attribution.Tanks {
+		pre, ok := rest[ta.DeviceID]
+		if slot := e.tanks[ta.DeviceID]; ok && slot != nil && ta.OutletPeakC != nil && *ta.OutletPeakC > pre {
+			slot.model.SetOutletOffset(*ta.OutletPeakC-pre, e.cfg.Thermal.UAQuiet)
+		}
+	}
 }
 
 func endedOf(d meter.Draw) DrawEnded {
