@@ -1,0 +1,1246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>washhouse Config</title>
+<!--
+  The behaviour config explorer: load washhouse's behaviour document (the
+  washhouse namespace on the config service, or testdata's sample) and see,
+  for every key, what it means, its unit, what values washhouse accepts,
+  and what it affects; with every problem washhouse would refuse the
+  document for (a missing or unknown key, a duplicate, a value out of
+  range, a rule between keys broken) and every value that differs from the
+  sample. Read-only: it never writes the namespace.
+
+  Open it from disk (tools/config.html); paste the namespace's JSON or open
+  a file. The definitions are in the "defs" block below; a Go test
+  (internal/behaviour) fails if a key washhouse decodes has none, or one is
+  described that washhouse doesn't decode, and if the "sample" block isn't
+  testdata/behaviour.example.json.
+-->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<script src="config-core.js"></script>
+<style>
+:root {
+  --bg: #eef1f3; --panel: #ffffff; --ink: #172026; --muted: #5a6872; --line: #d6dde2; --grid: #e7ecef;
+  --copper: #b2602a; --ok: #2f7d5b; --warn: #b7791f; --bad: #c0392b; --info: #2b6cb0; --glass: #f7f9fa;
+  --f-display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", sans-serif;
+  --f-body: "Public Sans", "Helvetica Neue", Arial, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root {
+  --bg: #0f1418; --panel: #172026; --ink: #e4eaee; --muted: #8e9ca6; --line: #2a353d; --grid: #1f292f;
+  --copper: #e08a4f; --ok: #5cc196; --warn: #e2b04a; --bad: #ef6f61; --info: #6fb0ec; --glass: #1c262d;
+  color-scheme: dark } }
+* { box-sizing: border-box }
+[hidden] { display: none !important }
+html, body { margin: 0 }
+body { background: var(--bg); color: var(--ink); font: 14px/1.5 var(--f-body); padding: 20px 16px 40px }
+.wrap { max-width: 1240px; margin: 0 auto; display: grid; gap: 16px }
+h1 { font: 700 26px/1.1 var(--f-display); margin: 0 }
+h1 small { font: 500 12px var(--f-mono); color: var(--muted); letter-spacing: .05em; text-transform: uppercase; margin-left: 8px }
+h2 { font: 700 17px/1.2 var(--f-display); margin: 0 0 4px }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; min-width: 0 }
+.muted { color: var(--muted) }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center }
+button, .file { font: 600 13px var(--f-body); border: 1.5px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 7px; padding: 6px 12px; cursor: pointer }
+button.primary { background: var(--copper); border-color: var(--copper); color: #fff }
+button:focus-visible, input:focus-visible, textarea:focus-visible, .file:focus-within { outline: 2px solid var(--info); outline-offset: 2px }
+.file input { display: none }
+textarea { width: 100%; min-height: 120px; font: 12px/1.45 var(--f-mono); color: var(--ink); background: var(--glass); border: 1.5px solid var(--line); border-radius: 8px; padding: 8px }
+input[type=search] { font: 13px var(--f-body); color: var(--ink); background: var(--panel); border: 1.5px solid var(--line); border-radius: 7px; padding: 6px 10px; min-width: 220px; flex: 1 }
+.pill { display: inline-flex; align-items: center; gap: 6px; font: 600 12px var(--f-mono); letter-spacing: .04em; text-transform: uppercase; padding: 4px 10px; border-radius: 999px; border: 1.5px solid currentColor; white-space: nowrap }
+.pill.ok { color: var(--ok) } .pill.bad { color: var(--bad) } .pill.warn { color: var(--warn) } .pill.info { color: var(--info) }
+.chip { font: 500 11px var(--f-mono); padding: 1px 7px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap }
+.chip.bad { color: var(--bad); border-color: var(--bad) } .chip.warn { color: var(--warn); border-color: var(--warn) } .chip.info { color: var(--info); border-color: var(--info) }
+.filters { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px }
+.filters label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer }
+section.group { display: grid; gap: 0 }
+.key { display: grid; grid-template-columns: minmax(0, 300px) minmax(0, 220px) minmax(0, 1fr); gap: 4px 16px; padding: 10px 2px; border-top: 1px solid var(--grid) }
+.key:first-of-type { border-top: 0 }
+.key .path { font: 500 13px var(--f-mono); overflow-wrap: anywhere }
+.key .path .depth { color: var(--muted) }
+.key .val { font: 13px var(--f-mono); overflow-wrap: anywhere }
+.key .val .was { color: var(--muted); font-size: 12px; display: block }
+.key .about { font-size: 13px }
+.key .about .rules { color: var(--muted); font-size: 12.5px; margin-top: 2px }
+.key .meta { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px }
+.key.problem { background: color-mix(in srgb, var(--bad) 6%, transparent) }
+.key.differs .val { color: var(--info) }
+.key .problems { color: var(--bad); font-size: 12.5px; margin-top: 2px }
+.cross li { color: var(--bad) }
+.foot { color: var(--muted); font-size: 12px }
+@media (max-width: 860px) { .key { grid-template-columns: minmax(0, 1fr) } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="row" style="justify-content:space-between">
+    <h1>washhouse config<small id="src">sample</small></h1>
+    <span class="pill info" id="verdict">—</span>
+  </header>
+
+  <section class="panel">
+    <h2>Load a behaviour document</h2>
+    <p class="muted" style="margin:0 0 10px">The <code>washhouse</code> namespace on the config service, or the sample (<code>testdata/behaviour.example.json</code>, the plan's values). Paste its JSON, or open a file. Nothing is sent anywhere.</p>
+    <div class="row" style="margin-bottom:8px">
+      <button class="primary" type="button" id="useSample">The sample</button>
+      <label class="file">Open a file…<input type="file" id="file" accept=".json,application/json"></label>
+      <button type="button" id="usePaste">Check what's pasted</button>
+    </div>
+    <textarea id="paste" spellcheck="false" placeholder='Paste the namespace&apos;s JSON here, e.g. from config.swee.net/api/v1/config/washhouse'></textarea>
+    <p class="problems" id="parseError" style="color:var(--bad)" hidden></p>
+  </section>
+
+  <section class="panel" id="summary" hidden>
+    <div class="row" style="justify-content:space-between">
+      <h2 id="sumTitle">—</h2>
+      <span class="muted" id="sumCounts"></span>
+    </div>
+    <ul class="cross" id="cross"></ul>
+    <div class="row" style="margin-top:8px">
+      <input type="search" id="q" placeholder="Find a key or a word in its meaning (e.g. draw, heating, °C)" aria-label="Find">
+      <div class="filters">
+        <label><input type="checkbox" id="onlyProblems"> only problems</label>
+        <label><input type="checkbox" id="onlyDiffers"> only what differs from the sample</label>
+        <label><input type="checkbox" id="showContainers"> show sections</label>
+      </div>
+    </div>
+  </section>
+
+  <div id="groups"></div>
+  <p class="foot">The definitions follow washhouse's decoder (<code>internal/behaviour</code>) and the validators of the packages each key feeds; a test fails when they drift. washhouse refuses the whole document for any problem shown here: a reload keeps the running config, a restart won't start. Changing a key marked "restart" needs washhouse restarted; every other change takes effect on a reload (SIGHUP).</p>
+</div>
+
+<script type="application/json" id="defs">
+{
+ "ambient_topic": {
+  "meaning": "The MQTT topic (message channel) of the boiler-room temperature sensor. washhouse compares the cylinders with this room temperature to learn how fast they lose heat; leave it empty and that heat-loss figure is never learnt.",
+  "type": "string",
+  "unit": "",
+  "rules": "Required string (may be \"\", meaning no room sensor). Checked when the service starts (ingest.Sources.Validate, not by behaviour.Load): no MQTT wildcard (# or +), must not start or end with \"/\", and must not match a topic washhouse itself publishes. A reload that changes it is refused whole: \"the subscriptions are made at start, so restart washhouse to apply it\".",
+  "check": {
+   "pattern": "^$|^[^/#+]([^#+]*[^/#+])?$"
+  },
+  "affects": "thermal (heat-loss fit), ingest (subscriptions)",
+  "restart": true
+ },
+ "boiler_heartbeat": {
+  "meaning": "How often the boiler sensor normally reports in, used when a report doesn't say its own interval. washhouse uses it to tell when the boiler's hot-water (HW) and heating (CH) on/off status has gone out of date.",
+  "type": "duration",
+  "unit": "",
+  "rules": "Required Go duration string; must be above 0 (engine: \"BoilerHeartbeat must be above 0\").",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "engine (boiler HW/CH status)",
+  "restart": false
+ },
+ "boiler_missed_heartbeats": {
+  "meaning": "How many boiler-sensor intervals can pass with no word before the boiler's HW and CH status is treated as unknown. 2.5 means two and a half missed reports.",
+  "type": "number",
+  "unit": "count",
+  "rules": "Required number; must be finite and above 1 (strictly).",
+  "check": {
+   "min": 1,
+   "exclusiveMin": true
+  },
+  "affects": "engine (boiler HW/CH status)",
+  "restart": false
+ },
+ "cold_c": {
+  "meaning": "The temperature of the cold mains water feeding the cylinders. Stored heat and usable hot water are counted above this, and each litre drawn is costed from it, so a wrong value skews every litre and kWh figure.",
+  "type": "number",
+  "unit": "°C",
+  "rules": "Required number, finite. Must be below estimate.mix_c (\"mix must be above cold\") and below draw.thermocline_c (\"ThermoclineC must be above ColdC\"). Shared by the estimate and the draw attribution (the engine checks both get the same value).",
+  "check": {},
+  "affects": "estimate (usable water), draw attribution",
+  "restart": false
+ },
+ "draw": {
+  "meaning": "Settings for working out how much of each draw came from each cylinder, and how hot it was, from the probes.",
+  "type": "object",
+  "unit": "",
+  "rules": "Required object with exactly share_settle, balance_settle, max_sweep_gap, min_reliable_litres, gain_kwh, thermocline_c, gaps.",
+  "check": {},
+  "affects": "draw attribution",
+  "restart": false
+ },
+ "draw.balance_settle": {
+  "meaning": "The 'balance' reading is each cylinder's first reading at least this long after a draw's last litre. Each cylinder's share, the energy used and the heat-balance volume come from it, once the probes have finished falling.",
+  "type": "duration",
+  "unit": "",
+  "rules": "Required Go duration; at least draw.share_settle (so also above 0).",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "draw attribution",
+  "restart": false
+ },
+ "draw.gain_kwh": {
+  "meaning": "A cylinder whose stored energy rose by more than this across a draw was being reheated, which hides its share of the draw, so the fallback split is used. 0 means any rise counts.",
+  "type": "number",
+  "unit": "kWh",
+  "rules": "Required; finite and >= 0.",
+  "check": {
+   "min": 0
+  },
+  "affects": "draw attribution",
+  "restart": false
+ },
+ "draw.gaps": {
+  "meaning": "Pairs of probes with a wide space between them where the boundary between hot and cold water can hide unseen. A draw starting with that boundary in a gap is flagged.",
+  "type": "array",
+  "unit": "",
+  "rules": "Required list with at least one pair; no pair listed twice. Every tank must have probes at both positions of every pair.",
+  "check": {
+   "minItems": 1
+  },
+  "affects": "draw attribution (thermocline check)",
+  "restart": false
+ },
+ "draw.gaps[]": {
+  "meaning": "One pair of probes far apart, between which a draw's cold layer can hide (the thermocline blind spot).",
+  "type": "object",
+  "unit": "",
+  "rules": "Both positions required, different, and on every cylinder.",
+  "check": {},
+  "affects": "draw attribution",
+  "restart": false
+ },
+ "draw.gaps[].high": {
+  "meaning": "The upper probe of the gap, by position name (such as middle).",
+  "type": "string",
+  "unit": "",
+  "rules": "Required; non-empty; different from low; every tank must have a probe at this position, and where both heights are above 0 it must be above the low probe.",
+  "check": {
+   "pattern": "^[\\s\\S]+$"
+  },
+  "affects": "draw attribution (thermocline check)",
+  "restart": false
+ },
+ "draw.gaps[].low": {
+  "meaning": "The lower probe of the gap, by position name (such as lower).",
+  "type": "string",
+  "unit": "",
+  "rules": "Required; non-empty; different from high; every tank must have a probe at this position, and where both heights are above 0 it must be below the high probe.",
+  "check": {
+   "pattern": "^[\\s\\S]+$"
+  },
+  "affects": "draw attribution (thermocline check)",
+  "restart": false
+ },
+ "draw.max_sweep_gap": {
+  "meaning": "A cylinder whose reading before the draw is older than this, or whose settled readings arrive more than this late, counts as not reporting for that draw. It also limits how long a draw waits for its readings.",
+  "type": "duration",
+  "unit": "",
+  "rules": "Required Go duration; must be > 0.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "draw attribution",
+  "restart": false
+ },
+ "draw.min_reliable_litres": {
+  "meaning": "Draws smaller than this are too small for a reliable heat-balance volume (on small draws it reads several times too high), so it is flagged as unreliable.",
+  "type": "number",
+  "unit": "L",
+  "rules": "Required; finite and > 0.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "draw attribution",
+  "restart": false
+ },
+ "draw.share_settle": {
+  "meaning": "The 'share' reading is each cylinder's first reading at least this long after a draw's last litre, past the probes' lag. Outlet peaks and inlet drops come from it, and the draw's end is reported once every cylinder has one.",
+  "type": "duration",
+  "unit": "",
+  "rules": "Required Go duration; must be > 0; at most draw.balance_settle.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "draw attribution",
+  "restart": false
+ },
+ "draw.thermocline_c": {
+  "meaning": "The temperature that marks the boundary between hot and cold water for the gap check: if a gap's lower probe reads below this and its upper probe at or above it, the boundary is hidden in the gap.",
+  "type": "number",
+  "unit": "°C",
+  "rules": "Required; finite; strictly above cold_c.",
+  "check": {},
+  "affects": "draw attribution (thermocline check)",
+  "restart": false
+ },
+ "estimate": {
+  "meaning": "Thresholds for turning tank temperatures into 'how much hot water is left'.",
+  "type": "object",
+  "unit": "",
+  "rules": "Required object with exactly min_c, mix_c, low_factor, draw_from_mm, draw_to_mm.",
+  "check": {},
+  "affects": "estimate (usable water)",
+  "restart": false
+ },
+ "estimate.draw_from_mm": {
+  "meaning": "The height of the cold inlet. Water below it can't be pushed out by incoming cold water, so it isn't counted as drawable.",
+  "type": "number",
+  "unit": "mm",
+  "rules": "Required; finite; at or above 0; below estimate.draw_to_mm.",
+  "check": {
+   "min": 0
+  },
+  "affects": "estimate (usable water)",
+  "restart": false
+ },
+ "estimate.draw_to_mm": {
+  "meaning": "The top of the drawable band: the height the hot outlet takes water from (the top of the water, as the outlet's internal pipe reaches the dome).",
+  "type": "number",
+  "unit": "mm",
+  "rules": "Required; finite; strictly above estimate.draw_from_mm.",
+  "check": {},
+  "affects": "estimate (usable water)",
+  "restart": false
+ },
+ "estimate.low_factor": {
+  "meaning": "A safety discount on usable water, because in real cylinders hot and cold water mix as you draw (about 0.85). The 'plan on this' figure, usable_l40_low, is the usable figure times this.",
+  "type": "number",
+  "unit": "fraction",
+  "rules": "Required; finite; greater than 0 and at most 1: \"low factor must be in (0, 1]\".",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true,
+   "max": 1
+  },
+  "affects": "estimate (usable water), low_hot_water",
+  "restart": false
+ },
+ "estimate.min_c": {
+  "meaning": "Water at or above this temperature counts as usable hot water; cooler water is not counted.",
+  "type": "number",
+  "unit": "°C",
+  "rules": "Required; finite; at least estimate.mix_c (\"cooler water can't make mixed water\").",
+  "check": {},
+  "affects": "estimate (usable water)",
+  "restart": false
+ },
+ "estimate.mix_c": {
+  "meaning": "The temperature hot water is mixed down to at the tap (40 °C). Usable litres are quoted as litres of water at this temperature, after mixing hot with cold.",
+  "type": "number",
+  "unit": "°C",
+  "rules": "Required; finite; above cold_c (strictly) and at most estimate.min_c.",
+  "check": {},
+  "affects": "estimate (usable water)",
+  "restart": false
+ },
+ "freshness": {
+  "meaning": "Rules for refusing out-of-date or wrongly dated messages, and for keeping time moving when tanktemp goes quiet.",
+  "type": "object",
+  "unit": "",
+  "rules": "Required object with exactly the keys ahead, stale, silence (unknown keys refused).",
+  "check": {},
+  "affects": "ingest (freshness)",
+  "restart": false
+ },
+ "freshness.ahead": {
+  "meaning": "A message dated more than this far in the future, by washhouse's own clock, is refused as wrongly timestamped.",
+  "type": "duration",
+  "unit": "",
+  "rules": "Required Go duration; must be more than 0.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "ingest (freshness)",
+  "restart": false
+ },
+ "freshness.silence": {
+  "meaning": "If no dated message arrives from tanktemp for this long, washhouse starts moving its notion of time forward by its own clock, so things like 'stale' and 'draw ended' still happen.",
+  "type": "duration",
+  "unit": "",
+  "rules": "Required Go duration; must be more than 0.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "ingest (freshness), service event time",
+  "restart": false
+ },
+ "freshness.stale": {
+  "meaning": "A stored (retained) tank reading older than this when washhouse receives it is refused as too old to use. It should be longer than tanktemp's sweep interval plus how long a sweep takes, or a current reading gets refused.",
+  "type": "duration",
+  "unit": "",
+  "rules": "Required Go duration; must be more than 0. (The advice to exceed tanktemp's sweep interval plus a sweep's length is documented, not enforced.)",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "ingest (freshness)",
+  "restart": false
+ },
+ "heat_capacity_kwh_per_litre_k": {
+  "meaning": "How much energy it takes to warm one litre of water by one degree, in kWh (about 4.186/3600). It turns temperatures into stored energy; it is a physical constant and should not normally change.",
+  "type": "number",
+  "unit": "kWh/(L·K)",
+  "rules": "Required number; must be finite and above 0. Shared by the estimate and the draw attribution.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "estimate (usable water), draw attribution, thermal (power)",
+  "restart": false
+ },
+ "low_hot_water_l": {
+  "meaning": "The level, in litres of 40 °C water you can plan on (usable_l40_low), below which washhouse raises its 'low hot water' flag for the whole system.",
+  "type": "number",
+  "unit": "L",
+  "rules": "Required number; finite and at or above 0.",
+  "check": {
+   "min": 0
+  },
+  "affects": "low_hot_water",
+  "restart": false
+ },
+ "low_hot_water_margin_l": {
+  "meaning": "Once the low-hot-water flag is up, it only clears when usable water rises above low_hot_water_l plus this margin, so the flag doesn't flicker on and off when the level hovers near the line.",
+  "type": "number",
+  "unit": "L",
+  "rules": "Required number; finite and at or above 0.",
+  "check": {
+   "min": 0
+  },
+  "affects": "low_hot_water",
+  "restart": false
+ },
+ "meter": {
+  "meaning": "How the hot-water meter's litre pulses are turned into draws, and how draws are classed as bath, shower or tap.",
+  "type": "object",
+  "unit": "",
+  "rules": "Required object with exactly device_id, draw_end, bath_flow_l_per_min, bath_min_litres, shower_min_litres, shower_min_duration, shower_min_flow_l_per_min, creep_closed, creep_window, stale_after, update_every.",
+  "check": {},
+  "affects": "meter (draws)",
+  "restart": false
+ },
+ "meter.bath_flow_l_per_min": {
+  "meaning": "A draw flowing at least this fast (median rate), and at least bath_min_litres in size, is classed as a bath.",
+  "type": "number",
+  "unit": "L/min",
+  "rules": "Required; finite and > 0.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "meter (draws: kind)",
+  "restart": false
+ },
+ "meter.bath_min_litres": {
+  "meaning": "The smallest draw that can count as a bath, so a short full-flow hot tap stays a tap.",
+  "type": "number",
+  "unit": "L",
+  "rules": "Required; finite and > 0.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "meter (draws: kind)",
+  "restart": false
+ },
+ "meter.creep_closed": {
+  "meaning": "A lone litre whose meter switch stayed closed at least this long, with no draw running and no other litre following within draw_end, is 'creep' (a slow seep), not a draw.",
+  "type": "duration",
+  "unit": "",
+  "rules": "Required Go duration; must be > 0.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "meter (creep / continuous flow)",
+  "restart": false
+ },
+ "meter.creep_window": {
+  "meaning": "Two creep litres within this time start a 'continuous flow' alert, which ends this long after the last creep litre.",
+  "type": "duration",
+  "unit": "",
+  "rules": "Required Go duration; must be > 0.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "meter (creep / continuous flow)",
+  "restart": false
+ },
+ "meter.device_id": {
+  "meaning": "The water meter's name as tanktemp reports it. Messages from any other meter are ignored, never added in.",
+  "type": "string",
+  "unit": "",
+  "rules": "Required; must be non-empty (\"DeviceID: must be set\"). No character pattern is enforced.",
+  "check": {
+   "pattern": "^[\\s\\S]+$"
+  },
+  "affects": "meter (draws)",
+  "restart": false
+ },
+ "meter.draw_end": {
+  "meaning": "A draw is over this long after its last litre; a litre arriving sooner than this after the previous one is part of the same draw.",
+  "type": "duration",
+  "unit": "",
+  "rules": "Required Go duration; must be > 0.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "meter (draws)",
+  "restart": false
+ },
+ "meter.shower_min_duration": {
+  "meaning": "A draw must last at least this long to count as a shower.",
+  "type": "duration",
+  "unit": "",
+  "rules": "Required Go duration; must be > 0.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "meter (draws: kind)",
+  "restart": false
+ },
+ "meter.shower_min_flow_l_per_min": {
+  "meaning": "A draw must flow at least this fast (median rate) to count as a shower, so a tap left dribbling doesn't read as a long shower.",
+  "type": "number",
+  "unit": "L/min",
+  "rules": "Required; finite and > 0.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "meter (draws: kind)",
+  "restart": false
+ },
+ "meter.shower_min_litres": {
+  "meaning": "A draw that isn't a bath needs at least this many litres (plus the shower duration and flow minimums) to count as a shower.",
+  "type": "number",
+  "unit": "L",
+  "rules": "Required; finite and > 0.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "meter (draws: kind)",
+  "restart": false
+ },
+ "meter.stale_after": {
+  "meaning": "The meter counts as out of date once its last message is older than this.",
+  "type": "duration",
+  "unit": "",
+  "rules": "Required Go duration; must be > 0.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "meter (health)",
+  "restart": false
+ },
+ "meter.update_every": {
+  "meaning": "While a draw is running, washhouse sends a progress update (draw_updated) at most this often. 0 turns progress updates off.",
+  "type": "duration",
+  "unit": "",
+  "rules": "Required Go duration; must be >= 0 (0 is off).",
+  "check": {
+   "min": 0
+  },
+  "affects": "meter (draws: draw_updated events)",
+  "restart": false
+ },
+ "recent_draws": {
+  "meaning": "How many finished draws (baths, showers, taps) washhouse keeps in its recent-draws list.",
+  "type": "integer",
+  "unit": "count",
+  "rules": "Required integer (a fraction such as 50.5 is refused by the decoder); at least 1.",
+  "check": {
+   "min": 1
+  },
+  "affects": "engine / HTTP API (recent draws list)",
+  "restart": false
+ },
+ "tanks": {
+  "meaning": "The list of hot-water cylinders, one entry each. Their order is the order every report lists them in.",
+  "type": "array",
+  "unit": "",
+  "rules": "Required list with at least one tank; each device_id appears once. tanks[].outlet_split must sum to 1 across all tanks. Every tank must have probes at both positions of every draw.gaps pair.",
+  "check": {
+   "minItems": 1
+  },
+  "affects": "estimate (usable water), thermal (heating/cooling), draw attribution",
+  "restart": false
+ },
+ "tanks[]": {
+  "meaning": "One cylinder: its id, its probes, and the priors washhouse starts from.",
+  "type": "object",
+  "unit": "",
+  "rules": "Every key below is required.",
+  "check": {},
+  "affects": "every part",
+  "restart": false
+ },
+ "tanks[].device_id": {
+  "meaning": "The cylinder's name as tanktemp reports it (for example hot_water_cylinder_left). It also becomes part of the topic washhouse publishes that tank's state on.",
+  "type": "string",
+  "unit": "",
+  "rules": "Required; non-empty; must match [a-z0-9_-]+ (it is a topic segment); unique across tanks.",
+  "check": {
+   "pattern": "^[a-z0-9_-]+$"
+  },
+  "affects": "estimate, thermal, draw attribution, publish (tank topic)",
+  "restart": false
+ },
+ "tanks[].outlet_split": {
+  "meaning": "The usual share of every litre drawn that comes from this cylinder through the shared outlet pipe. It is only a fallback, used to apportion a draw when reheating hides the measured shares; usable water does not use it.",
+  "type": "number",
+  "unit": "fraction",
+  "rules": "Required; each in [0, 1]; all tanks' values must sum to 1 (to within 1e-9).",
+  "check": {
+   "min": 0,
+   "max": 1
+  },
+  "affects": "draw attribution",
+  "restart": false
+ },
+ "tanks[].prior_hours": {
+  "meaning": "How much weight, in hours of evidence, to give prior_ua_w_per_k before real measurements arrive. Larger means the starting guess resists early measurements longer.",
+  "type": "number",
+  "unit": "h",
+  "rules": "Required; finite and above 0.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "thermal (heat-loss fit)",
+  "restart": false
+ },
+ "tanks[].prior_outlet_underread": {
+  "meaning": "How far low the hot-outlet probe reads at rest (its pipe sinks heat), as a fraction of the way from the water temperature down to the cold feed; e.g. 0.16. It is used to correct the outlet reading until washhouse has learnt its own value from draws.",
+  "type": "number",
+  "unit": "fraction",
+  "rules": "Required; in [0, 1): at least 0 and strictly below 1. 0 means no correction.",
+  "check": {
+   "min": 0,
+   "max": 1,
+   "exclusiveMax": true
+  },
+  "affects": "estimate (usable water), tank (outlet correction)",
+  "restart": false
+ },
+ "tanks[].prior_ua_w_per_k": {
+  "meaning": "A starting guess for how fast this cylinder loses heat: watts lost per degree it is warmer than the boiler room. washhouse refines it from overnight cooling.",
+  "type": "number",
+  "unit": "W/K",
+  "rules": "Required; finite and above 0.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "thermal (heat-loss fit)",
+  "restart": false
+ },
+ "tanks[].probes": {
+  "meaning": "The temperature probes on this cylinder: where each sits and what fitting it is on.",
+  "type": "array",
+  "unit": "",
+  "rules": "Required list with at least one probe; positions unique within the tank. Every position tanktemp reports must be configured, or that sweep is refused at run time.",
+  "check": {
+   "minItems": 1
+  },
+  "affects": "tank (profile), estimate, thermal, draw attribution",
+  "restart": false
+ },
+ "tanks[].probes[]": {
+  "meaning": "One probe on a cylinder: where tanktemp says it is, what fitting it sits on, and its height.",
+  "type": "object",
+  "unit": "",
+  "rules": "Every key below is required; positions are unique within a cylinder.",
+  "check": {},
+  "affects": "tank (profile)",
+  "restart": false
+ },
+ "tanks[].probes[].height_mm": {
+  "meaning": "The probe's height above the floor, used only when tanktemp's message doesn't give one. 0 means no fallback.",
+  "type": "number",
+  "unit": "mm",
+  "rules": "Required; finite and at or above 0. For each draw.gaps pair, where both heights are above 0, the low probe must be strictly below the high one.",
+  "check": {
+   "min": 0
+  },
+  "affects": "tank (profile), draw attribution (gap check)",
+  "restart": false
+ },
+ "tanks[].probes[].position": {
+  "meaning": "The probe's name as tanktemp reports it (such as bottom, lower, middle, upper, top). It ties the config to tanktemp's readings.",
+  "type": "string",
+  "unit": "",
+  "rules": "Required; non-empty; unique within the tank. Any string is accepted by the validator; it must match tanktemp's position names to be used.",
+  "check": {
+   "pattern": "^[\\s\\S]+$"
+  },
+  "affects": "tank (profile), draw attribution (gaps)",
+  "restart": false
+ },
+ "tanks[].probes[].role": {
+  "meaning": "What the probe sits on: inlet (cold feed), outlet (hot outlet, reads low at rest), return (a secondary hot-water return loop), or bulk (an ordinary tank probe). Roles decide how each reading is treated.",
+  "type": "string",
+  "unit": "",
+  "rules": "Required; one of \"bulk\", \"inlet\", \"outlet\", \"return\", or \"\" (empty means bulk).",
+  "check": {
+   "enum": [
+    "bulk",
+    "inlet",
+    "outlet",
+    "return",
+    ""
+   ]
+  },
+  "affects": "tank (profile), thermal (power), estimate",
+  "restart": false
+ },
+ "tanks[].trust_suspect": {
+  "meaning": "Whether to use probe readings tanktemp has flagged as suspect (for example the 85 °C value a probe gives when it hasn't really read). false treats them as unknown.",
+  "type": "boolean",
+  "unit": "",
+  "rules": "Required boolean.",
+  "check": {},
+  "affects": "tank (profile)",
+  "restart": false
+ },
+ "thermal": {
+  "meaning": "Thresholds for judging whether each cylinder is heating, being drawn from or cooling, what is heating it, and how fast it loses heat.",
+  "type": "object",
+  "unit": "",
+  "rules": "Required object with exactly power_window, power_min_span, power_min_samples, power_exclude, min_probes, stale_after, heating_on_kw, heating_off_kw, heating_on_after_draw_kw, draw_settle, power_settle, source_hold, ua_tau, ua_quiet, ua_min_delta_k, ambient_stale.",
+  "check": {},
+  "affects": "thermal (heating/cooling)",
+  "restart": false
+ },
+ "thermal.ambient_stale": {
+  "meaning": "A boiler-room temperature reading older than this is not used for the heat-loss fit.",
+  "type": "duration",
+  "unit": "",
+  "rules": "Required Go duration; must be above 0.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "thermal (heat-loss fit)",
+  "restart": false
+ },
+ "thermal.draw_settle": {
+  "meaning": "A cylinder still counts as 'drawing' for this long after a metered draw ends, because the probes lag behind the meter.",
+  "type": "duration",
+  "unit": "",
+  "rules": "Required Go duration; must be above 0; at most thermal.power_settle.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "thermal (heating/cooling)",
+  "restart": false
+ },
+ "thermal.heating_off_kw": {
+  "meaning": "Once heating, a cylinder stops counting as heating when its power (rate of energy gain) falls below this. Being lower than heating_on_kw stops the state flickering.",
+  "type": "number",
+  "unit": "kW",
+  "rules": "Required; finite; at most thermal.heating_on_kw. No lower bound is enforced.",
+  "check": {},
+  "affects": "thermal (heating/cooling)",
+  "restart": false
+ },
+ "thermal.heating_on_after_draw_kw": {
+  "meaning": "Shortly after a draw, while normal power readings are still settling, a cylinder is called heating early if HW is on and its energy rises at least this fast. It must be high enough not to mistake a draw settling for a reheat.",
+  "type": "number",
+  "unit": "kW",
+  "rules": "Required; finite; at least thermal.heating_on_kw.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "thermal (heating/cooling)",
+  "restart": false
+ },
+ "thermal.heating_on_kw": {
+  "meaning": "A cylinder starts counting as heating when its power (rate of energy gain) reaches this.",
+  "type": "number",
+  "unit": "kW",
+  "rules": "Required; finite and above 0. heating_off_kw ≤ this ≤ heating_on_after_draw_kw.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "thermal (heating/cooling)",
+  "restart": false
+ },
+ "thermal.min_probes": {
+  "meaning": "With fewer usable probes than this (after leaving out power_exclude roles), a cylinder's state is unknown.",
+  "type": "integer",
+  "unit": "count",
+  "rules": "Required integer; at least 2 (\"a profile needs two\").",
+  "check": {
+   "min": 2
+  },
+  "affects": "thermal (heating/cooling)",
+  "restart": false
+ },
+ "thermal.power_exclude": {
+  "meaning": "Probe roles left out when measuring a cylinder's power and heat loss, normally inlet and outlet, because they react to water flow more than to heat. Empty uses all probes.",
+  "type": "array",
+  "unit": "",
+  "rules": "Required list (may be empty); each element one of \"bulk\", \"inlet\", \"outlet\", \"return\", \"\".",
+  "check": {
+   "enum": [
+    "bulk",
+    "inlet",
+    "outlet",
+    "return",
+    ""
+   ]
+  },
+  "affects": "thermal (power, heat-loss fit)",
+  "restart": false
+ },
+ "thermal.power_min_samples": {
+  "meaning": "The fewest tank readings in the power window needed before power is known.",
+  "type": "integer",
+  "unit": "count",
+  "rules": "Required integer; at least 3.",
+  "check": {
+   "min": 3
+  },
+  "affects": "thermal (power)",
+  "restart": false
+ },
+ "thermal.power_min_span": {
+  "meaning": "The readings in the power window must span at least this long before power is known.",
+  "type": "duration",
+  "unit": "",
+  "rules": "Required Go duration; above 0; at most thermal.power_window.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "thermal (power)",
+  "restart": false
+ },
+ "thermal.power_settle": {
+  "meaning": "After a draw ends, power is unknown and heating isn't judged for this long, while the cold water that came in settles and the probes catch up.",
+  "type": "duration",
+  "unit": "",
+  "rules": "Required Go duration; above 0; at least thermal.draw_settle.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "thermal (power, heating/cooling)",
+  "restart": false
+ },
+ "thermal.power_window": {
+  "meaning": "Power is the trend (best-fit slope) of the cylinder's stored energy over this much of the latest readings.",
+  "type": "duration",
+  "unit": "",
+  "rules": "Required Go duration; above 0; at least thermal.power_min_span; at most thermal.ua_quiet.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "thermal (power)",
+  "restart": false
+ },
+ "thermal.source_hold": {
+  "meaning": "With both boiler channels off, a cylinder still heating is credited to whichever channel (HW or CH) switched off within this long, since the coil keeps giving heat for a while.",
+  "type": "duration",
+  "unit": "",
+  "rules": "Required Go duration; must be above 0.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "thermal (heat source)",
+  "restart": false
+ },
+ "thermal.stale_after": {
+  "meaning": "With no reading from a cylinder for longer than this, its state is unknown.",
+  "type": "duration",
+  "unit": "",
+  "rules": "Required Go duration; must be above 0.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "thermal (heating/cooling)",
+  "restart": false
+ },
+ "thermal.ua_min_delta_k": {
+  "meaning": "The heat-loss fit ignores a cylinder that is less than this many degrees warmer than the boiler room, since the loss is too small to measure.",
+  "type": "number",
+  "unit": "K",
+  "rules": "Required; finite and above 0.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "thermal (heat-loss fit)",
+  "restart": false
+ },
+ "thermal.ua_quiet": {
+  "meaning": "The heat-loss fit only takes evidence once a cylinder has been cooling undisturbed for this long.",
+  "type": "duration",
+  "unit": "",
+  "rules": "Required Go duration; above 0; at least thermal.power_window.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "thermal (heat-loss fit)",
+  "restart": false
+ },
+ "thermal.ua_tau": {
+  "meaning": "How quickly the heat-loss fit forgets old evidence (a time constant): with a day, one night after a change carries about three quarters of the new figure.",
+  "type": "duration",
+  "unit": "",
+  "rules": "Required Go duration; must be above 0.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "thermal (heat-loss fit)",
+  "restart": false
+ },
+ "vessel": {
+  "meaning": "The shape and size of one cylinder (all the house's cylinders are the same model). washhouse slices it into thin layers to work out how many litres sit at each height.",
+  "type": "object",
+  "unit": "",
+  "rules": "Required object with exactly capacity_l, inner_diameter_mm, dome_depth_mm, z0_mm, slice_mm.",
+  "check": {},
+  "affects": "estimate (usable water)",
+  "restart": false
+ },
+ "vessel.capacity_l": {
+  "meaning": "How much water one cylinder holds when full, its rated capacity. The straight part of the cylinder's length is worked out from this.",
+  "type": "number",
+  "unit": "L",
+  "rules": "Required; finite and above 0, and more than the two domes hold together (else \"capacity is no more than the two domes hold\").",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "estimate (usable water)",
+  "restart": false
+ },
+ "vessel.dome_depth_mm": {
+  "meaning": "How deep the curved (dome) ends at the top and bottom of the cylinder are.",
+  "type": "number",
+  "unit": "mm",
+  "rules": "Required; finite and above 0; no deeper than a hemisphere (at most inner_diameter_mm / 2); and a whole number of slice_mm slices (to within 1e-9).",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "estimate (usable water)",
+  "restart": false
+ },
+ "vessel.inner_diameter_mm": {
+  "meaning": "The inside width of the cylinder's straight wall.",
+  "type": "number",
+  "unit": "mm",
+  "rules": "Required; finite and above 0. Must be at least twice dome_depth_mm.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "estimate (usable water)",
+  "restart": false
+ },
+ "vessel.slice_mm": {
+  "meaning": "The thickness of each thin layer the cylinder is cut into for the sums. Smaller is finer but slower; 1 mm matches tanktemp's own calculation.",
+  "type": "number",
+  "unit": "mm",
+  "rules": "Required; finite and above 0. dome_depth_mm must be a whole number of these.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "estimate (usable water)",
+  "restart": false
+ },
+ "vessel.z0_mm": {
+  "meaning": "The height above the floor of the inside bottom of the cylinder (the lowest point of the bottom dome). Probe heights and the drawable band are measured from the same floor.",
+  "type": "number",
+  "unit": "mm",
+  "rules": "Required; finite and at or above 0.",
+  "check": {
+   "min": 0
+  },
+  "affects": "estimate (usable water)",
+  "restart": false
+ }
+}
+</script>
+<script type="application/json" id="sample">
+{
+  "ambient_topic": "zigbee2mqtt/climate_groundfloor_boiler-room",
+  "low_hot_water_l": 60,
+  "low_hot_water_margin_l": 10,
+  "boiler_heartbeat": "15m",
+  "boiler_missed_heartbeats": 2.5,
+  "recent_draws": 50,
+  "freshness": {
+    "ahead": "90s",
+    "stale": "90s",
+    "silence": "2m"
+  },
+  "cold_c": 10,
+  "heat_capacity_kwh_per_litre_k": 0.0011627777777777778,
+  "vessel": {
+    "capacity_l": 200,
+    "inner_diameter_mm": 460,
+    "dome_depth_mm": 60,
+    "z0_mm": 150,
+    "slice_mm": 1
+  },
+  "estimate": {
+    "min_c": 40,
+    "mix_c": 40,
+    "low_factor": 0.85,
+    "draw_from_mm": 281,
+    "draw_to_mm": 1412
+  },
+  "tanks": [
+    {
+      "device_id": "hot_water_cylinder_left",
+      "trust_suspect": false,
+      "prior_outlet_underread": 0.16,
+      "prior_ua_w_per_k": 4,
+      "prior_hours": 1,
+      "outlet_split": 0.11,
+      "probes": [
+        {
+          "position": "bottom",
+          "role": "inlet",
+          "height_mm": 265
+        },
+        {
+          "position": "lower",
+          "role": "bulk",
+          "height_mm": 400
+        },
+        {
+          "position": "middle",
+          "role": "bulk",
+          "height_mm": 825
+        },
+        {
+          "position": "upper",
+          "role": "bulk",
+          "height_mm": 945
+        },
+        {
+          "position": "top",
+          "role": "outlet",
+          "height_mm": 1215
+        }
+      ]
+    },
+    {
+      "device_id": "hot_water_cylinder_right",
+      "trust_suspect": false,
+      "prior_outlet_underread": 0.17,
+      "prior_ua_w_per_k": 17,
+      "prior_hours": 1,
+      "outlet_split": 0.89,
+      "probes": [
+        {
+          "position": "bottom",
+          "role": "inlet",
+          "height_mm": 265
+        },
+        {
+          "position": "lower",
+          "role": "bulk",
+          "height_mm": 400
+        },
+        {
+          "position": "middle",
+          "role": "bulk",
+          "height_mm": 825
+        },
+        {
+          "position": "upper",
+          "role": "return",
+          "height_mm": 945
+        },
+        {
+          "position": "top",
+          "role": "outlet",
+          "height_mm": 1215
+        }
+      ]
+    }
+  ],
+  "meter": {
+    "device_id": "hot_water_meter",
+    "draw_end": "60s",
+    "bath_flow_l_per_min": 10,
+    "bath_min_litres": 20,
+    "shower_min_litres": 20,
+    "shower_min_duration": "180s",
+    "shower_min_flow_l_per_min": 3,
+    "creep_closed": "10s",
+    "creep_window": "2700s",
+    "stale_after": "90s",
+    "update_every": "60s"
+  },
+  "thermal": {
+    "power_window": "10m",
+    "power_min_span": "5m",
+    "power_min_samples": 3,
+    "power_exclude": [
+      "inlet",
+      "outlet"
+    ],
+    "min_probes": 2,
+    "stale_after": "2m",
+    "heating_on_kw": 0.5,
+    "heating_off_kw": 0.3,
+    "heating_on_after_draw_kw": 1.5,
+    "draw_settle": "60s",
+    "power_settle": "12m",
+    "source_hold": "30m",
+    "ua_tau": "24h",
+    "ua_quiet": "60m",
+    "ua_min_delta_k": 5,
+    "ambient_stale": "40m"
+  },
+  "draw": {
+    "share_settle": "60s",
+    "balance_settle": "8m",
+    "max_sweep_gap": "2m",
+    "min_reliable_litres": 20,
+    "gain_kwh": 0.05,
+    "thermocline_c": 40,
+    "gaps": [
+      {
+        "low": "lower",
+        "high": "middle"
+      }
+    ]
+  }
+}
+</script>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const DEFS = JSON.parse($("defs").textContent);
+const SAMPLE = JSON.parse($("sample").textContent);
+const SECTIONS = {
+  "": "The house", vessel: "The cylinders' shape", estimate: "Usable hot water", tanks: "Each cylinder and its probes",
+  thermal: "Heating, cooling and heat loss", meter: "The hot-water meter and draws", draw: "Who supplied a draw",
+  freshness: "How old an input may be",
+};
+let current = null, currentText = "", isSample = true;
+
+function load(text, label, sample) {
+  $("parseError").hidden = true;
+  let doc;
+  try { doc = JSON.parse(text); }
+  catch (e) { $("parseError").textContent = "That isn't JSON: " + e.message; $("parseError").hidden = false; return; }
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) { $("parseError").textContent = "A behaviour document is a JSON object."; $("parseError").hidden = false; return; }
+  current = doc; currentText = text; isSample = sample;
+  $("src").textContent = label;
+  render();
+}
+
+function valueHTML(v) {
+  if (v === undefined) return `<span class="muted">(missing)</span>`;
+  if (Array.isArray(v) && v.every(x => typeof x !== "object")) return esc(JSON.stringify(v));
+  if (v && typeof v === "object") return `<span class="muted">${Array.isArray(v) ? v.length + " item" + (v.length === 1 ? "" : "s") : "section"}</span>`;
+  return esc(JSON.stringify(v));
+}
+function shownSample(r) {
+  const s = ConfigCore.flatten(SAMPLE).find(f => ConfigCore.generic(f.path) === r.generic);
+  return s ? JSON.stringify(s.value) : "";
+}
+
+function render() {
+  const res = ConfigCore.review(current, DEFS, isSample ? null : SAMPLE);
+  const dups = ConfigCore.findDuplicateKeys(currentText);
+  const problems = res.problems + dups.length;
+  $("summary").hidden = false;
+  const v = $("verdict");
+  v.className = "pill " + (problems ? "bad" : "ok");
+  v.textContent = problems ? `${problems} problem${problems === 1 ? "" : "s"}: washhouse would refuse it` : "washhouse would accept it";
+  $("sumTitle").textContent = problems ? "washhouse would refuse this document" : "Every key is known, present and in range";
+  const keys = res.rows.filter(r => r.def && !["object", "array"].includes(r.def.type)).length;
+  $("sumCounts").textContent = `${keys} settings` + (isSample ? "" : ` · ${res.differs} differ from the sample`);
+  $("cross").innerHTML = [...res.cross.map(c => `<li>${esc(c.problem)} <span class="muted">(${c.keys.map(esc).join(", ")})</span></li>`),
+    ...dups.map(d => `<li>the key ${esc(JSON.stringify(d))} appears twice in one section (washhouse ignores case when it checks)</li>`)].join("");
+  $("onlyDiffers").disabled = isSample;
+  draw(res);
+}
+
+function draw(res) {
+  const q = $("q").value.trim().toLowerCase(), onlyP = $("onlyProblems").checked, onlyD = $("onlyDiffers").checked && !isSample;
+  const showC = $("showContainers").checked;
+  const groups = new Map();
+  for (const r of res.rows) {
+    const containerish = r.def && ["object", "array"].includes(r.def.type) && !(Array.isArray(r.value) && r.value.every(x => typeof x !== "object"));
+    if (containerish && !showC && !r.problems.length) continue;
+    if (onlyP && !r.problems.length) continue;
+    if (onlyD && !r.differs) continue;
+    const text = (r.path + " " + (r.def ? [r.def.meaning, r.def.rules, r.def.unit, r.def.affects].join(" ") : "")).toLowerCase();
+    if (q && !text.includes(q)) continue;
+    const top = r.path.includes(".") || r.path.includes("[") ? r.path.split(/[.[]/)[0] : (r.def && r.def.type === "object" ? r.path : "");
+    if (!groups.has(top)) groups.set(top, []);
+    groups.get(top).push(r);
+  }
+  const order = ["", "vessel", "estimate", "tanks", "thermal", "meter", "draw", "freshness"];
+  const keysInOrder = [...groups.keys()].sort((a, b) => (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99) || a.localeCompare(b));
+  $("groups").innerHTML = keysInOrder.map(g => `<section class="panel group" aria-label="${esc(SECTIONS[g] || g)}">
+      <h2>${esc(SECTIONS[g] || g)}${g ? ` <span class="muted" style="font:500 12px var(--f-mono)">${esc(g)}</span>` : ""}</h2>
+      ${groups.get(g).map(rowHTML).join("")}</section>`).join("") ||
+    `<p class="panel muted">Nothing matches.</p>`;
+}
+
+function rowHTML(r) {
+  const d = r.def;
+  const parts = r.path.split(".");
+  const last = parts.pop();
+  const path = `<span class="depth">${esc(parts.length ? parts.join(".") + "." : "")}</span>${esc(last)}`;
+  const meta = [];
+  if (d) {
+    meta.push(`<span class="chip">${esc(d.type)}${d.unit ? " · " + esc(d.unit) : ""}</span>`);
+    if (d.affects) meta.push(`<span class="chip">${esc(d.affects)}</span>`);
+    if (d.restart) meta.push(`<span class="chip warn" title="a reload can't apply it">restart</span>`);
+  }
+  if (r.differs) meta.push(`<span class="chip info">differs from the sample</span>`);
+  const was = r.differs ? `<span class="was">sample: ${esc(shownSample(r))}</span>` : "";
+  return `<div class="key${r.problems.length ? " problem" : ""}${r.differs ? " differs" : ""}">
+    <div class="path">${path}</div>
+    <div class="val">${valueHTML(r.value)}${was}</div>
+    <div class="about">${d ? esc(d.meaning) : "<b>Not a key washhouse knows.</b>"}
+      ${d && d.rules ? `<div class="rules">${esc(d.rules)}</div>` : ""}
+      ${r.problems.length ? `<div class="problems">${r.problems.map(esc).join("; ")}</div>` : ""}
+      <div class="meta">${meta.join("")}</div></div></div>`;
+}
+
+$("useSample").onclick = () => { $("paste").value = ""; load(JSON.stringify(SAMPLE, null, 2), "sample", true); };
+$("usePaste").onclick = () => load($("paste").value, "pasted", false);
+$("file").onchange = e => { const f = e.target.files[0]; if (!f) return; f.text().then(t => { $("paste").value = t; load(t, f.name, false); }); };
+for (const id of ["q", "onlyProblems", "onlyDiffers", "showContainers"]) $(id).addEventListener("input", () => current && render());
+load(JSON.stringify(SAMPLE, null, 2), "sample", true);
+</script>
+</body>
+</html>

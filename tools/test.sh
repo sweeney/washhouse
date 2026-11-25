@@ -17,5 +17,8 @@ fi
 python3 fixture_draws.py --check
 ./record_test.sh
 ./smoke_sh_test.sh
+# The config explorer's logic, against its sample and definitions (the Go
+# side, internal/behaviour, holds the definitions to the decoder).
+node config_core_test.js
 shellcheck -S warning record.sh record_test.sh smoke.sh smoke_sh_test.sh test.sh
 echo "tools: all tests passed"
