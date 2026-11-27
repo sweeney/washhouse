@@ -1,11 +1,15 @@
 package behaviour
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"reflect"
 	"regexp"
 	"sort"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -97,5 +101,138 @@ func TestConfigExplorerMatchesTheDecoder(t *testing.T) {
 	}
 	if len(extra) > 0 {
 		t.Errorf("definitions in tools/config.html for keys washhouse doesn't decode: %v", extra)
+	}
+}
+
+// corpusCase is one line of testdata/configtool/cases.jsonl: an edit to
+// testdata/behaviour.example.json and whether washhouse accepts the
+// result. tools/config_core_test.js asserts the explorer gives the same
+// verdict on the same edits, so the page's rules can't drift from Load's.
+type corpusCase struct {
+	ID      string     `json:"id"`
+	OK      *bool      `json:"ok"`
+	Set     *corpusSet `json:"set"`
+	Delete  string     `json:"delete"`
+	Replace []string   `json:"replace"`
+}
+
+type corpusSet struct {
+	Path  string          `json:"path"`
+	Value json.RawMessage `json:"value"`
+}
+
+var corpusPathPart = regexp.MustCompile(`[^.\[\]]+|\[\d+\]`)
+
+// apply makes the case's document from the example's text.
+func (c corpusCase) apply(example []byte) ([]byte, error) {
+	switch {
+	case c.Replace != nil:
+		if len(c.Replace) != 2 || bytes.Count(example, []byte(c.Replace[0])) != 1 {
+			return nil, fmt.Errorf("replace needs [old, new] with old once in the example")
+		}
+		return bytes.Replace(example, []byte(c.Replace[0]), []byte(c.Replace[1]), 1), nil
+	case c.Set != nil || c.Delete != "":
+		dec := json.NewDecoder(bytes.NewReader(example))
+		dec.UseNumber()
+		var doc any
+		if err := dec.Decode(&doc); err != nil {
+			return nil, err
+		}
+		path := c.Delete
+		if c.Set != nil {
+			path = c.Set.Path
+		}
+		parts := corpusPathPart.FindAllString(path, -1)
+		var parent any = doc
+		for _, p := range parts[:len(parts)-1] {
+			parent = corpusStep(parent, p)
+			if parent == nil {
+				return nil, fmt.Errorf("no %s in the example", path)
+			}
+		}
+		last := parts[len(parts)-1]
+		var value any
+		if c.Set != nil {
+			d := json.NewDecoder(bytes.NewReader(c.Set.Value))
+			d.UseNumber()
+			if err := d.Decode(&value); err != nil {
+				return nil, err
+			}
+		}
+		switch p := parent.(type) {
+		case map[string]any:
+			if c.Set != nil {
+				p[last] = value
+			} else {
+				delete(p, last)
+			}
+		case []any:
+			i, err := strconv.Atoi(strings.Trim(last, "[]"))
+			if err != nil || i >= len(p) {
+				return nil, fmt.Errorf("no %s in the example", path)
+			}
+			if c.Set != nil {
+				p[i] = value
+			} else {
+				return nil, fmt.Errorf("delete a list element by setting its list")
+			}
+		}
+		return json.Marshal(doc)
+	}
+	return nil, fmt.Errorf("a case needs set, delete or replace")
+}
+
+func corpusStep(v any, part string) any {
+	if strings.HasPrefix(part, "[") {
+		l, _ := v.([]any)
+		i, err := strconv.Atoi(strings.Trim(part, "[]"))
+		if err != nil || i >= len(l) {
+			return nil
+		}
+		return l[i]
+	}
+	m, _ := v.(map[string]any)
+	return m[part]
+}
+
+func TestConfigExplorerCorpusIsLoadsVerdict(t *testing.T) {
+	example, err := os.ReadFile("../../testdata/behaviour.example.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.ReadFile("../../testdata/configtool/cases.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]bool{}
+	var ok, refused int
+	for n, line := range bytes.Split(bytes.TrimSpace(f), []byte("\n")) {
+		var c corpusCase
+		dec := json.NewDecoder(bytes.NewReader(line))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&c); err != nil || c.ID == "" || c.OK == nil {
+			t.Fatalf("cases.jsonl line %d: want {id, ok, set|delete|replace}: %v", n+1, err)
+		}
+		if ids[c.ID] {
+			t.Fatalf("cases.jsonl line %d: id %q twice", n+1, c.ID)
+		}
+		ids[c.ID] = true
+		doc, err := c.apply(example)
+		if err != nil {
+			t.Fatalf("cases.jsonl line %d (%s): %v", n+1, c.ID, err)
+		}
+		_, _, lerr := Load(bytes.NewReader(doc))
+		if got := lerr == nil; got != *c.OK {
+			t.Errorf("%s: cases.jsonl says ok=%v, Load says %v (%v)", c.ID, *c.OK, got, lerr)
+		}
+		if *c.OK {
+			ok++
+		} else {
+			refused++
+		}
+	}
+	// Both verdicts must be well represented, or the corpus proves little.
+	if ok < 100 || refused < 100 {
+		t.Errorf("cases.jsonl has %d accepted and %d refused; want 100 or more of each", ok, refused)
 	}
 }

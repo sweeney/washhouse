@@ -11,12 +11,18 @@
   const generic = path => path.replace(/\[\d+\]/g, "[]");
 
   // flatten lists every key of doc as {path, value}: objects and arrays
-  // themselves too (path "tanks", "tanks[0]"), then their members.
-  function flatten(doc) {
+  // themselves too (path "tanks", "tanks[0]"), then their members. Given
+  // defs, every element of a list whose elements are defined is listed,
+  // whatever it is (a null or a string where an object belongs is a
+  // problem to report, not to skip); without, only the object elements.
+  function flatten(doc, defs) {
     const out = [];
     const walk = (v, path) => {
       if (path) out.push({path, value: v});
-      if (Array.isArray(v)) v.forEach((x, i) => { if (x && typeof x === "object") walk(x, `${path}[${i}]`); });
+      if (Array.isArray(v)) {
+        const each = defs && defs[`${generic(path)}[]`];
+        v.forEach((x, i) => { if (each || (x && typeof x === "object")) walk(x, `${path}[${i}]`); });
+      }
       else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) walk(x, path ? `${path}.${k}` : k);
     };
     walk(doc, "");
@@ -76,6 +82,26 @@
   // The rules between keys the validators enforce (each also in its keys'
   // "rules" text). Each takes the document and returns a problem or null.
   const num = x => typeof x === "number" ? x : null;
+  const isObj = x => !!x && typeof x === "object" && !Array.isArray(x);
+  const tanksOf = d => (Array.isArray(d.tanks) ? d.tanks : []).map((t, i) => ({t, i, name: isObj(t) && typeof t.device_id === "string" ? t.device_id : `tanks[${i}]`})).filter(x => isObj(x.t));
+  const probesOf = t => (Array.isArray(t.probes) ? t.probes : []).filter(isObj);
+  const gapsOf = d => (Array.isArray(d.draw?.gaps) ? d.draw.gaps : []).filter(isObj);
+  const pos = x => typeof x === "number" && isFinite(x) && x > 0;
+  // The vessel's dome slices, as internal/vessel's domeSlices: a whole
+  // number of slices to within 1e-9, or null.
+  const domeSlices = v => {
+    const q = v.dome_depth_mm / v.slice_mm, n = Math.round(q);
+    return Math.abs(q - n) <= 1e-9 * Math.max(1, n) ? n : null;
+  };
+  // The litres in one dome, integrated slice by slice as internal/vessel's
+  // geometry does.
+  const domeLitres = v => {
+    const n = domeSlices(v), a = v.inner_diameter_mm / 2, h = v.dome_depth_mm;
+    const r = (a * a + h * h) / (2 * h);
+    let l = 0;
+    for (let i = 0; i < n; i++) { const y = (i + 0.5) * v.slice_mm; l += Math.PI * (2 * r * y - y * y) * v.slice_mm; }
+    return l / 1e6;
+  };
   const CROSS = [
     {keys: ["estimate.draw_from_mm", "estimate.draw_to_mm"], test: d => {
       const a = num(d.estimate?.draw_from_mm), b = num(d.estimate?.draw_to_mm);
@@ -119,18 +145,41 @@
     {keys: ["vessel.dome_depth_mm", "vessel.inner_diameter_mm"], test: d => {
       const h = num(d.vessel?.dome_depth_mm), di = num(d.vessel?.inner_diameter_mm);
       return h != null && di != null && h > di / 2 ? "dome_depth_mm must be at most half inner_diameter_mm" : null; }},
+    {keys: ["vessel.dome_depth_mm", "vessel.slice_mm"], test: d => {
+      const v = d.vessel;
+      return isObj(v) && pos(v.dome_depth_mm) && pos(v.slice_mm) && domeSlices(v) == null ? "dome_depth_mm must be a whole number of slice_mm slices" : null; }},
+    {keys: ["vessel.capacity_l", "vessel.inner_diameter_mm", "vessel.dome_depth_mm", "vessel.slice_mm"], test: d => {
+      const v = d.vessel;
+      if (!isObj(v) || ![v.capacity_l, v.inner_diameter_mm, v.dome_depth_mm, v.slice_mm].every(pos)) return null;
+      if (v.dome_depth_mm > v.inner_diameter_mm / 2 || domeSlices(v) == null || domeSlices(v) > 1e7) return null;
+      const two = 2 * domeLitres(v);
+      return !(v.capacity_l > two) ? `capacity_l must be more than the two domes hold (${+two.toFixed(1)} L)` : null; }},
     {keys: ["tanks[].probes[].position"], test: d => {
-      for (const t of Array.isArray(d.tanks) ? d.tanks : []) {
-        const ps = (Array.isArray(t?.probes) ? t.probes : []).map(p => p?.position);
+      for (const {t, name} of tanksOf(d)) {
+        const ps = probesOf(t).map(p => p.position);
         const dup = ps.find((x, i) => ps.indexOf(x) !== i);
-        if (dup !== undefined) return `probe position ${JSON.stringify(dup)} is used twice in ${t.device_id}`;
+        if (dup !== undefined) return `probe position ${JSON.stringify(dup)} is used twice in ${name}`;
       }
       return null; }},
+    {keys: ["draw.gaps[].low", "draw.gaps[].high"], test: d => {
+      const seen = gapsOf(d).map(g => JSON.stringify([g.low, g.high]));
+      const dup = seen.find((x, i) => seen.indexOf(x) !== i);
+      return dup ? `the gap pair ${JSON.parse(dup).map(x => JSON.stringify(x)).join("–")} is listed twice` : null; }},
     {keys: ["draw.gaps[].low", "draw.gaps[].high", "tanks[].probes[].position"], test: d => {
-      const gaps = Array.isArray(d.draw?.gaps) ? d.draw.gaps : [];
-      for (const g of gaps) for (const t of Array.isArray(d.tanks) ? d.tanks : []) {
-        const ps = (Array.isArray(t?.probes) ? t.probes : []).map(p => p?.position);
-        for (const pos of [g?.low, g?.high]) if (typeof pos === "string" && !ps.includes(pos)) return `draw.gaps names position ${JSON.stringify(pos)}, which ${t.device_id} has no probe at`;
+      for (const g of gapsOf(d)) for (const {t, name} of tanksOf(d)) {
+        const ps = probesOf(t).map(p => p.position);
+        for (const p of [g.low, g.high]) if (typeof p === "string" && !ps.includes(p)) return `draw.gaps names position ${JSON.stringify(p)}, which ${name} has no probe at`;
+      }
+      return null; }},
+    {keys: ["draw.gaps[].low", "draw.gaps[].high", "tanks[].probes[].height_mm"], test: d => {
+      // As internal/engine: where both heights are given (above 0), the
+      // gap's low probe must be strictly below its high one.
+      for (const g of gapsOf(d)) for (const {t, name} of tanksOf(d)) {
+        const at = p => probesOf(t).find(x => x.position === p);
+        const lo = at(g.low), hi = at(g.high);
+        if (lo && hi && pos(lo.height_mm) && pos(hi.height_mm) && !(lo.height_mm < hi.height_mm)) {
+          return `in ${name}, the gap's low probe ${JSON.stringify(g.low)} (${lo.height_mm} mm) must be below ${JSON.stringify(g.high)} (${hi.height_mm} mm)`;
+        }
       }
       return null; }},
   ];
@@ -139,11 +188,12 @@
   // given): one row per key path, plus missing and unknown keys.
   function review(doc, defs, sample) {
     const rows = [];
-    const flat = flatten(doc);
+    const flat = flatten(doc, defs);
     const have = new Set(flat.map(f => f.path));
     // Compared by exact path, so each tank is set against the same tank of
     // the sample, not whichever tank came last.
-    const sampleFlat = sample ? new Map(flatten(sample).map(f => [f.path, f.value])) : null;
+    const sampleFlat = sample ? new Map(flatten(sample, defs).map(f => [f.path, f.value])) : null;
+    const valueAt = new Map(flat.map(f => [f.path, f.value]));
     for (const f of flat) {
       const g = generic(f.path);
       const def = defs[g];
@@ -161,7 +211,9 @@
     for (const g of Object.keys(defs)) {
       const parts = g.split(".");
       const key = parts.pop(), parent = parts.join(".");
-      const parents = parent === "" ? [""] : [...have].filter(p => generic(p) === parent);
+      // (Only under a parent that is an object: a null or a string where
+      // one belongs is reported as that, not as every key it lacks.)
+      const parents = parent === "" ? [""] : [...have].filter(p => generic(p) === parent && isObj(valueAt.get(p)));
       for (const p of parents) {
         const path = p ? `${p}.${key}` : key;
         if (!have.has(path) && !key.endsWith("[]")) rows.push({path, generic: g, value: undefined, def: defs[g], problems: ["missing: every key is required"], differs: false, missing: true});
@@ -175,31 +227,44 @@
     return {rows, cross, problems: rows.filter(r => r.problems.length).length + cross.length, differs: rows.filter(r => r.differs).length};
   }
 
-  // findDuplicateKeys finds keys repeated in one object, ignoring case,
-  // in the raw text (JSON.parse keeps only the last; washhouse refuses them).
-  function findDuplicateKeys(text) {
-    const dups = [];
-    const stack = [];
-    // Every string is consumed whole (so a brace inside one is no brace);
-    // it is a key only when a colon follows.
-    const re = /"((?:[^"\\]|\\.)*)"(\s*:)?|[{}[\]]/g;
+  // scanRaw walks the raw text, which JSON.parse loses detail of, and
+  // finds what washhouse's decoder refuses there: keys repeated in one
+  // object ignoring case (JSON.parse keeps only the last), and a whole
+  // number written with a fraction or exponent (7.0, 1e2) where defs says
+  // integer (Go refuses those for an int). Text that isn't JSON gives
+  // whatever was found before the fault; JSON.parse reports the fault.
+  function scanRaw(text, defs) {
+    const dups = [], integers = [];
+    const stack = []; // {keys: Set|null, path, i, key}
+    const re = /"((?:[^"\\]|\\.)*)"(\s*:)?|-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?|true|false|null|[{}[\],]/g;
+    const here = () => {
+      const f = stack[stack.length - 1];
+      if (!f) return "";
+      return f.keys ? (f.path ? `${f.path}.${f.key}` : f.key) : `${f.path}[${f.i}]`;
+    };
     let m;
     while ((m = re.exec(text))) {
-      const t = m[0];
-      if (t[0] === '"' && !m[2]) continue; // a string value
-      if (t === "{") stack.push(new Set());
-      else if (t === "[") stack.push(null);
-      else if (t === "}" || t === "]") stack.pop();
-      else {
-        const set = stack[stack.length - 1];
-        if (!set) continue;
+      const t = m[0], f = stack[stack.length - 1];
+      if (t === "{" || t === "[") { stack.push({keys: t === "{" ? new Set() : null, path: here(), i: 0, key: ""}); continue; }
+      if (t === "}" || t === "]") { stack.pop(); continue; }
+      if (t === ",") { if (f && !f.keys) f.i++; continue; }
+      if (t[0] === '"' && m[2]) {
+        if (!f || !f.keys) continue;
         const k = m[1].toLowerCase();
-        if (set.has(k)) dups.push(m[1]); else set.add(k);
+        if (f.keys.has(k)) dups.push(m[1]); else f.keys.add(k);
+        f.key = m[1];
+        continue;
+      }
+      if (/^-?\d/.test(t) && /[.eE]/.test(t)) {
+        const p = here(), def = defs && defs[generic(p)];
+        if (def && def.type === "integer") integers.push({path: p, literal: t});
       }
     }
-    return dups;
+    return {dups, integers};
   }
+  // findDuplicateKeys is scanRaw's repeated keys.
+  const findDuplicateKeys = text => scanRaw(text).dups;
 
-  const api = {generic, flatten, seconds, fmtSeconds, check, review, findDuplicateKeys, CROSS};
+  const api = {generic, flatten, seconds, fmtSeconds, check, review, scanRaw, findDuplicateKeys, CROSS};
   if (typeof module === "object" && module.exports) module.exports = api; else root.ConfigCore = api;
 })(typeof window !== "undefined" ? window : globalThis);

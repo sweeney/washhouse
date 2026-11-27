@@ -652,7 +652,7 @@ section.group { display: grid; gap: 0 }
   "meaning": "The temperature probes on this cylinder: where each sits and what fitting it is on.",
   "type": "array",
   "unit": "",
-  "rules": "Required list with at least one probe; positions unique within the tank. Every position tanktemp reports must be configured, or that sweep is refused at run time.",
+  "rules": "Required list with at least one probe; positions unique within the tank. Every position tanktemp reports must be configured, or that tank's sweeps are refused at run time: so when a probe is added, change this list before or with tanktemp's own config, never after.",
   "check": {
    "minItems": 1
   },
@@ -669,7 +669,7 @@ section.group { display: grid; gap: 0 }
   "restart": false
  },
  "tanks[].probes[].height_mm": {
-  "meaning": "The probe's height above the floor, used only when tanktemp's message doesn't give one. 0 means no fallback.",
+  "meaning": "The probe's height above the floor the cylinder stands on (the same zero as vessel.z0_mm), used only when tanktemp's message doesn't give one. 0 means no fallback.",
   "type": "number",
   "unit": "mm",
   "rules": "Required; finite and at or above 0. For each draw.gaps pair, where both heights are above 0, the low probe must be strictly below the high one.",
@@ -1176,8 +1176,8 @@ function shownSample(r) {
 
 function render() {
   const res = ConfigCore.review(current, DEFS, isSample ? null : SAMPLE);
-  const dups = ConfigCore.findDuplicateKeys(currentText);
-  const problems = res.problems + dups.length;
+  const raw = ConfigCore.scanRaw(currentText, DEFS), dups = raw.dups, ints = raw.integers;
+  const problems = res.problems + dups.length + ints.length;
   $("summary").hidden = false;
   const v = $("verdict");
   v.className = "pill " + (problems ? "bad" : "ok");
@@ -1186,7 +1186,8 @@ function render() {
   const keys = res.rows.filter(r => r.def && !["object", "array"].includes(r.def.type)).length;
   $("sumCounts").textContent = `${keys} settings` + (isSample ? "" : ` · ${res.differs} differ from the sample`);
   $("cross").innerHTML = [...res.cross.map(c => `<li>${esc(c.problem)} <span class="muted">(${c.keys.map(esc).join(", ")})</span></li>`),
-    ...dups.map(d => `<li>the key ${esc(JSON.stringify(d))} appears twice in one section (washhouse ignores case when it checks)</li>`)].join("");
+    ...dups.map(d => `<li>the key ${esc(JSON.stringify(d))} appears twice in one section (washhouse ignores case when it checks)</li>`),
+    ...ints.map(x => `<li>${esc(x.path)} is written ${esc(x.literal)}: a whole number must be written without a fraction or exponent</li>`)].join("");
   $("onlyDiffers").disabled = isSample;
   draw(res);
 }

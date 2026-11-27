@@ -95,6 +95,68 @@ test("durations parse as Go's", () => {
   assert.equal(C.seconds("90s"), 90); assert.equal(C.seconds("1h30m"), 5400); assert.equal(C.seconds("2700s"), 2700);
   assert.equal(C.seconds("15"), null); assert.equal(C.seconds("1d"), null);
 });
+// The corpus: edits to the example, each with washhouse's own verdict
+// (internal/behaviour's TestConfigExplorerCorpusIsLoadsVerdict holds it to
+// Load). The page must give the same verdict on every one.
+test("the page agrees with washhouse on every case in the corpus", () => {
+  const root = path.join(__dirname, "..");
+  const example = fs.readFileSync(path.join(root, "testdata/behaviour.example.json"), "utf8");
+  const lines = fs.readFileSync(path.join(root, "testdata/configtool/cases.jsonl"), "utf8").trim().split("\n");
+  const wrong = [];
+  for (const line of lines) {
+    const c = JSON.parse(line);
+    let text;
+    if (c.replace) text = example.replace(c.replace[0], c.replace[1]);
+    else {
+      const doc = JSON.parse(example);
+      const parts = (c.set ? c.set.path : c.delete).match(/[^.[\]]+|\[\d+\]/g).map(p => p[0] === "[" ? +p.slice(1, -1) : p);
+      const parent = parts.slice(0, -1).reduce((o, p) => o[p], doc);
+      if (c.set) parent[parts.at(-1)] = c.set.value; else delete parent[parts.at(-1)];
+      text = JSON.stringify(doc, null, 2);
+    }
+    let ok;
+    try {
+      const doc = JSON.parse(text);
+      // Like the page: a document is an object, and data after it is no JSON.
+      const res = doc && typeof doc === "object" && !Array.isArray(doc) ? C.review(doc, DEFS, null) : {problems: 1};
+      const raw = C.scanRaw(text, DEFS);
+      ok = res.problems === 0 && raw.dups.length === 0 && raw.integers.length === 0;
+    } catch (e) {
+      if (!(e instanceof SyntaxError)) throw new Error(`${c.id}: ${e.stack}`);
+      ok = false;
+    }
+    if (ok !== c.ok) wrong.push(`${c.id}: washhouse says ok=${c.ok}, the page says ${ok}`);
+  }
+  assert.ok(lines.length > 1000, `only ${lines.length} cases`);
+  assert.deepEqual(wrong, []);
+});
+test("a null tank is reported, not a crash", () => {
+  const d = clone(SAMPLE); d.tanks[0] = null;
+  const res = C.review(d, DEFS, SAMPLE);
+  assert.match(problemsAt(res, "tanks[0]").join(), /null/);
+});
+test("a list element that isn't an object is reported", () => {
+  const d = clone(SAMPLE); d.tanks[1].probes[3] = "x"; d.draw.gaps[0] = null;
+  const res = C.review(d, DEFS, SAMPLE);
+  assert.match(problemsAt(res, "tanks[1].probes[3]").join(), /object/);
+  assert.match(problemsAt(res, "draw.gaps[0]").join(), /null/);
+});
+test("a whole number written 7.0 is found in the raw text", () => {
+  const text = JSON.stringify(SAMPLE, null, 1).replace(/("recent_draws": )\d+/, "$17.0");
+  assert.deepEqual(C.scanRaw(text, DEFS).integers, [{path: "recent_draws", literal: "7.0"}]);
+  assert.deepEqual(C.scanRaw(JSON.stringify(SAMPLE, null, 1), DEFS).integers, []);
+});
+test("the vessel and gap rules are found", () => {
+  const cross = d => C.review(d, DEFS, SAMPLE).cross.map(c => c.problem).join("\n");
+  let d = clone(SAMPLE); d.vessel.dome_depth_mm = 60.5;
+  assert.match(cross(d), /whole number of slice_mm/);
+  d = clone(SAMPLE); d.vessel.capacity_l = 5;
+  assert.match(cross(d), /more than the two domes hold/);
+  d = clone(SAMPLE); d.draw.gaps.push(clone(d.draw.gaps[0]));
+  assert.match(cross(d), /listed twice/);
+  d = clone(SAMPLE); d.tanks[0].probes.find(p => p.position === d.draw.gaps[0].low).height_mm = 5000;
+  assert.match(cross(d), /must be below/);
+});
 test("the page loads the core first and never sends anything", () => {
   assert.ok(page.indexOf('src="config-core.js"') < page.indexOf('"use strict"'));
   assert.ok(!/fetch\(|XMLHttpRequest|\.publish\(/.test(page));
