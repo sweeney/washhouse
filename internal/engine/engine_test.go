@@ -10,10 +10,7 @@ import (
 	"github.com/sweeney/common/wire/boiler"
 	"github.com/sweeney/common/wire/tanktemp"
 	"github.com/sweeney/washhouse/internal/draw"
-	"github.com/sweeney/washhouse/internal/estimate"
 	"github.com/sweeney/washhouse/internal/meter"
-	"github.com/sweeney/washhouse/internal/profile"
-	"github.com/sweeney/washhouse/internal/vessel"
 )
 
 func bp(b bool) *bool { return &b }
@@ -302,6 +299,7 @@ func TestSkippedSweeps(t *testing.T) {
 	if _, err := e.TankState(uniform(left, t0, 50)); err != nil {
 		t.Fatal(err)
 	}
+	first := *e.State().Tanks[0].MeanC
 	un := uniform(left, t0.Add(time.Hour), 20)
 	un.ClockSynced = false
 	old := uniform(left, t0, 20)
@@ -311,7 +309,7 @@ func TestSkippedSweeps(t *testing.T) {
 		}
 	}
 	s := e.State()
-	if l := s.Tanks[0]; !l.At.Equal(t0) || math.Abs(*l.MeanC-50) > 1e-3 {
+	if l := s.Tanks[0]; !l.At.Equal(t0) || math.Abs(*l.MeanC-first) > 1e-9 {
 		t.Errorf("left %v at %v, want the first sweep kept", *l.MeanC, l.At)
 	}
 	if !s.At.Equal(t0) {
@@ -346,43 +344,28 @@ func systemUsable(t *testing.T, right5 [5]float64) float64 {
 	return *e.State().UsableL40Low
 }
 
-// The system's usable litres come from a draw through the merged outlet at
-// OutletSplit (estimate.Merged), not the tanks summed; stored_kwh still
-// sums. With the right tank nearly spent and taking most of the flow, the
-// system has far less than the left tank alone holds.
-func TestSystemUsableThroughTheMergedOutlet(t *testing.T) {
-	cfg := planConfig()
-	e := newEngine(t, cfg)
+// The system's usable litres are the tanks' summed, as the stored energy
+// is: the owner's experience is that with one tank cold and the other hot
+// the taps still run hot (24 Nov 2026), so no fixed split limits the tap.
+// With the right tank nearly spent, the system has what the left holds.
+func TestSystemUsableIsTheTanksSummed(t *testing.T) {
+	e := newEngine(t, planConfig())
 	lowFeed(t, e, t0, rightLow)
 	s := e.State()
-	v, err := vessel.New(cfg.Vessel)
-	if err != nil {
-		t.Fatal(err)
+	l, r := s.Tanks[0], s.Tanks[1]
+	if want := *l.UsableL40 + *r.UsableL40; s.UsableL40 == nil || *s.UsableL40 != want {
+		t.Errorf("system usable_l40 %s, want the tanks summed %.2f", fm(s.UsableL40, "%.2f"), want)
 	}
-	est, err := estimate.New(v, cfg.Estimate)
-	if err != nil {
-		t.Fatal(err)
+	if want := *l.UsableL40Low + *r.UsableL40Low; s.UsableL40Low == nil || *s.UsableL40Low != want {
+		t.Errorf("system usable_l40_low %s, want the tanks summed %.2f", fm(s.UsableL40Low, "%.2f"), want)
 	}
-	var ps []*profile.Profile
-	for _, id := range []string{left, right} {
-		sw, _ := e.LastSweep(id)
-		ps = append(ps, sw.Profile)
+	if !(*s.UsableL40 >= *l.UsableL40) {
+		t.Errorf("system usable %.1f L, less than the left tank alone (%.1f L)", *s.UsableL40, *l.UsableL40)
 	}
-	want, err := est.Merged(ps, cfg.OutletSplit)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s.UsableL40 == nil || *s.UsableL40 != want.UsableL40 || s.UsableL40Low == nil || *s.UsableL40Low != want.UsableL40Low {
-		t.Errorf("system usable %s / %s, want the merged outlet's %.2f / %.2f", fm(s.UsableL40, "%.2f"), fm(s.UsableL40Low, "%.2f"), want.UsableL40, want.UsableL40Low)
-	}
-	l := *s.Tanks[0].UsableL40
-	if !(*s.UsableL40 < l) {
-		t.Errorf("system usable %.1f L, want less than the left tank alone (%.1f L)", *s.UsableL40, l)
-	}
-	if sum := *s.Tanks[0].StoredKWh + *s.Tanks[1].StoredKWh; s.StoredKWh == nil || *s.StoredKWh != sum {
+	if sum := *l.StoredKWh + *r.StoredKWh; s.StoredKWh == nil || *s.StoredKWh != sum {
 		t.Errorf("stored %s, want the tanks summed %.3f", fm(s.StoredKWh, "%.3f"), sum)
 	}
-	t.Logf("left usable_l40 %.1f L, right %.1f L; system %.1f L (first litre %.1f °C)", l, *s.Tanks[1].UsableL40, *s.UsableL40, want.FirstC)
+	t.Logf("left usable_l40 %.1f L, right %.1f L; system %.1f L", *l.UsableL40, *r.UsableL40, *s.UsableL40)
 }
 
 // low_hot_water sets when the system's usable_l40_low falls below

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"time"
@@ -11,7 +12,6 @@ import (
 	"github.com/sweeney/washhouse/internal/draw"
 	"github.com/sweeney/washhouse/internal/estimate"
 	"github.com/sweeney/washhouse/internal/meter"
-	"github.com/sweeney/washhouse/internal/profile"
 	"github.com/sweeney/washhouse/internal/tank"
 	"github.com/sweeney/washhouse/internal/thermal"
 	"github.com/sweeney/washhouse/internal/vessel"
@@ -54,6 +54,17 @@ type Engine struct {
 	tanktemp TanktempStatus
 
 	recent []DrawRecord // a ring of the last RecentDraws, oldest first
+
+	// The outlet probes' heat-sink offset (learnOutlet): when the last
+	// draw ended, and each draw's outlet readings at rest just before it
+	// started, by draw then tank, kept only for a draw that followed a
+	// rest.
+	lastDrawEnd time.Time
+	outletRest  map[string]map[string]float64
+
+	// sweepAt is the time of the tanktemp sweep the latest input was part
+	// of (its meter reading or a tank's state); zero if it was no sweep's.
+	sweepAt time.Time
 }
 
 // tankSlot is one cylinder's model and its latest sweep.
@@ -83,6 +94,7 @@ func New(cfg Config) (*Engine, error) {
 		if err != nil {
 			return nil, err
 		}
+		m.SetRamp(cfg.Thermal.UAQuiet)
 		e.tanks[tc.DeviceID] = &tankSlot{model: m}
 		e.order = append(e.order, tc.DeviceID)
 	}
@@ -138,6 +150,7 @@ func (e *Engine) TankState(st tanktemp.State) ([]Event, error) {
 	ev := e.meterEvents(nil, e.meter.Tick(st.Timestamp))
 	sw, err := slot.model.Sweep(st)
 	slot.seen = true
+	e.sweepAt = st.Timestamp // a refused state still counts for its sweep
 	if err != nil {
 		slot.ok = false
 		slot.last = tank.Sweep{DeviceID: st.DeviceID, At: st.Timestamp, ClockSynced: st.ClockSynced,
@@ -193,6 +206,10 @@ func (e *Engine) Meter(m tanktemp.Meter) []Event {
 			e.meterAt = m.Timestamp // an unsynced time can't be trusted
 			e.see(m.Timestamp)
 		}
+		e.sweepAt = time.Time{}
+		if m.Trigger == tanktemp.TriggerSweep && m.ClockSynced {
+			e.sweepAt = m.Timestamp
+		}
 	}
 	out := e.meterEvents(nil, ev)
 	return e.done(e.attributions(out, e.attr.Tick(e.now)))
@@ -207,10 +224,15 @@ func (e *Engine) meterEvents(out []Event, ev []meter.Event) []Event {
 		case meter.EventDrawStarted, meter.EventDrawUpdated:
 			out = append(out, Event{Type: EventType(x.Type), At: x.At, Draw: activeOf(*x.Draw)})
 			if x.Type == meter.EventDrawStarted {
+				e.drawStarts(*x.Draw)
 				out = e.thermalEvents(out, e.thermal.MeteredDraw(x.At, true))
 			}
 			out = e.attributions(out, e.attr.Meter(x))
 		case meter.EventDrawEnded:
+			e.lastDrawEnd = x.Draw.End
+			for _, slot := range e.tanks {
+				slot.model.Flow(false, x.Draw.End)
+			}
 			e.held = append(e.held, *x.Draw)
 			out = e.thermalEvents(out, e.thermal.MeteredDraw(x.At, false))
 			out = e.attributions(out, e.attr.Meter(x))
@@ -261,6 +283,7 @@ func (e *Engine) attributions(out []Event, rs []draw.Result) []Event {
 			e.recent = append(e.recent, DrawRecord{DrawEnded: d})
 			out = append(out, Event{Type: EventDrawEnded, At: e.now, Ended: &d})
 		case draw.StageBalanced:
+			e.learnOutlet(r)
 			b := balancedOf(r.Attribution)
 			for i := range e.recent {
 				if e.recent[i].DrawID == b.DrawID {
@@ -272,6 +295,111 @@ func (e *Engine) attributions(out []Event, rs []draw.Result) []Event {
 		}
 	}
 	return out
+}
+
+// drawStarts tells each tank water is flowing, and keeps the outlets'
+// resting readings if the draw followed a rest: no draw for the thermal
+// config's UAQuiet, counted from the last draw's end, or before one from
+// the engine's start (what came before is unknown). The last draw's end
+// survives a reload (TakeOutlet); the start doesn't, so it counts only
+// when there is no draw to count from.
+func (e *Engine) drawStarts(d meter.Draw) {
+	since := e.lastDrawEnd
+	if since.IsZero() {
+		since = e.started
+	}
+	rested := d.Start.Sub(since) >= e.cfg.Thermal.UAQuiet
+	for id, slot := range e.tanks {
+		slot.model.Flow(true, e.lastDrawEnd)
+		if o := slot.last.Outlet(); rested && slot.ok && o != nil {
+			if e.outletRest == nil {
+				e.outletRest = map[string]map[string]float64{}
+			}
+			if e.outletRest[d.ID] == nil {
+				e.outletRest[d.ID] = map[string]float64{}
+			}
+			e.outletRest[d.ID][id] = *o
+		}
+	}
+}
+
+// outletLearnLitres: a tank teaches its outlet under-read only from a draw it
+// gave at least this much of itself. Two litres is what a flow needs (the
+// meter's); a tank the other supplies sees too little through its own
+// outlet to bring the dome water past the probe (tanktemp's review of #12:
+// the cool right tank showed 1.1 and 1.5 °C).
+const outletLearnLitres = 2.0
+
+// learnOutlet teaches each tank its outlet under-read from a balanced draw
+// that followed a rest: how far its reading at rest just before the draw
+// sat below its peak during it (the same water, still and flowing), as a
+// fraction of the peak's height above the cold feed, if the tank itself
+// gave outletLearnLitres. A tank's litres are absent when its share is
+// withheld (a reheat masked the draw, or HW was unknown), so those teach
+// nothing either.
+func (e *Engine) learnOutlet(r draw.Result) {
+	rest := e.outletRest[r.Draw.ID]
+	delete(e.outletRest, r.Draw.ID)
+	if rest == nil || r.Attribution.MaskedByReheat {
+		return
+	}
+	for _, ta := range r.Attribution.Tanks {
+		pre, ok := rest[ta.DeviceID]
+		slot := e.tanks[ta.DeviceID]
+		if ok && slot != nil && ta.OutletPeakC != nil && ta.Litres != nil && *ta.Litres >= outletLearnLitres {
+			peak, cold := *ta.OutletPeakC, e.est.ColdC()
+			if peak > pre && peak > cold {
+				slot.model.LearnOutletUnderread((peak - pre) / (peak - cold))
+			}
+		}
+	}
+}
+
+// sweepPending says whether the sweep the latest input was part of is
+// still arriving: a tank that isn't stale hasn't swept at its time yet.
+// The hold lasts at most Thermal.StaleAfter past the sweep's time (event
+// time moves on with later inputs and the clock's ticks), and tanktemp's
+// status or the programmer end it at once (sweepAt cleared), so a sweep
+// that never completes (one cancelled at shutdown, a lost message) can't
+// hold State indefinitely (tanktemp's review of #14). A room reading doesn't
+// end it: it comes often, and waits at most that long.
+func (e *Engine) sweepPending() bool {
+	if e.sweepAt.IsZero() || e.now.Sub(e.sweepAt) > e.cfg.Thermal.StaleAfter {
+		return false
+	}
+	for _, slot := range e.tanks {
+		if !slot.seen {
+			continue // never heard: nothing to wait for
+		}
+		if at := slot.last.At; at.Before(e.sweepAt) && e.sweepAt.Sub(at) <= e.cfg.Thermal.StaleAfter {
+			return true
+		}
+	}
+	return false
+}
+
+// TakeOutlet takes old's outlet state, for the tanks e has: what each
+// learned, whether a draw runs and when the last ended (so the correction's
+// ramp carries on), and the resting readings kept for a draw not yet
+// balanced. A reload rebuilds the engine; without this it would forget
+// what the tanks taught and jump the correction (tanktemp's review of #12).
+func (e *Engine) TakeOutlet(old *Engine) {
+	if old == nil {
+		return
+	}
+	e.lastDrawEnd = old.lastDrawEnd
+	for id, rest := range old.outletRest {
+		if e.outletRest == nil {
+			e.outletRest = map[string]map[string]float64{}
+		}
+		e.outletRest[id] = maps.Clone(rest)
+	}
+	for id, slot := range e.tanks {
+		if o := old.tanks[id]; o != nil {
+			slot.model.SetOutletUnderreads(o.model.OutletUnderreads())
+			slot.model.Flow(o.model.FlowState())
+		}
+	}
 }
 
 func endedOf(d meter.Draw) DrawEnded {
@@ -298,6 +426,7 @@ func balancedOf(a draw.Attribution) DrawBalanced {
 // Status takes a tanktemp status message. The last will says only that
 // tanktemp is offline.
 func (e *Engine) Status(s tanktemp.Status) {
+	e.sweepAt = time.Time{} // no sweep's: it ends any hold
 	on := s.Online
 	st := TanktempStatus{Online: &on}
 	if s.Timestamp != nil {
@@ -314,6 +443,7 @@ func (e *Engine) Status(s tanktemp.Status) {
 // BoilerEvent takes a programmer switch event. It applies unless it is
 // older than the last programmer input applied.
 func (e *Engine) BoilerEvent(b boiler.Event) []Event {
+	e.sweepAt = time.Time{}
 	return e.done(e.programmer(b.Timestamp, b.HW, b.CH))
 }
 
@@ -326,6 +456,7 @@ func (e *Engine) BoilerEvent(b boiler.Event) []Event {
 // heartbeat changes nothing. Anything else (RECONNECTED, STARTUP, a
 // heartbeat before the GPIO baseline) changes nothing.
 func (e *Engine) BoilerSystem(s boiler.System) []Event {
+	e.sweepAt = time.Time{}
 	switch {
 	case s.ReadyHeartbeat():
 		if s.HeartbeatMS != nil && *s.HeartbeatMS > 0 && !e.older(s.Timestamp) {
@@ -419,7 +550,7 @@ func (e *Engine) Pending() bool {
 
 // State reports the system as of the latest input.
 func (e *Engine) State() State {
-	s := State{At: e.now, Tanktemp: e.tanktemp}
+	s := State{At: e.now, Tanktemp: e.tanktemp, SweepPending: e.sweepPending()}
 	for _, id := range e.order {
 		s.Tanks = append(s.Tanks, e.tankState(id))
 	}
@@ -460,26 +591,25 @@ type systemTotals struct {
 }
 
 // system is the totals, if every tank's estimate is known: the stored
-// energy summed, the usable litres through the merged outlet.
+// energy and the usable litres, each the tanks' summed. The usable litres
+// are summed, not drawn at a fixed split: the owner's experience is that
+// with one tank cold and the other hot the taps still run hot (24 Nov
+// 2026), so the hot tank's water reaches the tap.
 func (e *Engine) system() (systemTotals, bool) {
 	var out systemTotals
 	if len(e.order) == 0 {
 		return out, false
 	}
-	ps := make([]*profile.Profile, len(e.order))
-	for k, id := range e.order {
+	for _, id := range e.order {
 		slot := e.tanks[id]
 		if !e.estimated(slot) {
 			return out, false
 		}
-		out.storedKWh += slot.last.Estimate.KWh
-		ps[k] = slot.last.Profile
+		est := slot.last.Estimate
+		out.storedKWh += est.KWh
+		out.usableL40 += est.UsableL40
+		out.usableL40Low += est.UsableL40Low
 	}
-	m, err := e.est.Merged(ps, e.cfg.OutletSplit)
-	if err != nil {
-		return out, false // can't happen: the split is validated
-	}
-	out.usableL40, out.usableL40Low = m.UsableL40, m.UsableL40Low
 	return out, true
 }
 

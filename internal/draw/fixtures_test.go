@@ -49,7 +49,7 @@ func houseTanks(t *testing.T) map[string]*tank.Tank {
 		t.Fatal(err)
 	}
 	est, err := estimate.New(v, estimate.Config{ColdC: 10, MinC: 40, MixC: 40, KWhPerLitreK: 4.186 / 3600,
-		LowFactor: 0.85, DrawFromMM: 281, DrawToMM: 1237})
+		LowFactor: 0.85, DrawFromMM: 281, DrawToMM: 1412})
 	if err != nil {
 		t.Fatal(err)
 	}

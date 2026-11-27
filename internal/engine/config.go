@@ -30,12 +30,12 @@ type Config struct {
 	Tanks   []tank.Config
 	Thermal thermal.Config
 	Draw    draw.Config
-	// OutletSplit: the fraction of every litre drawn that each tank gives,
-	// in Tanks order, summing to 1. The tanks are in parallel with one
-	// merged outlet, so the pipework fixes the split whatever the tanks'
-	// temperatures (an assumption: buoyancy could shift it towards a hotter
-	// tank; no fixture has a draw with one tank cold). The system's usable
-	// litres are a draw simulated at this split (estimate.Merged).
+	// OutletSplit: a nominal fraction of every litre drawn that each tank
+	// gives, in Tanks order, summing to 1. Only the draw attribution uses
+	// it, as the fallback when a reheat masks the measured shares (package
+	// draw). The real split moves with the tanks' temperatures (a hot tank
+	// takes more), so the system's usable litres don't use it: they are the
+	// tanks' summed (doc.go).
 	OutletSplit []float64
 	// LowHotWaterL and LowHotWaterMarginL: low_hot_water sets when the
 	// system's usable_l40_low falls below LowHotWaterL (litres of 40 °C

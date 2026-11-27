@@ -20,12 +20,13 @@
     "mix_c": 40,
     "low_factor": 0.85,
     "draw_from_mm": 281,
-    "draw_to_mm": 1237
+    "draw_to_mm": 1412
   },
   "tanks": [
     {
       "device_id": "hot_water_cylinder_left",
       "trust_suspect": false,
+      "prior_outlet_underread": 0.16,
       "prior_ua_w_per_k": 4,
       "prior_hours": 1,
       "outlet_split": 0.11,
@@ -40,6 +41,7 @@
     {
       "device_id": "hot_water_cylinder_right",
       "trust_suspect": false,
+      "prior_outlet_underread": 0.17,
       "prior_ua_w_per_k": 17,
       "prior_hours": 1,
       "outlet_split": 0.89,
@@ -74,6 +76,7 @@
     "stale_after": "2m",
     "heating_on_kw": 0.5,
     "heating_off_kw": 0.3,
+    "heating_on_after_draw_kw": 1.5,
     "draw_settle": "60s",
     "power_settle": "12m",
     "source_hold": "30m",

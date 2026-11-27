@@ -658,31 +658,33 @@ func TestFixtureUAFollowsTheLoop(t *testing.T) {
 	}
 }
 
-// 9. low_hot_water through the merged outlet. The tanks are in parallel,
-// so every litre takes OutletSplit from each and the tap gets the mix. On
-// quiet-night the right tank (0.89 of the flow) cools overnight with its
-// loop running while the left stays hot: by the morning the first litre is
-// the right's cool top mixed with a little of the left's hot one, about
-// 39–43 °C (tanktemp's review of PR #2) and falling, so the system is low
-// on hot water although the left tank alone holds plenty. At the start,
-// with both tanks hot, it is not.
+// 9. low_hot_water is the system's: its usable water is the tanks' summed.
+// The tanks are in parallel on one outlet. The owner's experience (24 Nov
+// 2026): with one tank cold and the other hot, the taps still run hot, so
+// the flow isn't held at a fixed split; the hot tank supplies the tap. So
+// the system's usable_l40 is the tanks' usable_l40 summed (each tank's
+// drawable water mixed down to MixC), not a draw at a fixed split. On
+// quiet-night the right tank cools overnight with its loop running while
+// the left stays hot: by the morning the left alone holds plenty, so the
+// system isn't low (the fixed-split model had said it was).
 func TestFixtureLowHotWaterIsTheSystems(t *testing.T) {
 	cfg := planConfig()
 	r := replayOne(t, "quiet-night")
-	v, err := vessel.New(cfg.Vessel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	est, err := estimate.New(v, cfg.Estimate)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// low_hot_water's changes through the night.
 	var prev *bool
 	var first, last *State
-	sets := 0
 	for i := range r.states {
 		s := &r.states[i]
+		if s.UsableL40 != nil {
+			var sum, sumLow float64
+			for _, tk := range s.Tanks {
+				sum += *tk.UsableL40
+				sumLow += *tk.UsableL40Low
+			}
+			if math.Abs(*s.UsableL40-sum) > 1e-9 || math.Abs(*s.UsableL40Low-sumLow) > 1e-9 {
+				t.Fatalf("+%v: system usable_l40 %.3f / low %.3f, the tanks sum to %.3f / %.3f",
+					r.ofs(s.At), *s.UsableL40, *s.UsableL40Low, sum, sumLow)
+			}
+		}
 		if s.LowHotWater == nil {
 			continue
 		}
@@ -691,43 +693,22 @@ func TestFixtureLowHotWaterIsTheSystems(t *testing.T) {
 		}
 		last = s
 		if prev == nil || *prev != *s.LowHotWater {
-			t.Logf("+%v low_hot_water %v: system usable_l40_low %.1f L (left %.1f, right %.1f), right top %.1f °C",
-				r.ofs(s.At).Truncate(time.Second), *s.LowHotWater, *s.UsableL40Low, *s.Tanks[0].UsableL40Low,
-				*s.Tanks[1].UsableL40Low, *s.Tanks[1].TopC)
-			if *s.LowHotWater {
-				sets++
-			}
+			t.Logf("+%v low_hot_water %v: system usable_l40_low %.1f L (left %.1f, right %.1f)",
+				r.ofs(s.At).Truncate(time.Second), *s.LowHotWater, *s.UsableL40Low, *s.Tanks[0].UsableL40Low, *s.Tanks[1].UsableL40Low)
 		}
 		prev = s.LowHotWater
 	}
 	if first == nil {
 		t.Fatal("low_hot_water never known")
 	}
-	if *first.LowHotWater || *first.Tanks[0].TopC < 50 || *first.Tanks[1].TopC < 50 {
-		t.Errorf("at the start: low %v, tops %.1f / %.1f °C; want both hot and not low", *first.LowHotWater, *first.Tanks[0].TopC, *first.Tanks[1].TopC)
-	}
-	if sets != 1 {
-		t.Errorf("low_hot_water set %d times, want once (hysteresis)", sets)
-	}
-	// The morning: the tap's first litre from the tanks' last profiles.
-	ps := []*profile.Profile{r.sweeps[left][len(r.sweeps[left])-1].prof, r.sweeps[right][len(r.sweeps[right])-1].prof}
-	m, err := est.Merged(ps, cfg.OutletSplit)
-	if err != nil {
-		t.Fatal(err)
-	}
 	lt, rt := last.Tanks[0], last.Tanks[1]
-	t.Logf("at the end (+%v): left top %.1f °C usable_l40 %.1f L, right top %.1f °C usable_l40 %.1f L; split %v",
-		r.ofs(last.At).Truncate(time.Second), *lt.TopC, *lt.UsableL40, *rt.TopC, *rt.UsableL40, cfg.OutletSplit)
-	t.Logf("system through the merged outlet: first litre %.1f °C, %.1f L before the mix falls below %v °C, usable_l40 %.1f L, usable_l40_low %.1f L (the tanks summed: %.1f L)",
-		m.FirstC, m.Litres, cfg.Estimate.MinC, *last.UsableL40, *last.UsableL40Low, *lt.UsableL40+*rt.UsableL40)
-	if m.FirstC < 38 || m.FirstC > 44 {
-		t.Errorf("first litre %.1f °C, want about 39–43", m.FirstC)
+	t.Logf("at the end (+%v): left top %.1f °C usable_l40 %.1f L, right top %.1f °C usable_l40 %.1f L, system %.1f L",
+		r.ofs(last.At).Truncate(time.Second), *lt.TopC, *lt.UsableL40, *rt.TopC, *rt.UsableL40, *last.UsableL40)
+	if *first.LowHotWater {
+		t.Errorf("at the start: low, with %.1f L to plan on", *first.UsableL40Low)
 	}
-	if !*last.LowHotWater || *last.UsableL40Low >= cfg.LowHotWaterL {
-		t.Errorf("at the end: low %v, usable_l40_low %.1f L; want low", *last.LowHotWater, *last.UsableL40Low)
-	}
-	if !(*lt.UsableL40 > cfg.LowHotWaterL) {
-		t.Errorf("the left tank alone holds %.1f L: the fixture no longer shows one tank full", *lt.UsableL40)
+	if *last.LowHotWater || !(*lt.UsableL40Low > cfg.LowHotWaterL+cfg.LowHotWaterMarginL) {
+		t.Errorf("at the end: low %v, left alone %.1f L: the left tank's hot water should keep the system off low", *last.LowHotWater, *lt.UsableL40Low)
 	}
 }
 
@@ -811,5 +792,83 @@ func TestFixtureRetainedStateFacts(t *testing.T) {
 		if len(r.states) == 0 || strings.Contains(name, "ch-only-right") && len(starts) != 0 {
 			t.Errorf("%s: %d states, %d draws", name, len(r.states), len(starts))
 		}
+	}
+}
+
+// The outlet probe is heat-sunk and reads low at rest (the owner; on 24
+// Nov 2026 a 40 L run showed the right's 6 °C low and the left's 8.5). The
+// engine learns each tank's offset from a draw that followed a rest (no
+// draw for the thermal config's UAQuiet, since the engine started too) and
+// had a flow (two litres or more): the
+// outlet's peak during the draw less its raw reading just before it, the
+// same water flowing and at rest. From the draw's end the tank's profile
+// carries the outlet that much higher, ramping in over UAQuiet as the pipe
+// cools; the sweep's raw readings stay as they are.
+func TestFixtureOutletOffsetIsLearned(t *testing.T) {
+	cfg := planConfig()
+	quiet := cfg.Thermal.UAQuiet
+	learned := 0
+	for _, name := range allFixtures {
+		r := replayOne(t, name)
+		for di, d := range r.ended {
+			var b *DrawBalanced
+			for i := range r.balanced {
+				if r.balanced[i].DrawID == d.DrawID {
+					b = &r.balanced[i]
+				}
+			}
+			prev := r.start
+			if di > 0 {
+				prev = r.ended[di-1].EndedAt
+			}
+			// A one-litre draw has no flow, and barely warms the outlet: it
+			// teaches nothing (creep-evening's single litres would give 0.06 °C).
+			if b == nil || b.MaskedByReheat || d.FlowLPerMin == nil || d.StartedAt.Sub(prev) < quiet {
+				continue
+			}
+			next := r.states[len(r.states)-1].At
+			if di+1 < len(r.ended) {
+				next = r.ended[di+1].StartedAt
+			}
+			for _, ta := range b.Tanks {
+				ss := r.sweeps[ta.DeviceID]
+				var before *sweepSnap
+				for i := range ss {
+					if ss[i].at.Before(d.StartedAt) {
+						before = &ss[i]
+					}
+				}
+				pre, ok := before.raw["top"]
+				if ta.OutletPeakC == nil || !ok || *ta.OutletPeakC <= pre {
+					continue
+				}
+				offset := *ta.OutletPeakC - pre
+				learned++
+				t.Logf("%s %s: outlet %.2f °C at rest, peak %.2f °C: offset %.2f °C", name, ta.DeviceID, pre, *ta.OutletPeakC, offset)
+				checked := 0
+				for _, sn := range ss {
+					top, ok := sn.raw["top"]
+					// From the balance on (the offset is learned then), until the next draw.
+					// Sweep times are whole seconds; the next draw's first litre
+					// can close within the second of the sweep that sees it.
+					if !ok || sn.at.Before(d.EndedAt.Add(10*time.Minute)) || !sn.at.Before(next.Truncate(time.Second)) {
+						continue
+					}
+					frac := min(1, float64(sn.at.Sub(d.EndedAt))/float64(quiet))
+					if got, want := sn.profile["top"], top+offset*frac; got < want-1e-6 {
+						t.Errorf("%s %s +%v: profile at the outlet %.2f °C, want at least %.2f (raw %.2f + %.0f%% of %.2f)",
+							name, ta.DeviceID, r.ofs(sn.at), got, want, top, frac*100, offset)
+						break
+					}
+					checked++
+				}
+				if checked == 0 {
+					t.Errorf("%s %s: no sweep after the balance to check", name, ta.DeviceID)
+				}
+			}
+		}
+	}
+	if learned == 0 {
+		t.Error("no fixture taught an offset")
 	}
 }

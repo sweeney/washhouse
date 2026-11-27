@@ -63,14 +63,14 @@ func planConfig() Config {
 		MinProbes:       2,
 		StaleAfter:      2 * time.Minute,
 		HeatingOnKW:     0.5,
-		HeatingOffKW:    0.3,
-		DrawSettle:      60 * time.Second,
-		PowerSettle:     12 * time.Minute,
-		SourceHold:      30 * time.Minute,
-		UATau:           24 * time.Hour,
-		UAQuiet:         60 * time.Minute,
-		UAMinDeltaK:     5,
-		AmbientStale:    40 * time.Minute,
+		HeatingOffKW:    0.3, HeatingOnAfterDrawKW: 1.5,
+		DrawSettle:   60 * time.Second,
+		PowerSettle:  12 * time.Minute,
+		SourceHold:   30 * time.Minute,
+		UATau:        24 * time.Hour,
+		UAQuiet:      60 * time.Minute,
+		UAMinDeltaK:  5,
+		AmbientStale: 40 * time.Minute,
 		Tanks: []TankConfig{
 			{DeviceID: left, PriorUAWPerK: 4, PriorHours: 1},
 			{DeviceID: right, PriorUAWPerK: 17, PriorHours: 1},
@@ -103,7 +103,7 @@ func testEstimator(t testing.TB) *estimate.Estimator {
 		t.Fatal(err)
 	}
 	e, err := estimate.New(v, estimate.Config{ColdC: 10, MinC: 40, MixC: 40, KWhPerLitreK: 4.186 / 3600,
-		LowFactor: 0.85, DrawFromMM: 281, DrawToMM: 1237})
+		LowFactor: 0.85, DrawFromMM: 281, DrawToMM: 1412})
 	if err != nil {
 		t.Fatal(err)
 	}

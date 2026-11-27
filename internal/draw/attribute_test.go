@@ -35,7 +35,7 @@ var roles = [5]profile.Role{profile.RoleInlet, profile.RoleBulk, profile.RoleBul
 // sw is one tank's sweep with stored energy kwh and the given probes.
 func sw(id string, at time.Time, kwh float64, p temps) tank.Sweep {
 	s := tank.Sweep{DeviceID: id, At: at, ClockSynced: true, ProbesTotal: 5,
-		Estimate: estimate.Tank{KWh: kwh, TopC: 60}}
+		Estimate: estimate.Tank{KWh: kwh, TopC: 60}, RawEstimate: estimate.Tank{KWh: kwh, TopC: 60}}
 	for k := range p {
 		s.Probes = append(s.Probes, tank.Probe{Position: positions[k], Role: roles[k], HeightMM: heights[k], TempC: p[k]})
 		if p[k] != nil {
