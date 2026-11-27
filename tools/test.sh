@@ -17,8 +17,12 @@ fi
 python3 fixture_draws.py --check
 ./record_test.sh
 ./smoke_sh_test.sh
+# The live page: its launcher, and its pure logic against the wire goldens.
+./live_test.sh
+node live_core_test.js "$(cd .. && go list -m -f '{{.Dir}}' github.com/sweeney/common/wire)"
+./live_page_check.sh
 # The config explorer's logic, against its sample and definitions (the Go
 # side, internal/behaviour, holds the definitions to the decoder).
 node config_core_test.js
-shellcheck -S warning record.sh record_test.sh smoke.sh smoke_sh_test.sh test.sh
+shellcheck -S warning record.sh record_test.sh smoke.sh smoke_sh_test.sh test.sh live.sh live_test.sh live_page_check.sh
 echo "tools: all tests passed"
