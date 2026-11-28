@@ -79,9 +79,9 @@ func (s Sources) Filters() []string {
 	return f
 }
 
-// Ambient is one boiler-room temperature reading. At is the sensor's own
-// report time when its publisher gives one (Dated: statehouse's
-// latest.last_seen), else the receive time (zigbee2mqtt's own message).
+// Ambient is one boiler-room temperature reading. At is when the sensor's
+// last report was received, when its publisher gives one (Dated:
+// statehouse's latest.last_seen), else the receive time (zigbee2mqtt's own message).
 type Ambient struct {
 	At    time.Time
 	TempC float64
