@@ -43,6 +43,15 @@ func TestABlindTankOnHealthAndInTheLog(t *testing.T) {
 				!strings.Contains(r.Detail, "blind since 2001-01-01T00:30:17Z") || !strings.Contains(r.Detail, "probes") {
 				t.Errorf("lost: %s %q, want degraded naming the right tank, since and why", r.Status, r.Detail)
 			}
+			var tanks []healthTank
+			for _, f := range r.Fields {
+				if f.Key == "tanks" {
+					tanks, _ = f.Value.([]healthTank)
+				}
+			}
+			if len(tanks) != 2 || tanks[1].Fault == nil || tanks[1].Fault.LostAt == nil {
+				t.Errorf("lost: /healthz tanks %+v, want the right's fault with lost_at", tanks)
+			}
 		case !checked["restored"] && l.at.After(back.Add(3*time.Minute)):
 			checked["restored"] = true
 			if r := s.report(true, c.t); r.Status != "ok" {

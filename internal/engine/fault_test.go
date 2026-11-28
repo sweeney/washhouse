@@ -312,6 +312,14 @@ func TestAReloadKeepsAFault(t *testing.T) {
 	if f := n.State().Tanks[1].Fault; f == nil || !f.Lost || !f.Since.Equal(t1) {
 		t.Errorf("after the reload: fault %+v, want lost since %v", f, t1)
 	}
+	// Before the new engine's first sweep of it, the fault keeps its errors
+	// (tanktemp's review of #18).
+	m := newEngine(t, faultCfg())
+	m.TakeFaults(e)
+	m.TankState(uniform(left, t2, 60))
+	if f := m.State().Tanks[1].Fault; f == nil || !maps.Equal(f.Errors, map[string]int{"bus_low": 5}) {
+		t.Errorf("after the reload, before a sweep of it: fault %+v, want bus_low ×5 kept", f)
+	}
 	t3 := t2.Add(150 * time.Second)
 	ev = append(ev, sweepEvery(t, n, t3, t3.Add(3*time.Minute), 60, hot)...)
 	if lost, restored := ofType(ev, EventTankLost), ofType(ev, EventTankRestored); len(lost) != 0 || len(restored) != 1 ||

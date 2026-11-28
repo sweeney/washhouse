@@ -476,16 +476,20 @@ func lostTanks(tanks []engine.TankState, at time.Time) []string {
 
 // healthTank is one cylinder on /healthz.
 type healthTank struct {
-	DeviceID    string     `json:"device_id"`
-	SweepAt     *time.Time `json:"sweep_at"`
-	ProbesOK    *int       `json:"probes_ok"`
-	ProbesTotal *int       `json:"probes_total"`
-	Fault       *struct {
-		Since  time.Time      `json:"since"`
-		Reason string         `json:"reason"`
-		Errors map[string]int `json:"errors"`
-	} `json:"fault"`
-	LostSince *time.Time `json:"lost_since"`
+	DeviceID    string       `json:"device_id"`
+	SweepAt     *time.Time   `json:"sweep_at"`
+	ProbesOK    *int         `json:"probes_ok"`
+	ProbesTotal *int         `json:"probes_total"`
+	Fault       *healthFault `json:"fault"`
+	LostSince   *time.Time   `json:"lost_since"`
+}
+
+// healthFault is a cylinder's fault on /healthz, as on the wire.
+type healthFault struct {
+	Since  time.Time      `json:"since"`
+	Reason string         `json:"reason"`
+	Errors map[string]int `json:"errors"`
+	LostAt *time.Time     `json:"lost_at"`
 }
 
 func healthTanks(tanks []engine.TankState) []healthTank {
@@ -493,11 +497,7 @@ func healthTanks(tanks []engine.TankState) []healthTank {
 	for _, t := range tanks {
 		h := healthTank{DeviceID: t.DeviceID, SweepAt: t.At, ProbesOK: t.ProbesOK, ProbesTotal: t.ProbesTotal, LostSince: t.LostSince}
 		if f := t.Fault; f != nil {
-			h.Fault = &struct {
-				Since  time.Time      `json:"since"`
-				Reason string         `json:"reason"`
-				Errors map[string]int `json:"errors"`
-			}{f.Since.UTC(), string(f.Reason), f.Errors}
+			h.Fault = &healthFault{Since: f.Since.UTC(), Reason: string(f.Reason), Errors: f.Errors, LostAt: f.LostAt}
 		}
 		out = append(out, h)
 	}

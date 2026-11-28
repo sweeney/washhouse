@@ -286,6 +286,9 @@ func (e *Engine) TakeFaults(old *Engine) {
 	for id, slot := range e.tanks {
 		if o := old.tanks[id]; o != nil {
 			slot.blindSince, slot.reason, slot.lost, slot.lostAt, slot.goodSince = o.blindSince, o.reason, o.lost, o.lostAt, o.goodSince
+			if !o.blindSince.IsZero() {
+				slot.errs = maps.Clone(o.errs) // until its next sweep (tanktemp's review of #18)
+			}
 		}
 	}
 }
