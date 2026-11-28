@@ -111,7 +111,10 @@ func TestBoilerLastWill(t *testing.T) {
 func TestBoilerSilence(t *testing.T) {
 	cfg := planConfig()
 	limit := time.Duration(float64(cfg.BoilerHeartbeat) * cfg.BoilerMissedHeartbeats)
+	// (tanktemp's first input starts the clock: silence isn't judged before)
+	listening := func(e *Engine) { e.TankState(uniform(left, t0, 50)) }
 	e := newEngine(t, cfg)
+	listening(e)
 	e.BoilerSystem(hb(t0, boiler.On, boiler.Off))
 	e.Tick(t0.Add(limit))
 	if b := e.State().Boiler; boolStr(b.HW) != "on" {
@@ -123,7 +126,7 @@ func TestBoilerSilence(t *testing.T) {
 	}
 	// on an input, not only on Tick
 	e = newEngine(t, cfg)
-	e.Ambient(t0, 20) // listening from t0 (see TestBoilerSilenceGraceAtStartup)
+	listening(e) // see TestBoilerSilenceGraceAtStartup
 	e.BoilerSystem(hb(t0, boiler.On, boiler.Off))
 	e.Ambient(t0.Add(limit+time.Second), 20)
 	if b := e.State().Boiler; b.HW != nil {
@@ -131,6 +134,7 @@ func TestBoilerSilence(t *testing.T) {
 	}
 	// an event resets the clock as a heartbeat does
 	e = newEngine(t, cfg)
+	listening(e)
 	e.BoilerSystem(hb(t0, boiler.On, boiler.Off))
 	e.BoilerEvent(boiler.Event{Timestamp: t0.Add(limit / 2), Event: boiler.EventCHOn, HW: boiler.On, CH: boiler.On})
 	e.Tick(t0.Add(limit + time.Second))
@@ -139,6 +143,7 @@ func TestBoilerSilence(t *testing.T) {
 	}
 	// the heartbeat's own interval
 	e = newEngine(t, cfg)
+	listening(e)
 	h := hb(t0, boiler.On, boiler.Off)
 	ms := int64(time.Minute / time.Millisecond)
 	h.HeartbeatMS = &ms
@@ -829,5 +834,17 @@ func TestNextDrawReplacesActiveDrawWithItsPredecessorsEnd(t *testing.T) {
 	}
 	if !sawA || !sawB {
 		t.Fatalf("saw A %v, B replacing it %v: the scenario didn't happen", sawA, sawB)
+	}
+}
+
+// At a start the retained messages come in any order: an old programmer
+// event, then the room, then the heartbeat, must not flick HW and CH to
+// unknown in between (silence waits for tanktemp's first input).
+func TestNoBoilerSilenceBeforeTanktemp(t *testing.T) {
+	e := newEngine(t, planConfig())
+	e.BoilerEvent(boiler.Event{Timestamp: t0.Add(-59 * time.Minute), Event: boiler.EventHWOff, HW: boiler.Off, CH: boiler.Off})
+	e.Ambient(t0, 25.7)
+	if b := e.State().Boiler; boolStr(b.HW) != "off" || boolStr(b.CH) != "off" {
+		t.Errorf("an old event, then the room: hw %s ch %s, want off off", boolStr(b.HW), boolStr(b.CH))
 	}
 }

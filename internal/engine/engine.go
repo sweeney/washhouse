@@ -614,7 +614,11 @@ func (e *Engine) setProgrammer(at time.Time, hw, ch boiler.Switch) []Event {
 // BoilerMissedHeartbeats intervals past the last programmer input (or past
 // the engine's first event time, if later), dated at that limit.
 func (e *Engine) boilerSilence(out []Event) []Event {
-	if !e.boilerSeen || e.silent {
+	if !e.boilerSeen || e.silent || e.started.IsZero() {
+		// Not judged before tanktemp's first input starts the clock: the
+		// retained messages at a start come in any order, and an old
+		// programmer event judged alone would flick HW and CH to unknown
+		// until its heartbeat arrives.
 		return out
 	}
 	// Retained messages replay old programmer inputs at startup, so the
