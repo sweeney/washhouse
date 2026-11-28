@@ -727,7 +727,7 @@ func TestBoilerSilenceGraceAtStartup(t *testing.T) {
 	cfg := planConfig()
 	limit := time.Duration(float64(cfg.BoilerHeartbeat) * cfg.BoilerMissedHeartbeats)
 	e := newEngine(t, cfg)
-	e.Ambient(t0, 20) // the first input: event time starts here
+	e.TankState(uniform(left, t0, 50)) // tanktemp's first input: the clock starts here
 	e.BoilerEvent(boiler.Event{Timestamp: t0.Add(-59 * time.Minute), Event: boiler.EventHWOn, HW: boiler.On, CH: boiler.Off})
 	if b := e.State().Boiler; boolStr(b.HW) != "on" {
 		t.Fatalf("a retained event at startup: hw %s, want on", boolStr(b.HW))
@@ -742,10 +742,11 @@ func TestBoilerSilenceGraceAtStartup(t *testing.T) {
 	}
 	// The retained event may arrive first (as in the fixtures): a
 	// programmer input's own time is old by nature, so the grace starts at
-	// the first other input.
+	// tanktemp's first input. The room's doesn't start it: statehouse's
+	// retained reading is dated by the sensor's last report (#19).
 	e = newEngine(t, cfg)
 	e.BoilerEvent(boiler.Event{Timestamp: t0.Add(-59 * time.Minute), Event: boiler.EventHWOn, HW: boiler.On, CH: boiler.Off})
-	e.Ambient(t0, 20)
+	e.TankState(uniform(left, t0, 50))
 	if b := e.State().Boiler; boolStr(b.HW) != "on" {
 		t.Errorf("a retained event, then the first sweep: hw %s, want on", boolStr(b.HW))
 	}

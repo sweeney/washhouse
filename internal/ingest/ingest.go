@@ -104,7 +104,8 @@ type Msg struct {
 // decodeAmbient reads a boiler-room climate message in either form:
 // statehouse's device message (a "latest" object; retained and republished
 // every 30 s), whose reading is dated by the sensor's latest.last_seen, and
-// is no reading while latest.stale or the device isn't online (else a dead
+// is no reading while last_seen is null, latest.stale, or the device isn't
+// online (unknown, offline_pending, offline, or anything new; else a dead
 // sensor would look fresh forever, statehouse republishing it); or
 // zigbee2mqtt's own ({"temperature": …}), dated by its receipt. No
 // temperature is no reading (nil, false), not an error.
@@ -123,7 +124,9 @@ func decodeAmbient(b []byte, received time.Time) (*Ambient, bool, error) {
 	}
 	if l := c.Latest; l != nil {
 		if l.LastSeen == nil {
-			return nil, false, errors.New("ambient: statehouse's latest has no last_seen")
+			// an undated replay after statehouse's restart sets the
+			// temperature but not last_seen (statehouse's review of #21)
+			return nil, false, nil
 		}
 		at, err := time.Parse(time.RFC3339Nano, *l.LastSeen)
 		if err != nil {

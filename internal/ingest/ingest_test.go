@@ -198,21 +198,33 @@ func TestDecodeStatehouseAmbient(t *testing.T) {
 		t.Fatalf("a good reading: %+v %v %v; want 24 °C dated %v by last_seen", m.Ambient, ok, err, seen)
 	}
 	for name, b := range map[string][]byte{
-		"stale":          msg("online", "24", ls, true),
-		"offline":        msg("offline", "24", ls, false),
-		"no temperature": msg("online", "null", ls, false),
+		"stale":                 msg("online", "24", ls, true),
+		"offline":               msg("offline", "24", ls, false),
+		"no temperature":        msg("online", "null", ls, false),
+		"offline_pending":       msg("offline_pending", "24", ls, false),
+		"unknown":               msg("unknown", "24", ls, false),
+		"a value not yet known": msg("asleep", "24", ls, false),
+		// statehouse's review of #21: an undated replay after its restart
+		// sets the temperature but not last_seen
+		"a null last_seen":   msg("online", "24", "null", false),
+		"no temperature key": []byte(`{"availability":"online","latest":{"last_seen":` + ls + `,"stale":false}}`),
 	} {
 		if m, ok, err := src.Decode(src.Ambient, b, now); err != nil || ok || m.Ambient != nil {
 			t.Errorf("%s: %+v %v %v; want no reading, no error", name, m.Ambient, ok, err)
 		}
 	}
 	for name, b := range map[string][]byte{
-		"no last_seen":    msg("online", "24", "null", false),
 		"a bad last_seen": msg("online", "24", `"yesterday"`, false),
 		"not JSON":        []byte("{"),
 	} {
 		if _, _, err := src.Decode(src.Ambient, b, now); err == nil {
 			t.Errorf("%s: decoded", name)
+		}
+	}
+	// last_seen with its trailing zeros trimmed, or no fraction at all.
+	for _, x := range []string{`"2001-01-01T06:48:00Z"`, `"2001-01-01T06:48:00.5Z"`} {
+		if m, ok, err := src.Decode(src.Ambient, msg("online", "24", x, false), now); err != nil || !ok || m.Ambient == nil {
+			t.Errorf("last_seen %s: %+v %v %v", x, m.Ambient, ok, err)
 		}
 	}
 	// zigbee2mqtt's own message still decodes (the fixtures carry it).

@@ -9,6 +9,7 @@ import (
 
 	"github.com/sweeney/common/wire/tanktemp"
 	"github.com/sweeney/washhouse/internal/draw"
+	"github.com/sweeney/washhouse/internal/meter"
 	"github.com/sweeney/washhouse/internal/thermal"
 )
 
@@ -492,5 +493,29 @@ func TestAnOldRoomReadingDoesNotStartTheClock(t *testing.T) {
 	}
 	if a := e.State().AmbientC; a == nil || *a != 21 {
 		t.Errorf("the room reading, 30 min old: %v, want 21 (ambient_stale is 40 min)", fm(a, "%v"))
+	}
+}
+
+// An old room reading first, then tanktemp's first sweep: the clock starts
+// at the sweep, so a draw UAQuiet − 1 min later doesn't count as following
+// a rest, and teaches no outlet correction (tanktemp's review of #21).
+func TestAnOldRoomReadingDoesNotMakeARest(t *testing.T) {
+	cfg := faultCfg()
+	e := newEngine(t, cfg)
+	e.Ambient(t0.Add(-35*time.Minute), 21)
+	e.TankState(uniform(left, t0, 60))
+	e.TankState(uniform(right, t0, 60))
+	if !e.started.Equal(t0) {
+		t.Fatalf("started %v, want tanktemp's first sweep %v", e.started, t0)
+	}
+	d := meter.Draw{ID: "d-1", Start: t0.Add(cfg.Thermal.UAQuiet - time.Minute)}
+	e.drawStarts(d)
+	if r := e.outletRest[d.ID]; len(r) != 0 {
+		t.Errorf("a draw %v after the start counted as rested: %v", cfg.Thermal.UAQuiet-time.Minute, r)
+	}
+	d = meter.Draw{ID: "d-2", Start: t0.Add(cfg.Thermal.UAQuiet)}
+	e.drawStarts(d)
+	if r := e.outletRest[d.ID]; len(r) != 2 {
+		t.Errorf("a draw UAQuiet after the start: rest %v, want both tanks'", r)
 	}
 }

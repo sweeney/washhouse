@@ -21,21 +21,20 @@ import (
 // Engine holds the system's in-memory state. It is not safe for concurrent
 // use.
 type Engine struct {
-	cfg     Config
-	now     time.Time // event time: the latest any input carried
-	started time.Time // the first non-programmer input's time: silence is judged from no earlier
-	// ttStarted is tanktemp's first input's time (a sweep or a meter
-	// message): a tank never heard from is blind only once StaleAfter has
-	// passed since. Not started: statehouse's retained room reading is
-	// dated by the sensor's last report, which can be half an hour old at
-	// a start (sweeney/washhouse#19).
-	ttStarted time.Time
-	tanks     map[string]*tankSlot
-	order     []string
-	meter     *meter.Consumer
-	thermal   *thermal.Tracker
-	attr      *draw.Attributor
-	est       *estimate.Estimator
+	cfg Config
+	now time.Time // event time: the latest any input carried
+	// started is tanktemp's first dated input's time (a sweep or a meter
+	// message): the programmer's silence, a never-heard tank's grace and a
+	// draw's rest are judged from no earlier. Neither the programmer nor
+	// the room starts it: their retained messages are dated by their last
+	// report, which can be half an hour old at a start (sweeney/washhouse#19).
+	started time.Time
+	tanks   map[string]*tankSlot
+	order   []string
+	meter   *meter.Consumer
+	thermal *thermal.Tracker
+	attr    *draw.Attributor
+	est     *estimate.Estimator
 
 	// The programmer: its switches, the time of the last input applied
 	// (a heartbeat, an event or a last will), the heartbeat interval, and
@@ -128,13 +127,6 @@ func New(cfg Config) (*Engine, error) {
 	return e, nil
 }
 
-// tanktempSeen notes tanktemp's first dated input.
-func (e *Engine) tanktempSeen(t time.Time) {
-	if e.ttStarted.IsZero() {
-		e.ttStarted = t
-	}
-}
-
 // see moves event time forward to t.
 func (e *Engine) see(t time.Time) {
 	if e.started.IsZero() {
@@ -177,7 +169,6 @@ func (e *Engine) TankState(st tanktemp.State) ([]Event, error) {
 		return e.done(nil), nil
 	}
 	e.see(st.Timestamp)
-	e.tanktempSeen(st.Timestamp)
 	// A draw that ended before this sweep is known before it is judged.
 	ev := e.meterEvents(nil, e.meter.Tick(st.Timestamp))
 	sw, err := slot.model.Sweep(st)
@@ -233,10 +224,10 @@ func (e *Engine) blindNow(slot *tankSlot) (since time.Time, reason FaultReason, 
 	case e.estimated(slot):
 		return time.Time{}, "", false
 	case !slot.seen:
-		if e.ttStarted.IsZero() || e.now.Sub(e.ttStarted) <= stale {
+		if e.started.IsZero() || e.now.Sub(e.started) <= stale {
 			return time.Time{}, "", false
 		}
-		since, reason = e.ttStarted.Add(stale), FaultStale
+		since, reason = e.started.Add(stale), FaultStale
 	case e.now.Sub(slot.last.At) > stale:
 		since, reason = slot.last.At.Add(stale), FaultStale
 	default:
@@ -337,7 +328,6 @@ func (e *Engine) Meter(m tanktemp.Meter) []Event {
 		if m.ClockSynced {
 			e.meterAt = m.Timestamp // an unsynced time can't be trusted
 			e.see(m.Timestamp)
-			e.tanktempSeen(m.Timestamp)
 		}
 		e.sweepAt = time.Time{}
 		if m.Trigger == tanktemp.TriggerSweep && m.ClockSynced {
@@ -628,8 +618,9 @@ func (e *Engine) boilerSilence(out []Event) []Event {
 		return out
 	}
 	// Retained messages replay old programmer inputs at startup, so the
-	// clock runs from the later of the last input and the first other
-	// input's time (tank sweeps, the room, the meter carry current times).
+	// clock runs from the later of the last input and tanktemp's first
+	// (its sweeps and meter carry current times; the room's retained
+	// reading doesn't).
 	from := e.boilerAt
 	if e.started.After(from) {
 		from = e.started
@@ -646,12 +637,14 @@ func (e *Engine) boilerSilence(out []Event) []Event {
 }
 
 // Ambient takes a boiler-room temperature read at at. One older than the
-// latest is ignored.
+// latest is ignored. It moves event time on but doesn't start the clock
+// (started): statehouse's retained reading is dated by the sensor's last
+// report (tanktemp's review of #21).
 func (e *Engine) Ambient(at time.Time, tempC float64) []Event {
 	if e.ambOK && at.Before(e.ambAt) {
 		return e.done(nil)
 	}
-	e.see(at)
+	e.advance(at)
 	e.ambOK, e.ambAt, e.ambC = true, at, tempC
 	e.thermal.Ambient(at, tempC)
 	return e.done(nil)
