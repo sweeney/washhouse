@@ -126,6 +126,8 @@ func TestGate(t *testing.T) {
 		{"a retained boiler event, old", Msg{BoilerEvent: &boiler.Event{Timestamp: at(-time.Hour)}}, true, true},
 		{"a boiler system ahead", Msg{BoilerSystem: &boiler.System{Timestamp: at(time.Hour)}}, false, false},
 		{"the room", Msg{Ambient: &Ambient{At: now, TempC: 20}}, true, true},
+		{"the room via statehouse, dated", Msg{Ambient: &Ambient{At: at(-30 * time.Minute), TempC: 20, Dated: true}}, true, true},
+		{"the room via statehouse, ahead", Msg{Ambient: &Ambient{At: at(time.Hour), TempC: 20, Dated: true}}, false, false},
 	} {
 		err := g.Admit(c.m, c.retained, now)
 		if (err == nil) != c.ok {
@@ -176,5 +178,46 @@ func TestDecodeErrorIsReported(t *testing.T) {
 	_, ok, err := live.Decode("water/hot/tanktemp/meter", []byte(`{`), now)
 	if !ok || err == nil {
 		t.Errorf("ok %v err %v", ok, err)
+	}
+}
+
+// statehouse's device message for the boiler-room sensor (retained,
+// republished every 30 s): its reading is the sensor's own, dated by
+// latest.last_seen; stale, or not online, is no reading (sweeney/washhouse#19).
+func TestDecodeStatehouseAmbient(t *testing.T) {
+	src := Sources{Tanktemp: []string{"water/hot/tanktemp"}, Boiler: "energy/boiler/sensor",
+		Ambient: "house/state/devices/climate_groundfloor_boiler-room"}
+	seen := now.Add(-12 * time.Minute)
+	msg := func(availability, temp, lastSeen string, stale bool) []byte {
+		return []byte(`{"id":"climate_groundfloor_boiler-room","availability":"` + availability + `","latest":{"temperature_c":` + temp +
+			`,"humidity_pct":27.4,"last_seen":` + lastSeen + `,"last_seen_ago":741,"stale":` + map[bool]string{true: "true", false: "false"}[stale] + `}}`)
+	}
+	ls := `"` + seen.Format(time.RFC3339Nano) + `"`
+	m, ok, err := src.Decode(src.Ambient, msg("online", "24", ls, false), now)
+	if err != nil || !ok || m.Ambient == nil || m.Ambient.TempC != 24 || !m.Ambient.At.Equal(seen) || !m.Ambient.Dated {
+		t.Fatalf("a good reading: %+v %v %v; want 24 °C dated %v by last_seen", m.Ambient, ok, err, seen)
+	}
+	for name, b := range map[string][]byte{
+		"stale":          msg("online", "24", ls, true),
+		"offline":        msg("offline", "24", ls, false),
+		"no temperature": msg("online", "null", ls, false),
+	} {
+		if m, ok, err := src.Decode(src.Ambient, b, now); err != nil || ok || m.Ambient != nil {
+			t.Errorf("%s: %+v %v %v; want no reading, no error", name, m.Ambient, ok, err)
+		}
+	}
+	for name, b := range map[string][]byte{
+		"no last_seen":    msg("online", "24", "null", false),
+		"a bad last_seen": msg("online", "24", `"yesterday"`, false),
+		"not JSON":        []byte("{"),
+	} {
+		if _, _, err := src.Decode(src.Ambient, b, now); err == nil {
+			t.Errorf("%s: decoded", name)
+		}
+	}
+	// zigbee2mqtt's own message still decodes (the fixtures carry it).
+	if m, ok, err := src.Decode(src.Ambient, []byte(`{"temperature":19.5,"humidity":50}`), now); err != nil || !ok ||
+		m.Ambient.TempC != 19.5 || !m.Ambient.At.Equal(now) || m.Ambient.Dated {
+		t.Errorf("a zigbee2mqtt message: %+v %v %v", m.Ambient, ok, err)
 	}
 }

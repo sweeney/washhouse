@@ -24,12 +24,18 @@ type Engine struct {
 	cfg     Config
 	now     time.Time // event time: the latest any input carried
 	started time.Time // the first non-programmer input's time: silence is judged from no earlier
-	tanks   map[string]*tankSlot
-	order   []string
-	meter   *meter.Consumer
-	thermal *thermal.Tracker
-	attr    *draw.Attributor
-	est     *estimate.Estimator
+	// ttStarted is tanktemp's first input's time (a sweep or a meter
+	// message): a tank never heard from is blind only once StaleAfter has
+	// passed since. Not started: statehouse's retained room reading is
+	// dated by the sensor's last report, which can be half an hour old at
+	// a start (sweeney/washhouse#19).
+	ttStarted time.Time
+	tanks     map[string]*tankSlot
+	order     []string
+	meter     *meter.Consumer
+	thermal   *thermal.Tracker
+	attr      *draw.Attributor
+	est       *estimate.Estimator
 
 	// The programmer: its switches, the time of the last input applied
 	// (a heartbeat, an event or a last will), the heartbeat interval, and
@@ -122,6 +128,13 @@ func New(cfg Config) (*Engine, error) {
 	return e, nil
 }
 
+// tanktempSeen notes tanktemp's first dated input.
+func (e *Engine) tanktempSeen(t time.Time) {
+	if e.ttStarted.IsZero() {
+		e.ttStarted = t
+	}
+}
+
 // see moves event time forward to t.
 func (e *Engine) see(t time.Time) {
 	if e.started.IsZero() {
@@ -164,6 +177,7 @@ func (e *Engine) TankState(st tanktemp.State) ([]Event, error) {
 		return e.done(nil), nil
 	}
 	e.see(st.Timestamp)
+	e.tanktempSeen(st.Timestamp)
 	// A draw that ended before this sweep is known before it is judged.
 	ev := e.meterEvents(nil, e.meter.Tick(st.Timestamp))
 	sw, err := slot.model.Sweep(st)
@@ -219,10 +233,10 @@ func (e *Engine) blindNow(slot *tankSlot) (since time.Time, reason FaultReason, 
 	case e.estimated(slot):
 		return time.Time{}, "", false
 	case !slot.seen:
-		if e.started.IsZero() || e.now.Sub(e.started) <= stale {
+		if e.ttStarted.IsZero() || e.now.Sub(e.ttStarted) <= stale {
 			return time.Time{}, "", false
 		}
-		since, reason = e.started.Add(stale), FaultStale
+		since, reason = e.ttStarted.Add(stale), FaultStale
 	case e.now.Sub(slot.last.At) > stale:
 		since, reason = slot.last.At.Add(stale), FaultStale
 	default:
@@ -323,6 +337,7 @@ func (e *Engine) Meter(m tanktemp.Meter) []Event {
 		if m.ClockSynced {
 			e.meterAt = m.Timestamp // an unsynced time can't be trusted
 			e.see(m.Timestamp)
+			e.tanktempSeen(m.Timestamp)
 		}
 		e.sweepAt = time.Time{}
 		if m.Trigger == tanktemp.TriggerSweep && m.ClockSynced {

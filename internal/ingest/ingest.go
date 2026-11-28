@@ -79,10 +79,13 @@ func (s Sources) Filters() []string {
 	return f
 }
 
-// Ambient is one boiler-room temperature reading.
+// Ambient is one boiler-room temperature reading. At is the sensor's own
+// report time when its publisher gives one (Dated: statehouse's
+// latest.last_seen), else the receive time (zigbee2mqtt's own message).
 type Ambient struct {
-	At    time.Time // the receive time
+	At    time.Time
 	TempC float64
+	Dated bool
 }
 
 // Msg is one decoded message. Exactly one of the pointers is set.
@@ -96,6 +99,45 @@ type Msg struct {
 	BoilerEvent  *boiler.Event
 	BoilerSystem *boiler.System
 	Ambient      *Ambient
+}
+
+// decodeAmbient reads a boiler-room climate message in either form:
+// statehouse's device message (a "latest" object; retained and republished
+// every 30 s), whose reading is dated by the sensor's latest.last_seen, and
+// is no reading while latest.stale or the device isn't online (else a dead
+// sensor would look fresh forever, statehouse republishing it); or
+// zigbee2mqtt's own ({"temperature": …}), dated by its receipt. No
+// temperature is no reading (nil, false), not an error.
+func decodeAmbient(b []byte, received time.Time) (*Ambient, bool, error) {
+	var c struct {
+		Temperature  *float64 `json:"temperature"`
+		Availability string   `json:"availability"`
+		Latest       *struct {
+			TemperatureC *float64 `json:"temperature_c"`
+			LastSeen     *string  `json:"last_seen"`
+			Stale        bool     `json:"stale"`
+		} `json:"latest"`
+	}
+	if err := json.Unmarshal(b, &c); err != nil {
+		return nil, false, err
+	}
+	if l := c.Latest; l != nil {
+		if l.LastSeen == nil {
+			return nil, false, errors.New("ambient: statehouse's latest has no last_seen")
+		}
+		at, err := time.Parse(time.RFC3339Nano, *l.LastSeen)
+		if err != nil {
+			return nil, false, fmt.Errorf("ambient: last_seen: %w", err)
+		}
+		if l.TemperatureC == nil || l.Stale || c.Availability != "online" {
+			return nil, false, nil
+		}
+		return &Ambient{At: at, TempC: *l.TemperatureC, Dated: true}, true, nil
+	}
+	if c.Temperature == nil {
+		return nil, false, nil // nothing to use
+	}
+	return &Ambient{At: received, TempC: *c.Temperature}, true, nil
 }
 
 // Decode decodes a message received at received. ok is false for a topic
@@ -114,17 +156,9 @@ func (s Sources) Decode(topic string, b []byte, received time.Time) (m Msg, ok b
 		return m, true, err
 	}
 	if s.Ambient != "" && topic == s.Ambient {
-		var c struct {
-			Temperature *float64 `json:"temperature"`
-		}
-		if err := json.Unmarshal(b, &c); err != nil {
-			return m, true, err
-		}
-		if c.Temperature == nil {
-			return m, false, nil // nothing to use
-		}
-		m.Ambient = &Ambient{At: received, TempC: *c.Temperature}
-		return m, true, nil
+		a, ok, err := decodeAmbient(b, received)
+		m.Ambient = a
+		return m, ok || err != nil, err
 	}
 	for _, p := range s.Tanktemp {
 		rest, found := strings.CutPrefix(topic, p+"/")
@@ -210,8 +244,10 @@ func vouched(m Msg) (time.Time, bool) {
 		return m.BoilerEvent.Timestamp, true
 	case m.BoilerSystem != nil:
 		return m.BoilerSystem.Timestamp, true
+	case m.Ambient != nil && m.Ambient.Dated:
+		return m.Ambient.At, true // statehouse's last_seen
 	}
-	return time.Time{}, false // the room's time is the receive time; a last will has none
+	return time.Time{}, false // zigbee2mqtt's room reading is dated by receipt; a last will has none
 }
 
 // Engine is what Feed drives: *engine.Engine, whose events are E. It is

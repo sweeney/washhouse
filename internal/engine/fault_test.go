@@ -476,3 +476,21 @@ func TestFixtureRightBusLost(t *testing.T) {
 		}
 	}
 }
+
+// A room reading doesn't start the engine's clock: statehouse's retained
+// one, dated by the sensor's last report, can be half an hour old at a
+// start, and a tank not yet heard from would look blind at once
+// (sweeney/washhouse#19).
+func TestAnOldRoomReadingDoesNotStartTheClock(t *testing.T) {
+	e := newEngine(t, faultCfg())
+	e.Ambient(t0.Add(-30*time.Minute), 21)
+	if _, err := e.TankState(uniform(left, t0, 60)); err != nil {
+		t.Fatal(err)
+	}
+	if f := e.State().Tanks[1].Fault; f != nil {
+		t.Errorf("right not yet heard, a moment after the start: fault %+v, want none", f)
+	}
+	if a := e.State().AmbientC; a == nil || *a != 21 {
+		t.Errorf("the room reading, 30 min old: %v, want 21 (ambient_stale is 40 min)", fm(a, "%v"))
+	}
+}

@@ -117,7 +117,7 @@ section.group { display: grid; gap: 0 }
 <script type="application/json" id="defs">
 {
  "ambient_topic": {
-  "meaning": "The MQTT topic (message channel) of the boiler-room temperature sensor. washhouse compares the cylinders with this room temperature to learn how fast they lose heat; leave it empty and that heat-loss figure is never learnt.",
+  "meaning": "The MQTT topic (message channel) of the boiler-room temperature sensor. washhouse compares the cylinders with this room temperature to learn how fast they lose heat; leave it empty and that heat-loss figure is never learnt. Use statehouse's device topic (house/state/devices/climate_groundfloor_boiler-room): it is retained, so washhouse has the reading at once after a restart, and it is dated by the sensor's own last report (a stale or offline sensor counts as no reading). zigbee2mqtt's own topic also works, but isn't retained, so the reading is missing after a restart until the sensor next reports (up to about 48 min).",
   "type": "string",
   "unit": "",
   "rules": "Required string (may be \"\", meaning no room sensor). Checked when the service starts (ingest.Sources.Validate, not by behaviour.Load): no MQTT wildcard (# or +), must not start or end with \"/\", and must not match a topic washhouse itself publishes. A reload that changes it is refused whole: \"the subscriptions are made at start, so restart washhouse to apply it\".",
@@ -750,7 +750,7 @@ section.group { display: grid; gap: 0 }
   "restart": false
  },
  "thermal.ambient_stale": {
-  "meaning": "A boiler-room temperature reading older than this is not used for the heat-loss fit.",
+  "meaning": "A boiler-room temperature reading older than this is not used for the heat-loss fit. The sensor reports only when its reading changes, at times 48 minutes apart, so 60m keeps a good reading through its quiet spells.",
   "type": "duration",
   "unit": "",
   "rules": "Required Go duration; must be above 0.",
