@@ -269,8 +269,14 @@ func TestKnownZeroAndStale(t *testing.T) {
 	if l := s.Tanks[0]; l.StoredKWh == nil || *l.StoredKWh <= 0 {
 		t.Errorf("left tank %+v: want its estimate", l)
 	}
-	if s.StoredKWh != nil || s.UsableL40Low != nil || s.LowHotWater != nil {
-		t.Errorf("totals with a stale tank: %v %v %v, want nil", s.StoredKWh, s.UsableL40Low, s.LowHotWater)
+	if s.StoredKWh != nil || s.UsableL40Low != nil {
+		t.Errorf("totals with a stale tank: %v %v, want nil", s.StoredKWh, s.UsableL40Low)
+	}
+	// The left tank alone clears the level and margin, so low_hot_water is
+	// false from the partial (the right can only add to it), where it was
+	// unknown before sweeney/washhouse#17.
+	if s.Partial == nil || s.LowHotWater == nil || *s.LowHotWater {
+		t.Errorf("partial %+v, low %v: want the left's, and not low", s.Partial, s.LowHotWater)
 	}
 }
 

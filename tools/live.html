@@ -63,6 +63,8 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px 
 .label { font: 600 11px var(--f-body); letter-spacing: .08em; text-transform: uppercase; color: var(--muted) }
 .why { color: var(--muted); font-size: 12.5px; margin: 6px 0 0 }
 .why b { color: var(--ink); font-weight: 600 }
+.blind { border-left: 4px solid var(--bad); background: color-mix(in srgb, var(--bad) 9%, transparent); border-radius: 6px; padding: 8px 12px; margin: 10px 0 2px; font-size: 13px }
+.blind b { font-weight: 600 }
 .chip { font: 500 11px var(--f-mono); padding: 1px 7px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap }
 .chip.bad { color: var(--bad); border-color: var(--bad) } .chip.warn { color: var(--warn); border-color: var(--warn) } .chip.ok { color: var(--ok); border-color: var(--ok) } .chip.info { color: var(--info); border-color: var(--info) }
 .empty { color: var(--muted); padding: 28px 8px; text-align: center; border: 1.5px dashed var(--line); border-radius: 12px }
@@ -170,6 +172,7 @@ details.guide ol { margin: 10px 0 0; padding-left: 20px; display: grid; gap: 6px
         <div class="label" id="heroTitle">Hot water at the taps · washhouse's estimate</div>
         <span class="pill off" id="lowPill">unknown</span>
       </div>
+      <div class="blind" id="blindBanner" role="status" hidden></div>
       <div class="nums">
         <div class="big" id="uLow">—<small>L</small></div>
         <div class="sub">of 40 °C water to plan on<br>up to <b id="uHigh">—</b> L if the tanks mix perfectly</div>
@@ -196,6 +199,8 @@ details.guide ol { margin: 10px 0 0; padding-left: 20px; display: grid; gap: 6px
           <button type="button" id="dShower">Run a shower</button>
           <button type="button" id="dReheat">Hot-water timer on</button>
           <button type="button" id="dRestart">Restart washhouse</button>
+          <button type="button" id="dBlind" title="the right cylinder's probe bus fails, as a loose lead did: its probes read bus_low, then not_present">Blind the right cylinder</button>
+          <button type="button" id="dBlip" title="a few failed sweeps, shorter than tank_fault_after: washhouse sends nothing">A brief blip</button>
           <span class="seg" id="demoSpeed" role="group" aria-label="Demo speed"><button type="button" data-x="10" aria-pressed="true">10×</button><button type="button" data-x="30" aria-pressed="false">30×</button><button type="button" data-x="60" aria-pressed="false">60×</button></span>
         </div>
       </aside>
@@ -330,7 +335,7 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":
 const FLOW_MS = 10 * 60 * 1000;
 // The pure part (classifying, summarising, explaining, the derived
 // figures) is tools/live-core.js, tested under node against the goldens.
-const {num, short, onoff, fmtDur, fmtMs, REASONS, STATE_WHY, describe, group, crossing40, lowWhy, meterNews} = LiveCore;
+const {num, short, onoff, fmtDur, fmtMs, REASONS, STATE_WHY, FAULT_WHY, errorsText, describe, group, crossing40, lowWhy, meterNews} = LiveCore;
 const classify = topic => LiveCore.classify(topic, base, tt);
 // For HTML: a cylinder's short name, escaped (the broker is anonymous on
 // the LAN, so nothing from it goes into innerHTML unescaped).
@@ -361,7 +366,10 @@ function params() {
   try { saved = JSON.parse(localStorage.getItem("washhouse-live") || "{}") } catch {}
   const n = k => { const v = parseFloat(p.get(k)); return Number.isFinite(v) && v >= 0 ? v : null; };
   return { ws: p.get("ws") || saved.ws || "", base: p.get("base") || saved.base || "test/water/hot",
-    tt: p.get("tt") || saved.tt || "water/hot/tanktemp", low: n("low"), margin: n("margin"), demo: p.get("demo") === "1" };
+    tt: p.get("tt") || saved.tt || "water/hot/tanktemp", low: n("low"), margin: n("margin"), demo: p.get("demo") === "1",
+    // For tools/live_page_check.sh: press the demo's buttons after so many
+    // seconds (blind, then fix; or a blip).
+    blind: n("blind"), fix: n("fix"), blip: n("blip") };
 }
 function remember() { try { localStorage.setItem("washhouse-live", JSON.stringify({ws: $("ws").value, base: $("base").value, tt: $("tt").value})) } catch {} }
 
@@ -453,17 +461,23 @@ function onEvent(m, at) {
 // ---------------------------------------------------------------- the house's water
 function renderHero() {
   const m = S.state; if (!m) return;
-  $("uLow").innerHTML = `${num(m.usable_l40_low, 0)}<small>L</small>`;
-  $("uHigh").textContent = num(m.usable_l40, 0);
-  $("stored").textContent = num(m.stored_kwh, 2);
+  const p = m.partial;   // a cylinder blind: the others' figures, lower bounds
+  $("uLow").innerHTML = p ? `≥ ${num(p.usable_l40_low, 0)}<small>L</small>` : `${num(m.usable_l40_low, 0)}<small>L</small>`;
+  $("uHigh").textContent = p ? "≥ " + num(p.usable_l40, 0) : num(m.usable_l40, 0);
+  $("stored").textContent = p ? "≥ " + num(p.stored_kwh, 2) : num(m.stored_kwh, 2);
+  const blind = [...S.wtanks.values()].filter(w => w.fault);
+  $("blindBanner").hidden = !blind.length && !p;
+  $("blindBanner").innerHTML = blind.map(w => `<b>The ${esc(short(w.device_id))} cylinder is blind</b> since ${esc(String(w.fault.since).slice(11, 19))} (${esc(w.fault.reason)}${esc(errorsText(w.fault.errors))}): ${esc(FAULT_WHY[w.fault.reason] || "")}.`).join("<br>") +
+    (p ? `<br>So the figures below are <b>at least</b> what the house has: the ${esc(p.missing.map(short).join(", "))} cylinder${p.missing.length > 1 ? "s" : ""} can only add to them. washhouse sends <code>tank_lost</code> once one has been blind for 5 minutes, and <code>tank_restored</code> once it has read normally for 2.` : "");
   $("ambient").textContent = m.ambient_c == null ? "unknown" : num(m.ambient_c) + " °C";
   const lp = $("lowPill");
   if (m.low_hot_water == null) { lp.className = "pill off"; lp.textContent = "unknown"; }
   else if (m.low_hot_water) { lp.className = "pill bad"; lp.textContent = "low hot water"; }
   else { lp.className = "pill ok"; lp.textContent = "enough hot water"; }
   const u = m.usable_l40_low;
-  $("lowWhy").innerHTML = lowWhy(u, m.low_hot_water, LOW, MARGIN);
+  $("lowWhy").innerHTML = lowWhy(u, m.low_hot_water, LOW, MARGIN, p);
   const tk = (m.tanks || []);
+  $("splitWhy").textContent = "";
   if (tk.length >= 2 && tk.every(t => t.usable_l40 != null)) {
     $("splitWhy").innerHTML = `That's the cylinders added: ${tk.map(t => `${num(t.usable_l40, 0)} L (${sh(t.device_id)})`).join(" + ")}. They feed one outlet side by side, and the split between them moves with their temperatures${lastSplit()}: a hot cylinder keeps the tap hot while the other is cold.`;
   }
@@ -490,10 +504,10 @@ function drawGauge() {
   const m = S.state, g = $("gauge"); if (!m) return;
   const W = 800, H = 92, x0 = 10, x1 = W - 10, y = 30, h = 22;
   const lo = LOW, mg = MARGIN ?? 0;
-  const hi = Math.max(80, (lo ?? 0) + mg + 20, m.usable_l40 || 0) * 1.08;
+  const hi = Math.max(80, (lo ?? 0) + mg + 20, m.usable_l40 || 0, m.partial ? m.partial.usable_l40 : 0) * 1.08;
   const X = v => x0 + Math.min(Math.max(v, 0), hi) / hi * (x1 - x0);
   const ink = css("--ink"), muted = css("--muted"), bad = css("--bad"), warn = css("--warn"), ok = css("--ok");
-  const u = m.usable_l40_low, uh = m.usable_l40;
+  const u = m.partial ? m.partial.usable_l40_low : m.usable_l40_low, uh = m.partial ? m.partial.usable_l40 : m.usable_l40;
   const fill = m.low_hot_water ? bad : lo != null && u != null && u < lo + mg ? warn : ok;
   let s = `<rect x="${x0}" y="${y}" width="${x1 - x0}" height="${h}" rx="5" fill="${css("--grid")}"/>`;
   if (lo != null) s += `<rect x="${X(0)}" y="${y}" width="${X(lo) - X(0)}" height="${h}" rx="5" fill="${css("--lowband")}"/>
@@ -640,7 +654,7 @@ function renderTanks() {
     let el = document.getElementById("tank-" + id);
     if (!el) { el = document.createElement("div"); el.className = "panel tank"; el.id = "tank-" + id; $("tanks").appendChild(el); }
     const p = S.probes.get(id), w = S.wtanks.get(id);
-    const stCls = {heating: "copper", drawing: "warn", cooling: "info", unknown: "off"}[w?.state] || "off";
+    const stCls = w?.fault ? "bad" : {heating: "copper", drawing: "warn", cooling: "info", unknown: "off"}[w?.state] || "off";
     const pw = w?.power_kw;
     const flags = [];
     if (p) {
@@ -652,10 +666,10 @@ function renderTanks() {
     const stat = (v, n, t) => `<div class="stat" title="${esc(t || "")}"><div class="v">${v}</div><div class="n">${n}</div></div>`;
     el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
         <h2>${esc(short(id))} cylinder</h2>
-        <span class="pill ${stCls}">${esc(w?.state || "no washhouse reading")}${w?.heat_source ? " · " + esc(w.heat_source) : ""}</span></div>
+        <span class="pill ${stCls}">${w?.fault ? "blind" : esc(w?.state || "no washhouse reading")}${w?.heat_source ? " · " + esc(w.heat_source) : ""}</span></div>
       <div class="meta"><span>${esc(id)}</span>${p ? `<span>${cadence(p)}</span><span data-age="${p.at}"></span>` : ""}</div>
       ${p ? cylinderSVG(id, p.msg, w) : `<div class="empty">No tanktemp sweep yet.</div>`}
-      <p class="why" style="margin-top:2px">${w ? esc(STATE_WHY[w.state] || "") : "washhouse hasn't published this cylinder yet."}</p>
+      <p class="why" style="margin-top:2px">${w?.fault ? `<b>Blind</b> since ${esc(String(w.fault.since).slice(11, 19))}: ${esc(FAULT_WHY[w.fault.reason] || w.fault.reason)}${esc(errorsText(w.fault.errors))}.` : w ? esc(STATE_WHY[w.state] || "") : "washhouse hasn't published this cylinder yet."}</p>
       <div class="stats">
         ${stat(w?.usable_l40 == null ? "—" : num(w.usable_l40, 0) + " L", "40 °C water, alone", "this cylinder's usable water as if it were the only one: for display, not the house's")}
         ${stat(w?.hot_l == null ? "—" : num(w.hot_l, 0) + " L", "at 40 °C or more", "litres in the cylinder at or above 40 °C")}
@@ -955,7 +969,10 @@ function startDemo() {
     tanks: {hot_water_cylinder_left: {t: [24, 38, 55, 61, 58], ua: 3.6, share: 0.13, state: "cooling", prevE: null, power: -0.12},
             hot_water_cylinder_right: {t: [18, 24, 31, 44, 47], ua: 17.5, share: 0.87, state: "cooling", prevE: null, power: -0.42}},
     draw: null, lastLow: null,
+    blind: null,   // a cylinder whose probe bus has failed (Blind / A brief blip)
   };
+  const FAULT_AFTER = 5 * 60e3, RESTORE_AFTER = 2 * 60e3;   // tank_fault_after, tank_restore_after
+  const isBlind = id => D.blind && D.blind.id === id && !D.blind.fixedAt;
   const pub = (topic, o, ret, qos) => ingest(topic, JSON.stringify(o), ret, qos);
   const energy = t => t.t.reduce((a, c) => a + Math.max(c - 12, 0), 0) * 200 / 5 * 4.186 / 3600;   // kWh above a 12 °C feed
   const usableAlone = t => { let l = 0; for (let i = 0; i < 5; i++) if (t.t[i] >= 40) l += 40 * (t.t[i] - 12) / 28; return l; };
@@ -963,20 +980,35 @@ function startDemo() {
     ready: ev !== "STARTUP", uptime_s: D.up, tanks: Object.keys(D.tanks)});
   pub(tt + "/status", {online: true, event: "HEARTBEAT", timestamp: iso(clock()), version: "tt-demo", ready: true}, true, 1);
   pub(base + "/status", statusMsg("HEARTBEAT"), true, 1);
-  const tankMsg = (id, t, at) => ({schema: "net.swee.washhouse.tank.v1", device_id: id, timestamp: at, sweep_at: at, state: t.state, heat_source: t.state === "heating" ? "hw" : null,
+  const blindTankMsg = (id, t, at) => ({schema: "net.swee.washhouse.tank.v1", device_id: id, timestamp: at, sweep_at: at, state: "unknown", heat_source: null,
+    stored_kwh: null, mean_c: null, top_c: null, hot_l: null, usable_l40: null, usable_l40_low: null, power_kw: null, ua_w_per_k: t.ua, probes_ok: 0, probes_total: 5,
+    fault: {since: iso(D.blind.since), reason: "probes", errors: {[D.blind.code]: 5}}});
+  const tankMsg = (id, t, at) => isBlind(id) ? blindTankMsg(id, t, at) : ({schema: "net.swee.washhouse.tank.v1", device_id: id, timestamp: at, sweep_at: at, state: t.state, heat_source: t.state === "heating" ? "hw" : null,
     stored_kwh: +energy(t).toFixed(3), mean_c: +(t.t.reduce((a, b) => a + b) / 5).toFixed(3), top_c: +Math.max(...t.t).toFixed(3), hot_l: +usableAlone(t).toFixed(1) * 0.7,
-    usable_l40: +usableAlone(t).toFixed(3), usable_l40_low: +(usableAlone(t) * 0.85).toFixed(3), power_kw: t.power, ua_w_per_k: t.ua, probes_ok: 5, probes_total: 5});
+    usable_l40: +usableAlone(t).toFixed(3), usable_l40_low: +(usableAlone(t) * 0.85).toFixed(3), power_kw: t.power, ua_w_per_k: t.ua, probes_ok: 5, probes_total: 5, fault: null});
   const stateMsg = at => {
     const ids = Object.keys(D.tanks), L = D.tanks[ids[0]], R = D.tanks[ids[1]];
-    const merged = Math.min(usableAlone(R) / R.share, usableAlone(L) / L.share) * 0.9 + 10;  // the cooler share runs out first
+    const known = ids.filter(id => !isBlind(id));
+    const merged = known.reduce((a, id) => a + usableAlone(D.tanks[id]), 0);   // the cylinders added, as washhouse does
     const low85 = merged * 0.85;
-    if (D.lastLow == null) D.lastLow = low85 < LOW; else if (low85 < LOW) D.lastLow = true; else if (low85 > LOW + MARGIN) D.lastLow = false;
+    let partial = null, lowNow = D.lastLow;
+    if (known.length < ids.length) {   // one blind: the others' figures, lower bounds; never low from them
+      partial = {missing: ids.filter(isBlind), stored_kwh: +known.reduce((a, id) => a + energy(D.tanks[id]), 0).toFixed(3),
+        usable_l40: +merged.toFixed(3), usable_l40_low: +low85.toFixed(3)};
+      if (low85 > LOW + MARGIN) D.lastLow = false;
+      lowNow = low85 > LOW + MARGIN ? false : null;
+    } else {
+      if (D.lastLow == null) D.lastLow = low85 < LOW; else if (low85 < LOW) D.lastLow = true; else if (low85 > LOW + MARGIN) D.lastLow = false;
+      lowNow = D.lastLow;
+    }
     const ad = D.draw && !D.draw.ended ? {draw_id: D.draw.id, started_at: iso(D.draw.start), last_litre_at: iso(D.draw.last), litres: D.draw.litres, flow_l_min: D.draw.litres > 1 ? D.draw.flow : null, kind: D.draw.kindNow} : null;
-    return {schema: "net.swee.washhouse.state.v1", timestamp: at, stored_kwh: +(energy(L) + energy(R)).toFixed(3), usable_l40: +merged.toFixed(3), usable_l40_low: +low85.toFixed(3),
-      low_hot_water: D.lastLow, boiler: {hw: D.hw, ch: false}, ambient_c: 17.4, active_draw: ad,
+    return {schema: "net.swee.washhouse.state.v1", timestamp: at, stored_kwh: partial ? null : +(energy(L) + energy(R)).toFixed(3),
+      usable_l40: partial ? null : +merged.toFixed(3), usable_l40_low: partial ? null : +low85.toFixed(3),
+      low_hot_water: lowNow, partial, boiler: {hw: D.hw, ch: false}, ambient_c: 17.4, active_draw: ad,
       meter: {timestamp: at, counting_since: D.since, count: D.count, litres_since_start: D.lsStart, continuous_flow: null},
       tanktemp: {timestamp: at, online: true, version: "tt-demo"},
-      tanks: ids.map(id => { const t = D.tanks[id]; return {device_id: id, state: t.state, heat_source: t.state === "heating" ? "hw" : null, stored_kwh: +energy(t).toFixed(3), usable_l40: +usableAlone(t).toFixed(3), top_c: +Math.max(...t.t).toFixed(3)}; })};
+      tanks: ids.map(id => { const t = D.tanks[id]; return isBlind(id) ? {device_id: id, state: "unknown", heat_source: null, stored_kwh: null, usable_l40: null, top_c: null}
+        : {device_id: id, state: t.state, heat_source: t.state === "heating" ? "hw" : null, stored_kwh: +energy(t).toFixed(3), usable_l40: +usableAlone(t).toFixed(3), top_c: +Math.max(...t.t).toFixed(3)}; })};
   };
   const setState = (id, st) => { const t = D.tanks[id]; if (t.state === st) return; const prev = t.state; t.state = st;
     pub(base + "/events", {schema: "net.swee.washhouse.event.v1", event: "tank_state_changed", timestamp: iso(clock()), tank: {device_id: id, state: st, prev, heat_source: st === "heating" ? "hw" : null, power_kw: t.power}}, false, 1);
@@ -987,11 +1019,51 @@ function startDemo() {
       if (D.hw) { for (let i = 0; i < 5; i++) t.t[i] = Math.min(t.t[i] + (i < 3 ? 0.9 : 0.5) * (id.endsWith("right") ? 1.1 : 0.7), 63); t.power = id.endsWith("right") ? 9.6 : 3.1; }
       else { for (let i = 0; i < 5; i++) t.t[i] -= t.ua * 0.0009 * (t.t[i] - 17); if (!D.draw) t.power = -t.ua * ((t.t.reduce((a, b) => a + b) / 5) - 17) / 1000; }
       if (D.draw && !D.draw.ended) t.power = null;
-      const sensors = t.t.map((c, i) => ({position: POS[i], order: i + 1, height_mm: H[i], rom: "28-demo" + i, temp_c: +c.toFixed(3), raw_c: +c.toFixed(3), offset_c: 0, error: null, suspect: null}));
+      if (isBlind(id) && clock() - D.blind.since >= 2.5 * 60e3) D.blind.code = "not_present";   // bus_low, then the bus empties
+      const sensors = isBlind(id) ? POS.map((p, i) => ({position: p, order: i + 1, height_mm: H[i], rom: "28-demo" + i, temp_c: null, raw_c: null, offset_c: 0, error: D.blind.code, suspect: null}))
+        : t.t.map((c, i) => ({position: POS[i], order: i + 1, height_mm: H[i], rom: "28-demo" + i, temp_c: +c.toFixed(3), raw_c: +c.toFixed(3), offset_c: 0, error: null, suspect: null}));
       pub(tt + "/" + id + "/state", {device_id: id, timestamp: at, clock_synced: true, sweep_ms: 3950, sensors}, true, 0);
       pub(base + "/tank/" + id, tankMsg(id, t, at), true, 0);
     }
     pub(base + "/state", stateMsg(at), true, 0);
+    faults();
+  };
+  const ev = (event, body) => pub(base + "/events", {schema: "net.swee.washhouse.event.v1", event, timestamp: iso(clock()), ...body}, false, 1);
+  // The blind cylinder's lifecycle, as washhouse's: lost once blind for
+  // FAULT_AFTER, restored once read again for RESTORE_AFTER, nothing for a
+  // shorter blip; a blip fixes itself after three sweeps.
+  const faults = () => {
+    const b = D.blind; if (!b) return;
+    const now = clock();
+    if (!b.fixedAt) {
+      b.sweeps++;
+      if (b.blip && b.sweeps >= 3) return D.fix();
+      if (!b.lost && now - b.since >= FAULT_AFTER) {
+        b.lost = true;
+        ev("tank_lost", {tank_lost: {device_id: b.id, reason: "probes", errors: {[b.code]: 5}, since: iso(b.since)}});
+      }
+      return;
+    }
+    if (!b.lost) { D.blind = null; return; }   // a blip: nothing was said, nothing to unsay
+    if (now - b.fixedAt >= RESTORE_AFTER) {
+      ev("tank_restored", {tank_restored: {device_id: b.id, lost_since: iso(b.since), duration_s: +((b.fixedAt - b.since) / 1000).toFixed(3)}});
+      D.blind = null;
+    }
+  };
+  D.blindIt = (blip) => {
+    if (D.blind) return;
+    const id = Object.keys(D.tanks)[1];
+    D.blind = {id, since: clock(), code: "bus_low", sweeps: 0, lost: false, blip: !!blip, fixedAt: 0};
+    // Blind at once: its state goes unknown (ending a heating spell), not 2 min later.
+    setState(id, "unknown");
+    $("dBlind").textContent = blip ? "Blind the right cylinder" : "Fix it (reseat the lead)";
+    sweep();
+  };
+  D.fix = () => {
+    const b = D.blind; if (!b || b.fixedAt) return;
+    b.fixedAt = clock();
+    $("dBlind").textContent = "Blind the right cylinder";
+    setTimeout(() => { if (D.tanks[b.id].state === "unknown") setState(b.id, D.hw ? "heating" : "cooling"); }, 5 * 60e3 / T.speed);   // power judged again
   };
   const litre = () => {
     const d = D.draw; if (!d || d.ended || d.left <= 0) return;
@@ -1020,7 +1092,9 @@ function startDemo() {
         const hb = d.litres * (d.litres < 20 ? 1.25 + Math.random() * 0.3 : 0.95 + Math.random() * 0.08), reasons = [];
         if (d.litres < 20) reasons.push("small", "thermocline_gap");
         if (D.hw) reasons.unshift("hw_on");
-        const masked = D.hw;
+        const blindNow = !!(D.blind && !D.blind.fixedAt);   // washhouse can't split a draw with a cylinder blind
+        if (blindNow) reasons.push("tank_missing");
+        const masked = D.hw || blindNow;
         pub(base + "/events", {schema: "net.swee.washhouse.event.v1", event: "draw_balanced", timestamp: iso(clock()), draw_balanced: {
           draw_id: d.id, ended_at: iso(d.last),
           tanks: L.map((id, i) => masked ? {device_id: id, outlet_peak_c: 58, inlet_drop_c: 9} : {device_id: id, share: +sh[i].toFixed(3), litres: +(sh[i] * d.litres).toFixed(3), outlet_peak_c: i ? 51 : 59, inlet_drop_c: i ? 14 : 6}),
@@ -1061,6 +1135,8 @@ $("dTap").onclick = () => demo && demo.run(7, 13.4);
 $("dShower").onclick = () => demo && demo.run(46, 6.2);
 $("dReheat").onclick = () => demo && demo.reheat();
 $("dRestart").onclick = () => demo && demo.restart();
+$("dBlind").onclick = () => demo && (demo.blind && !demo.blind.fixedAt && !demo.blind.blip ? demo.fix() : demo.blindIt(false));
+$("dBlip").onclick = () => demo && demo.blindIt(true);
 
 // ---------------------------------------------------------------- boot
 $("conn").addEventListener("submit", e => { e.preventDefault(); client ? (disconnect(), clearView()) : connect(); });
@@ -1068,6 +1144,9 @@ $("demoBtn").onclick = () => demo ? (disconnect(), clearView()) : startDemo();
 const P = params();
 $("ws").value = P.ws; $("base").value = P.base; $("tt").value = P.tt; LOW = P.low; MARGIN = P.margin;
 if (P.demo || !P.ws) startDemo(); else connect();
+if (demo && P.blind != null) setTimeout(() => demo && demo.blindIt(false), P.blind * 1000);
+if (demo && P.fix != null) setTimeout(() => demo && demo.fix(), P.fix * 1000);
+if (demo && P.blip != null) setTimeout(() => demo && demo.blindIt(true), P.blip * 1000);
 </script>
 </body>
 </html>

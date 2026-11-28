@@ -166,6 +166,10 @@ func State(s engine.State) ([]byte, error) {
 		Tanktemp: washhouse.Tanktemp{Timestamp: tm(s.Tanktemp.At), Online: s.Tanktemp.Online, Version: s.Tanktemp.Version},
 		Tanks:    []washhouse.TankSummary{},
 	}
+	if p := s.Partial; p != nil {
+		w.Partial = &washhouse.Partial{Missing: p.Missing, StoredKWh: washhouse.Num(p.StoredKWh),
+			UsableL40: washhouse.Num(p.UsableL40), UsableL40Low: washhouse.Num(p.UsableL40Low)}
+	}
 	for _, t := range s.Tanks {
 		w.Tanks = append(w.Tanks, washhouse.TankSummary{DeviceID: t.DeviceID, State: washhouse.TankState(t.State),
 			HeatSource: src(t.HeatSource), StoredKWh: n(t.StoredKWh), UsableL40: n(t.UsableL40), TopC: n(t.TopC)})
@@ -180,8 +184,17 @@ func Tank(s engine.State, t engine.TankState) ([]byte, error) {
 		State: washhouse.TankState(t.State), HeatSource: src(t.HeatSource),
 		StoredKWh: n(t.StoredKWh), MeanC: n(t.MeanC), TopC: n(t.TopC), HotL: n(t.HotL),
 		UsableL40: n(t.UsableL40), UsableL40Low: n(t.UsableL40Low), PowerKW: n(t.PowerKW), UAWPerK: n(t.UAWPerK),
-		ProbesOK: t.ProbesOK, ProbesTotal: t.ProbesTotal,
+		ProbesOK: t.ProbesOK, ProbesTotal: t.ProbesTotal, Fault: fault(t.Fault),
 	})
+}
+
+// fault is a blind tank's fault on the wire, nil while it is estimated.
+// Lost isn't on the wire: tank_lost says it.
+func fault(f *engine.Fault) *washhouse.Fault {
+	if f == nil {
+		return nil
+	}
+	return &washhouse.Fault{Since: washhouse.Time{Time: f.Since}, Reason: washhouse.FaultReason(f.Reason), Errors: f.Errors}
 }
 
 // Event is e's {base}/events message.
@@ -214,6 +227,14 @@ func Event(e engine.Event, base string) (Message, error) {
 	if t := e.Tank; t != nil {
 		w.Tank = &washhouse.TankEvent{DeviceID: t.DeviceID, State: washhouse.TankState(t.State),
 			Prev: washhouse.TankState(t.Prev), HeatSource: src(t.Source), PowerKW: n(t.PowerKW)}
+	}
+	if x := e.Lost; x != nil {
+		w.TankLost = &washhouse.TankLost{DeviceID: x.DeviceID, Reason: washhouse.FaultReason(x.Reason), Errors: x.Errors,
+			Since: washhouse.Time{Time: x.Since}}
+	}
+	if x := e.Restored; x != nil {
+		w.TankRestored = &washhouse.TankRestored{DeviceID: x.DeviceID, LostSince: washhouse.Time{Time: x.LostSince},
+			DurationS: washhouse.Num(x.Duration.Seconds())}
 	}
 	b, err := washhouse.EncodeEvent(w)
 	if err != nil {

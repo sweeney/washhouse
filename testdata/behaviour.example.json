@@ -5,6 +5,8 @@
   "boiler_heartbeat": "15m",
   "boiler_missed_heartbeats": 2.5,
   "recent_draws": 50,
+  "tank_fault_after": "5m",
+  "tank_restore_after": "2m",
   "freshness": {"ahead": "90s", "stale": "90s", "silence": "2m"},
   "cold_c": 10,
   "heat_capacity_kwh_per_litre_k": 0.0011627777777777778,

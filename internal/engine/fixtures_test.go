@@ -2,6 +2,7 @@ package engine
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -94,7 +95,7 @@ func feed(t *testing.T, e *Engine, name string, o feedOpts) run {
 		switch {
 		case m.State != nil:
 			ev, err := e.TankState(*m.State)
-			if err != nil {
+			if err != nil && !errors.Is(err, ErrBlindSweep) {
 				t.Fatal(err)
 			}
 			add(ev)
@@ -685,8 +686,8 @@ func TestFixtureLowHotWaterIsTheSystems(t *testing.T) {
 					r.ofs(s.At), *s.UsableL40, *s.UsableL40Low, sum, sumLow)
 			}
 		}
-		if s.LowHotWater == nil {
-			continue
+		if s.LowHotWater == nil || s.UsableL40Low == nil {
+			continue // unknown, or judged from a partial (one tank not yet heard)
 		}
 		if first == nil {
 			first = s

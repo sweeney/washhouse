@@ -568,6 +568,30 @@ section.group { display: grid; gap: 0 }
   "affects": "engine / HTTP API (recent draws list)",
   "restart": false
  },
+ "tank_fault_after": {
+  "meaning": "How long a cylinder must be blind (its probes unreadable, or no sweep from it) before washhouse calls it lost: it sends tank_lost, logs it once, and /healthz says degraded. A shorter blip of failed sweeps sends nothing.",
+  "type": "duration",
+  "unit": "",
+  "rules": "Required Go duration string; must be above 0 (engine: \"tank fault after … must both be above 0\").",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "engine (tank faults), /healthz",
+  "restart": false
+ },
+ "tank_restore_after": {
+  "meaning": "How long a lost cylinder must be read normally again before washhouse calls it restored (tank_restored, and /healthz ok again). A cylinder that flickers back and blind again stays lost, so a loose connection sends one pair of events, not many.",
+  "type": "duration",
+  "unit": "",
+  "rules": "Required Go duration string; must be above 0.",
+  "check": {
+   "min": 0,
+   "exclusiveMin": true
+  },
+  "affects": "engine (tank faults), /healthz",
+  "restart": false
+ },
  "tanks": {
   "meaning": "The list of hot-water cylinders, one entry each. Their order is the order every report lists them in.",
   "type": "array",
@@ -995,6 +1019,8 @@ section.group { display: grid; gap: 0 }
   "boiler_heartbeat": "15m",
   "boiler_missed_heartbeats": 2.5,
   "recent_draws": 50,
+  "tank_fault_after": "5m",
+  "tank_restore_after": "2m",
   "freshness": {
     "ahead": "90s",
     "stale": "90s",

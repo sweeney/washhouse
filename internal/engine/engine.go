@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -70,9 +71,19 @@ type Engine struct {
 // tankSlot is one cylinder's model and its latest sweep.
 type tankSlot struct {
 	model *tank.Tank
-	seen  bool       // a sweep was taken
-	last  tank.Sweep // the latest sweep taken
-	ok    bool       // the latest sweep was estimated
+	seen  bool           // a sweep was taken
+	last  tank.Sweep     // the latest sweep taken
+	ok    bool           // the latest sweep was estimated
+	errs  map[string]int // tanktemp's error codes in the latest sweep, counted
+
+	// The tank's blind spell (judgeFaults): when it began (zero while the
+	// tank is estimated and not lost), why it is blind now, whether it is
+	// lost, and, while a lost tank is estimated again, its first estimated
+	// sweep since.
+	blindSince time.Time
+	reason     FaultReason
+	lost       bool
+	goodSince  time.Time
 }
 
 // New validates cfg and returns an engine with nothing known.
@@ -132,6 +143,12 @@ func sorted(ev []Event) []Event {
 	return ev
 }
 
+// ErrBlindSweep wraps TankState's error for a sweep the tank's model
+// refused (too few usable probes): the tank is blind, which its fault and
+// tank_lost report, so a caller needn't treat each such sweep as a fault of
+// its own.
+var ErrBlindSweep = errors.New("engine: blind sweep")
+
 // TankState takes a tanktemp sweep. A sweep with an unsynced clock, or no
 // later than that tank's last, is skipped. A sweep from a tank not
 // configured, or one the tank's model refuses (fewer than two usable
@@ -150,12 +167,15 @@ func (e *Engine) TankState(st tanktemp.State) ([]Event, error) {
 	ev := e.meterEvents(nil, e.meter.Tick(st.Timestamp))
 	sw, err := slot.model.Sweep(st)
 	slot.seen = true
+	slot.errs = errorsOf(st)
 	e.sweepAt = st.Timestamp // a refused state still counts for its sweep
 	if err != nil {
 		slot.ok = false
 		slot.last = tank.Sweep{DeviceID: st.DeviceID, At: st.Timestamp, ClockSynced: st.ClockSynced,
 			ProbesTotal: len(st.Sensors), ProbesOK: usable(st, e.trust(st.DeviceID))}
-		return e.done(ev), err
+		// The tank knows nothing from this sweep: its state is unknown now.
+		tev, _ := e.thermal.Blind(st.DeviceID, st.Timestamp, st.ClockSynced)
+		return e.done(e.thermalEvents(ev, tev)), fmt.Errorf("%w: %w", ErrBlindSweep, err)
 	}
 	slot.ok, slot.last = true, sw
 	tev, err := e.thermal.Sweep(sw)
@@ -167,12 +187,106 @@ func (e *Engine) TankState(st tanktemp.State) ([]Event, error) {
 	return e.done(ev), nil
 }
 
-// done finishes an input: the programmer's silence and low_hot_water are
-// judged at the new event time, and the events are sorted.
+// done finishes an input: the programmer's silence, the tanks' faults and
+// low_hot_water are judged at the new event time, and the events are
+// sorted.
 func (e *Engine) done(ev []Event) []Event {
 	ev = e.boilerSilence(ev)
+	ev = e.judgeFaults(ev)
 	e.judgeLow()
 	return sorted(ev)
+}
+
+// errorsOf counts tanktemp's error codes in st (empty, never nil).
+func errorsOf(st tanktemp.State) map[string]int {
+	out := map[string]int{}
+	for _, s := range st.Sensors {
+		if s.Error != nil {
+			out[*s.Error]++
+		}
+	}
+	return out
+}
+
+// blindNow says whether slot is blind at event time (not estimated), since
+// when it would have become so, and why. A tank never heard from is blind
+// only once Thermal.StaleAfter has passed since the engine's first input:
+// at a start it is only not heard from yet.
+func (e *Engine) blindNow(slot *tankSlot) (since time.Time, reason FaultReason, blind bool) {
+	stale := e.cfg.Thermal.StaleAfter
+	switch {
+	case e.estimated(slot):
+		return time.Time{}, "", false
+	case !slot.seen:
+		if e.started.IsZero() || e.now.Sub(e.started) <= stale {
+			return time.Time{}, "", false
+		}
+		since, reason = e.started.Add(stale), FaultStale
+	case e.now.Sub(slot.last.At) > stale:
+		since, reason = slot.last.At.Add(stale), FaultStale
+	default:
+		since, reason = slot.last.At, FaultProbes // refused: too few usable probes
+	}
+	if reason == FaultStale && e.tanktemp.Online != nil && !*e.tanktemp.Online {
+		reason = FaultTanktempOffline
+	}
+	return since, reason, true
+}
+
+// judgeFaults follows each tank's blind spells: lost (tank_lost) once one
+// has lasted TankFaultAfter, restored (tank_restored) once a lost tank has
+// been estimated again for TankRestoreAfter. A spell shorter than
+// TankFaultAfter leaves nothing behind; a lost tank that goes blind again
+// before it is restored stays lost, its spell unbroken.
+func (e *Engine) judgeFaults(out []Event) []Event {
+	for _, id := range e.order {
+		slot := e.tanks[id]
+		since, reason, blind := e.blindNow(slot)
+		switch {
+		case blind:
+			slot.goodSince, slot.reason = time.Time{}, reason
+			if slot.blindSince.IsZero() {
+				slot.blindSince = since
+			}
+			if !slot.lost && e.now.Sub(slot.blindSince) >= e.cfg.TankFaultAfter {
+				slot.lost = true
+				out = append(out, Event{Type: EventTankLost, At: e.now, Lost: &TankLost{DeviceID: id, Reason: reason,
+					Errors: maps.Clone(slot.errs), Since: slot.blindSince}})
+				if out[len(out)-1].Lost.Errors == nil {
+					out[len(out)-1].Lost.Errors = map[string]int{}
+				}
+			}
+		case !e.estimated(slot):
+			// Not heard from yet (a start or a reload): neither blind nor
+			// good, so a spell carried over goes on as it was.
+		case !slot.lost:
+			slot.blindSince = time.Time{}
+		default:
+			if slot.goodSince.IsZero() {
+				slot.goodSince = slot.last.At
+			}
+			if e.now.Sub(slot.goodSince) >= e.cfg.TankRestoreAfter {
+				out = append(out, Event{Type: EventTankRestored, At: e.now, Restored: &TankRestored{DeviceID: id,
+					LostSince: slot.blindSince, Duration: slot.goodSince.Sub(slot.blindSince)}})
+				slot.lost, slot.blindSince, slot.goodSince = false, time.Time{}, time.Time{}
+			}
+		}
+	}
+	return out
+}
+
+// TakeFaults takes old's tanks' blind spells, for the tanks e has, so a
+// reload mid-fault doesn't lose it, send tank_lost again, or restart its
+// count.
+func (e *Engine) TakeFaults(old *Engine) {
+	if old == nil {
+		return
+	}
+	for id, slot := range e.tanks {
+		if o := old.tanks[id]; o != nil {
+			slot.blindSince, slot.reason, slot.lost, slot.goodSince = o.blindSince, o.reason, o.lost, o.goodSince
+		}
+	}
 }
 
 // usable counts the readings in st the model could use.
@@ -560,6 +674,12 @@ func (e *Engine) State() State {
 			low := *e.low
 			s.LowHotWater = &low
 		}
+	} else if p := e.partial(); p != nil {
+		s.Partial = p
+		if e.enoughWithout(p) {
+			low := false
+			s.LowHotWater = &low
+		}
 	}
 	s.Boiler = Boiler{HW: switchOf(e.hw), CH: switchOf(e.ch)}
 	if e.ambOK && e.now.Sub(e.ambAt) <= e.cfg.Thermal.AmbientStale {
@@ -613,6 +733,37 @@ func (e *Engine) system() (systemTotals, bool) {
 	return out, true
 }
 
+// partial is the estimated tanks' totals while some but not all are, and
+// every one that isn't is blind (blindNow); nil otherwise. A tank not yet
+// heard from at a start isn't missing yet, so there is no partial.
+func (e *Engine) partial() *Partial {
+	p := &Partial{}
+	for _, id := range e.order {
+		slot := e.tanks[id]
+		if !e.estimated(slot) {
+			if _, _, blind := e.blindNow(slot); !blind {
+				return nil
+			}
+			p.Missing = append(p.Missing, id)
+			continue
+		}
+		est := slot.last.Estimate
+		p.StoredKWh += est.KWh
+		p.UsableL40 += est.UsableL40
+		p.UsableL40Low += est.UsableL40Low
+	}
+	if len(p.Missing) == 0 || len(p.Missing) == len(e.order) {
+		return nil
+	}
+	return p
+}
+
+// enoughWithout says whether the known tanks alone clear low_hot_water's
+// level and margin: then it is false whatever the blind ones hold.
+func (e *Engine) enoughWithout(p *Partial) bool {
+	return p.UsableL40Low > e.cfg.LowHotWaterL+e.cfg.LowHotWaterMarginL
+}
+
 // estimated says whether slot's latest sweep was estimated and isn't stale.
 func (e *Engine) estimated(slot *tankSlot) bool {
 	return slot.seen && slot.ok && e.now.Sub(slot.last.At) <= e.cfg.Thermal.StaleAfter
@@ -623,6 +774,12 @@ func (e *Engine) estimated(slot *tankSlot) bool {
 func (e *Engine) judgeLow() {
 	sys, ok := e.system()
 	if !ok {
+		// A partial that clears the level and margin clears the hold;
+		// otherwise it is kept for when every tank is known again.
+		if p := e.partial(); p != nil && e.enoughWithout(p) {
+			low := false
+			e.low = &low
+		}
 		return
 	}
 	u := sys.usableL40Low
@@ -645,6 +802,17 @@ func (e *Engine) tankState(id string) TankState {
 		ts.State, ts.HeatSource, ts.PowerKW = st.State, sourceOf(st.Source), st.PowerKW
 		ua := st.UA.WPerK
 		ts.UAWPerK = &ua
+	}
+	if _, reason, blind := e.blindNow(slot); blind && !slot.blindSince.IsZero() {
+		errs := maps.Clone(slot.errs)
+		if errs == nil {
+			errs = map[string]int{}
+		}
+		ts.Fault = &Fault{Since: slot.blindSince, Reason: reason, Errors: errs, Lost: slot.lost}
+	}
+	if slot.lost {
+		since := slot.blindSince
+		ts.LostSince = &since
 	}
 	if !slot.seen {
 		return ts

@@ -219,7 +219,7 @@ func TestStateMapping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"schema":"net.swee.washhouse.state.v1","timestamp":"2001-01-01T00:00:00.000Z","stored_kwh":21.79,"usable_l40":263.5,"usable_l40_low":223.975,"low_hot_water":false,"boiler":{"hw":true,"ch":null},"ambient_c":25.7,"active_draw":{"draw_id":"a-1","started_at":"2001-01-01T00:00:00.000Z","last_litre_at":"2001-01-01T00:00:00.000Z","litres":1,"flow_l_min":null,"kind":"tap"},"meter":{"timestamp":"2001-01-01T00:00:00.000Z","counting_since":"2000-12-31T23:59:50.000Z","count":54,"litres_since_start":54,"continuous_flow":{"since":"2000-12-31T23:59:50.000Z","last":"2001-01-01T00:00:00.000Z","litres":2,"flow_l_min":0.1}},"tanktemp":{"timestamp":null,"online":false,"version":null},"tanks":[{"device_id":"hot_water_cylinder_left","state":"heating","heat_source":"hw","stored_kwh":11,"usable_l40":205.8,"top_c":63.5}]}`
+	want := `{"schema":"net.swee.washhouse.state.v1","timestamp":"2001-01-01T00:00:00.000Z","stored_kwh":21.79,"usable_l40":263.5,"usable_l40_low":223.975,"low_hot_water":false,"partial":null,"boiler":{"hw":true,"ch":null},"ambient_c":25.7,"active_draw":{"draw_id":"a-1","started_at":"2001-01-01T00:00:00.000Z","last_litre_at":"2001-01-01T00:00:00.000Z","litres":1,"flow_l_min":null,"kind":"tap"},"meter":{"timestamp":"2001-01-01T00:00:00.000Z","counting_since":"2000-12-31T23:59:50.000Z","count":54,"litres_since_start":54,"continuous_flow":{"since":"2000-12-31T23:59:50.000Z","last":"2001-01-01T00:00:00.000Z","litres":2,"flow_l_min":0.1}},"tanktemp":{"timestamp":null,"online":false,"version":null},"tanks":[{"device_id":"hot_water_cylinder_left","state":"heating","heat_source":"hw","stored_kwh":11,"usable_l40":205.8,"top_c":63.5}]}`
 	if string(got) != want {
 		t.Errorf("state\n got %s\nwant %s", got, want)
 	}
@@ -227,9 +227,49 @@ func TestStateMapping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = `{"schema":"net.swee.washhouse.tank.v1","device_id":"hot_water_cylinder_left","timestamp":"2001-01-01T00:00:00.000Z","sweep_at":"2000-12-31T23:59:50.000Z","state":"heating","heat_source":"hw","stored_kwh":11,"mean_c":50,"top_c":63.5,"hot_l":150,"usable_l40":205.8,"usable_l40_low":175,"power_kw":9.8,"ua_w_per_k":4,"probes_ok":5,"probes_total":5}`
+	want = `{"schema":"net.swee.washhouse.tank.v1","device_id":"hot_water_cylinder_left","timestamp":"2001-01-01T00:00:00.000Z","sweep_at":"2000-12-31T23:59:50.000Z","state":"heating","heat_source":"hw","stored_kwh":11,"mean_c":50,"top_c":63.5,"hot_l":150,"usable_l40":205.8,"usable_l40_low":175,"power_kw":9.8,"ua_w_per_k":4,"probes_ok":5,"probes_total":5,"fault":null}`
 	if string(tk) != want {
 		t.Errorf("tank\n got %s\nwant %s", tk, want)
+	}
+}
+
+// A blind tank: the state's partial, the tank's fault, and the two events
+// (docs/WIRE.md, Faults).
+func TestBlindTankMapping(t *testing.T) {
+	since := t0.Add(-5 * time.Minute)
+	s := engine.State{At: t0, LowHotWater: bp(false),
+		Partial: &engine.Partial{Missing: []string{right}, StoredKWh: 11.275, UsableL40: 307.3111, UsableL40Low: 261.2144},
+		Tanks: []engine.TankState{{DeviceID: right, State: thermal.StateUnknown, UAWPerK: f(17), ProbesOK: ip(0), ProbesTotal: ip(5),
+			Fault: &engine.Fault{Since: since, Reason: engine.FaultProbes, Errors: map[string]int{"not_present": 5}, Lost: true}}}}
+	got, err := State(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `"low_hot_water":false,"partial":{"missing":["hot_water_cylinder_right"],"stored_kwh":11.275,"usable_l40":307.311,"usable_l40_low":261.214},`; !strings.Contains(string(got), want) {
+		t.Errorf("state %s\nwant it to contain %s", got, want)
+	}
+	tk, err := Tank(s, s.Tanks[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `"probes_ok":0,"probes_total":5,"fault":{"since":"2000-12-31T23:55:00.000Z","reason":"probes","errors":{"not_present":5}}}`; !strings.HasSuffix(string(tk), want) {
+		t.Errorf("tank %s\nwant it to end %s", tk, want)
+	}
+	for _, c := range []struct {
+		in   engine.Event
+		want string
+	}{
+		{engine.Event{Type: engine.EventTankLost, At: t0, Lost: &engine.TankLost{DeviceID: right, Reason: engine.FaultProbes,
+			Errors: map[string]int{"bus_low": 5}, Since: since}},
+			`{"schema":"net.swee.washhouse.event.v1","event":"tank_lost","timestamp":"2001-01-01T00:00:00.000Z","tank_lost":{"device_id":"hot_water_cylinder_right","reason":"probes","errors":{"bus_low":5},"since":"2000-12-31T23:55:00.000Z"}}`},
+		{engine.Event{Type: engine.EventTankRestored, At: t0, Restored: &engine.TankRestored{DeviceID: right, LostSince: since,
+			Duration: 4*time.Minute + 30*time.Second}},
+			`{"schema":"net.swee.washhouse.event.v1","event":"tank_restored","timestamp":"2001-01-01T00:00:00.000Z","tank_restored":{"device_id":"hot_water_cylinder_right","lost_since":"2000-12-31T23:55:00.000Z","duration_s":270}}`},
+	} {
+		m, err := Event(c.in, "water/hot")
+		if err != nil || string(m.Payload) != c.want {
+			t.Errorf("%s: %v\n got %s\nwant %s", c.in.Type, err, m.Payload, c.want)
+		}
 	}
 }
 

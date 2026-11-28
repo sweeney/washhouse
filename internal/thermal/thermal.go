@@ -493,6 +493,26 @@ func (t *Tracker) Sweep(sw tank.Sweep) ([]Event, error) {
 	return ev, nil
 }
 
+// Blind takes a sweep of tank id at at that couldn't be estimated (its
+// probes unreadable): the tank knows nothing from then, so its state is
+// unknown at once, not only once its last good sweep goes stale, and a
+// heating spell ends (sweeney/washhouse#17: a dead bus left the right tank
+// "heating" for 9 minutes). Skipped as Sweep skips: unsynced, or no later
+// than the tank's last.
+func (t *Tracker) Blind(id string, at time.Time, clockSynced bool) ([]Event, error) {
+	tk := t.tanks[id]
+	if tk == nil {
+		return nil, fmt.Errorf("thermal: sweep from %q, which isn't configured", id)
+	}
+	if !clockSynced || (tk.seen && !at.After(tk.at)) {
+		return nil, nil
+	}
+	tk.seen, tk.at, tk.probesOK = true, at, false
+	tk.samples = tk.samples[:0]
+	tk.power = nil
+	return t.evaluate(nil, tk, at), nil
+}
+
 // fit adds the latest sweep to tk's loss fit if it is evidence: the tank
 // cooling, quiet for UAQuiet, its power window clear of draws, the room
 // temperature fresh, and the tank at least UAMinDeltaK above it. The sample

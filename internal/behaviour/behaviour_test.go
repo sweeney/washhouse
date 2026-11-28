@@ -1,8 +1,10 @@
 package behaviour
 
 import (
+	"bytes"
 	"os"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +57,8 @@ func planConfig() engine.Config {
 		BoilerHeartbeat:        15 * time.Minute,
 		BoilerMissedHeartbeats: 2.5,
 		RecentDraws:            50,
+		TankFaultAfter:         5 * time.Minute,
+		TankRestoreAfter:       2 * time.Minute,
 	}
 }
 
@@ -135,5 +139,28 @@ func TestConfigIsStrict(t *testing.T) {
 				t.Fatalf("got %v, want an error mentioning %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// The tank fault delays (sweeney/washhouse#17) reach the engine, and must
+// be above 0.
+func TestTankFaultDelays(t *testing.T) {
+	b, err := os.ReadFile("../../testdata/behaviour.example.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ec, err := Load(bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ec.TankFaultAfter != 5*time.Minute || ec.TankRestoreAfter != 2*time.Minute {
+		t.Errorf("fault after %v, restore after %v; want the example's 5m and 2m", ec.TankFaultAfter, ec.TankRestoreAfter)
+	}
+	for _, bad := range []string{`"tank_fault_after": "0s"`, `"tank_restore_after": "-1s"`} {
+		key, _, _ := strings.Cut(bad, ":")
+		doc := regexp.MustCompile(key+`: "[^"]*"`).ReplaceAllString(string(b), bad)
+		if _, _, err := Load(strings.NewReader(doc)); err == nil {
+			t.Errorf("%s was accepted", bad)
+		}
 	}
 }

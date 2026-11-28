@@ -6,7 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
+	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -105,9 +108,24 @@ type reloadResult struct {
 type healthStats struct {
 	received, refused, decodeErrors, feedErrors, dropped int
 	published, publishErrors                             int
-	lastReceived                                         time.Time // wall clock
-	lastTanktemp                                         time.Time // wall clock: tanktemp's latest dated input
-	eventAt                                              time.Time // the engine's event time
+	lastReceived                                         time.Time          // wall clock
+	lastTanktemp                                         time.Time          // wall clock: tanktemp's latest dated input
+	eventAt                                              time.Time          // the engine's event time
+	tanks                                                []engine.TankState // as of the latest publish
+}
+
+// errorsText is tanktemp's error codes counted, for a log or /healthz:
+// ": bus_low ×5", or "" when there are none.
+func errorsText(errs map[string]int) string {
+	if len(errs) == 0 {
+		return ""
+	}
+	codes := slices.Sorted(maps.Keys(errs))
+	parts := make([]string, len(codes))
+	for i, c := range codes {
+		parts[i] = fmt.Sprintf("%s ×%d", c, errs[c])
+	}
+	return ": " + strings.Join(parts, ", ")
 }
 
 func newService(lc localConfig, d document, out mqttpub.Publisher, wall func() time.Time, logger *log.Logger) (*service, error) {
@@ -342,7 +360,9 @@ func (s *service) handle(r mqttpub.Received) {
 	s.seq++
 	s.latest[r.Topic] = admitted{s.seq, m}
 	ev, err := ingest.Feed[engine.Event](s.eng, m)
-	if err != nil {
+	if err != nil && !errors.Is(err, engine.ErrBlindSweep) {
+		// A blind tank's sweeps are refused every time; its fault, its
+		// tank_lost and /healthz say so, once (sweeney/washhouse#17).
 		s.count(func(h *healthStats) { h.feedErrors++ })
 		s.log.Printf("%s: %v", r.Topic, err)
 	}
@@ -359,7 +379,17 @@ func (s *service) handle(r mqttpub.Received) {
 
 // send publishes what st and ev call for, and notes the event time.
 func (s *service) send(st engine.State, ev []engine.Event) {
-	s.count(func(h *healthStats) { h.eventAt = st.At })
+	s.count(func(h *healthStats) { h.eventAt, h.tanks = st.At, st.Tanks })
+	for _, e := range ev {
+		switch {
+		case e.Lost != nil:
+			s.log.Printf("tank %s lost: blind since %s (%s%s)", e.Lost.DeviceID, e.Lost.Since.UTC().Format(time.RFC3339),
+				e.Lost.Reason, errorsText(e.Lost.Errors))
+		case e.Restored != nil:
+			s.log.Printf("tank %s restored: blind %v, since %s", e.Restored.DeviceID, e.Restored.Duration.Round(time.Second),
+				e.Restored.LostSince.UTC().Format(time.RFC3339))
+		}
+	}
 	s.publish(st, ev)
 	if err := s.rec.After(st, ev); err != nil {
 		s.log.Printf("api: %v", err)

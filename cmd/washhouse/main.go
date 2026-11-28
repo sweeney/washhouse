@@ -41,6 +41,7 @@ import (
 	webserve "github.com/sweeney/common/web/serve"
 	"github.com/sweeney/common/wire/washhouse"
 	"github.com/sweeney/identity/common/auth"
+	"github.com/sweeney/washhouse/internal/engine"
 	"github.com/sweeney/washhouse/internal/httpapi"
 )
 
@@ -390,6 +391,7 @@ func (s *service) report(connected bool, now time.Time) health.Report {
 	if h.dropped > 0 {
 		why = append(why, fmt.Sprintf("%d inputs dropped", h.dropped))
 	}
+	why = append(why, lostTanks(h.tanks, h.eventAt)...)
 	var namespaces map[string]namespaceStatus
 	if s.remote != nil {
 		namespaces = map[string]namespaceStatus{}
@@ -438,6 +440,66 @@ func (s *service) report(connected bool, now time.Time) health.Report {
 		{Key: "remote_config", Value: namespaces},
 		{Key: "behaviour_applied_at", Value: applied},
 		{Key: "influx", Value: s.hist.report()},
+		{Key: "tanks", Value: healthTanks(h.tanks)},
 	}
 	return r
+}
+
+// lostTanks is a degraded reason for each lost cylinder (blind for
+// tank_fault_after): which, since when, for how long in event time, and
+// why. Cylinders lost because tanktemp is offline are one reason, not one
+// each.
+func lostTanks(tanks []engine.TankState, at time.Time) []string {
+	var out, offline []string
+	for _, t := range tanks {
+		if t.LostSince == nil {
+			continue
+		}
+		since := t.LostSince.UTC().Format(time.RFC3339)
+		var why string
+		if f := t.Fault; f != nil {
+			if f.Reason == engine.FaultTanktempOffline {
+				offline = append(offline, t.DeviceID)
+				continue
+			}
+			why = fmt.Sprintf(" (%s%s)", f.Reason, errorsText(f.Errors))
+		} else {
+			why = " (being read again; restored after tank_restore_after)"
+		}
+		out = append(out, fmt.Sprintf("%s: blind since %s, for %v%s", t.DeviceID, since, at.Sub(*t.LostSince).Round(time.Second), why))
+	}
+	if len(offline) > 0 {
+		out = append(out, fmt.Sprintf("tanktemp offline: %s blind", strings.Join(offline, ", ")))
+	}
+	return out
+}
+
+// healthTank is one cylinder on /healthz.
+type healthTank struct {
+	DeviceID    string     `json:"device_id"`
+	SweepAt     *time.Time `json:"sweep_at"`
+	ProbesOK    *int       `json:"probes_ok"`
+	ProbesTotal *int       `json:"probes_total"`
+	Fault       *struct {
+		Since  time.Time      `json:"since"`
+		Reason string         `json:"reason"`
+		Errors map[string]int `json:"errors"`
+	} `json:"fault"`
+	LostSince *time.Time `json:"lost_since"`
+}
+
+func healthTanks(tanks []engine.TankState) []healthTank {
+	out := []healthTank{}
+	for _, t := range tanks {
+		h := healthTank{DeviceID: t.DeviceID, SweepAt: t.At, ProbesOK: t.ProbesOK, ProbesTotal: t.ProbesTotal, LostSince: t.LostSince}
+		if f := t.Fault; f != nil {
+			h.Fault = &struct {
+				Since  time.Time      `json:"since"`
+				Reason string         `json:"reason"`
+				Errors map[string]int `json:"errors"`
+			}{f.Since.UTC(), string(f.Reason), f.Errors}
+		}
+		out = append(out, h)
+	}
+	return out
 }

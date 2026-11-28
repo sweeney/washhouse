@@ -166,5 +166,39 @@ test("the page's script parses", () => {
   new Function(body);   // a syntax error throws here
 });
 
+// A blind cylinder (WIRE.md, Faults; sweeney/washhouse#17).
+const golden = name => (goldens.find(g => g.service === "washhouse" && g.name === name) || {}).msg;
+test("a partial state reads as at least the known water, naming the blind cylinder", () => {
+  const d = C.describe("w-state", golden("state-partial.golden"));
+  assert.equal(d.kind, "PARTIAL");
+  assert.match(d.summary, /at least 261 L/);
+  assert.match(d.summary, /right blind/);
+  assert.match(d.meaning, /lower bound/i);
+});
+test("a blind tank reads as blind, with tanktemp's errors", () => {
+  const d = C.describe("w-tank", golden("tank-fault.golden"));
+  assert.equal(d.kind, "FAULT");
+  assert.match(d.summary, /right BLIND/);
+  assert.match(d.summary, /not_present ×5/);
+});
+test("tank_lost and tank_restored are explained", () => {
+  const lost = C.describe("w-event", golden("event-tank-lost.golden"));
+  assert.equal(lost.kind, "FAULT");
+  assert.match(lost.summary, /tank_lost · right: probes \(bus_low ×5\)/);
+  assert.match(lost.meaning, /whole bus/);
+  const back = C.describe("w-event", golden("event-tank-restored.golden"));
+  assert.equal(back.kind, "RESTORED");
+  assert.match(back.summary, /blind for 1d 22h/);
+});
+test("a heating_ended from a blind tank says the readings were lost", () => {
+  const d = C.describe("w-event", {event: "heating_ended", tank: {device_id: "hot_water_cylinder_right", state: "unknown", prev: "heating", heat_source: "hw"}});
+  assert.match(d.meaning, /readings were lost/);
+});
+test("lowWhy with a cylinder blind", () => {
+  const p = {missing: ["hot_water_cylinder_right"], usable_l40_low: 261.2};
+  assert.match(C.lowWhy(null, false, 30, 10, p), /right cylinder is blind.*at least 261 L.*off/);
+  assert.match(C.lowWhy(null, null, 300, 10, p), /can't say/);
+});
+
 console.log(`live_core_test: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

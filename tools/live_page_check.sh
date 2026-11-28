@@ -52,5 +52,30 @@ check "a draw ended, in the table" '<td>tap</td>'
 count "the log has rows" 'class="row"' 10
 check "draw events are explained" 'The meter.s final account'
 
+# A blind cylinder (sweeney/washhouse#17): the right one's bus fails 5 s
+# in (50 s of demo time), so tank_lost comes 30 s later (5 min); it is
+# fixed at 50 s, so tank_restored 12 s after (2 min). Then a brief blip,
+# which says nothing.
+DOM=$("$CHROME" --headless=new --disable-gpu --no-sandbox --no-first-run --disable-extensions \
+    --virtual-time-budget=40000 --dump-dom "file://$WORK/live.html#demo=1&blind=5" 2>/dev/null)
+check_not "blind: no uncaught error" '<title>ERROR'
+check "blind: the banner names the cylinder" 'id="blindBanner"[^>]*><b>The right cylinder is blind</b>'
+check "blind: the figure is a lower bound" 'id="uLow">≥ [0-9]+<small>'
+check "blind: low water explained from the others" 'right cylinder is blind'
+check "blind: its card says blind" 'class="pill bad">blind<'
+check "blind: tanktemp's bus_low or not_present shown" '(bus_low|not_present) ×5'
+check "blind: tank_lost" 'tank_lost · right: probes'
+DOM=$("$CHROME" --headless=new --disable-gpu --no-sandbox --no-first-run --disable-extensions \
+    --virtual-time-budget=70000 --dump-dom "file://$WORK/live.html#demo=1&blind=5&fix=50" 2>/dev/null)
+check_not "fixed: no uncaught error" '<title>ERROR'
+check "fixed: tank_restored" 'tank_restored · right · blind for'
+check "fixed: the banner is gone" 'id="blindBanner"[^>]*hidden'
+DOM=$("$CHROME" --headless=new --disable-gpu --no-sandbox --no-first-run --disable-extensions \
+    --virtual-time-budget=60000 --dump-dom "file://$WORK/live.html#demo=1&blip=5" 2>/dev/null)
+check_not "blip: no uncaught error" '<title>ERROR'
+check "blip: the probes failed" 'bus_low'
+check_not "blip: no tank_lost" 'tank_lost · '
+check "blip: the banner is gone" 'id="blindBanner"[^>]*hidden'
+
 echo "live_page_check: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

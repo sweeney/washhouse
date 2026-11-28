@@ -40,6 +40,8 @@ type Config struct {
 	BoilerHeartbeat        duration     `json:"boiler_heartbeat"`
 	BoilerMissedHeartbeats float64      `json:"boiler_missed_heartbeats"`
 	RecentDraws            int          `json:"recent_draws"`
+	TankFaultAfter         duration     `json:"tank_fault_after"`
+	TankRestoreAfter       duration     `json:"tank_restore_after"`
 	Freshness              freshFile    `json:"freshness"`
 	ColdC                  float64      `json:"cold_c"`
 	KWhPerLitreK           float64      `json:"heat_capacity_kwh_per_litre_k"`
@@ -403,6 +405,8 @@ func (fc Config) Engine() (engine.Config, error) {
 		BoilerHeartbeat:        time.Duration(fc.BoilerHeartbeat),
 		BoilerMissedHeartbeats: fc.BoilerMissedHeartbeats,
 		RecentDraws:            fc.RecentDraws,
+		TankFaultAfter:         time.Duration(fc.TankFaultAfter),
+		TankRestoreAfter:       time.Duration(fc.TankRestoreAfter),
 	}
 	for _, g := range fc.Draw.Gaps {
 		c.Draw.Gaps = append(c.Draw.Gaps, draw.Gap{Low: g.Low, High: g.High})

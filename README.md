@@ -105,7 +105,24 @@ last fetch, with `fetched_ago` in seconds, and `behaviour_applied_at`). An uncha
 changes nothing. A changed one starts the engine again, fed the latest
 input on each topic (as a restart's retained messages would be), which
 consumers see as a restart (docs/WIRE.md, Delivery): the UA fit goes back to its
-priors, and a draw in progress gets no `draw_ended`.
+priors, and a draw in progress gets no `draw_ended`. A cylinder's blind
+spell carries over (it isn't lost again, and its restore counts on).
+
+## A blind cylinder
+
+When a cylinder's probes can't be read (a bus failing, a loose lead), or
+no sweep comes from it, washhouse marks it blind (docs/WIRE.md, Faults):
+its `fault` says since when and why, with tanktemp's error codes, and its
+state is `unknown` at once. The house's totals stay `null`; `partial`
+gives what the other cylinder holds, a lower bound, and `low_hot_water` is
+`false` from it when that alone clears the threshold and margin. After
+`tank_fault_after` (5 min) it sends `tank_lost`, logs it once, and
+`/healthz` is degraded, naming the cylinder, since when and why (its
+`tanks` lists each cylinder's probes, fault and `lost_since`); after
+`tank_restore_after` (2 min) of good sweeps, `tank_restored` and one log
+line. The blind sweeps themselves are not feed errors and aren't logged
+one by one. The live page's demo (`tools/live.html`, **Blind the right
+cylinder**, **A brief blip**) shows it end to end.
 
 ## Influx
 
@@ -126,8 +143,8 @@ quantities are floats even when whole, counts integers, words strings.
 
 | Measurement | Tags | Time | Fields |
 |---|---|---|---|
-| `hot_water_tank` | `device_id` | the tank's `timestamp` | `state`, `heat_source` (strings), `stored_kwh`, `mean_c`, `top_c` (from the outlet probe corrected for its heat sink, not its low reading at rest; WIRE.md, Tank), `hot_l`, `usable_l40`, `usable_l40_low`, `power_kw`, `ua_w_per_k`, `probes_ok` (probes washhouse uses: not tanktemp's `ok`, since a suspect 85 °C reading is left out), `probes_total` |
-| `hot_water_system` | | the state's `timestamp` | `stored_kwh`, `usable_l40`, `usable_l40_low`, `low_hot_water`, `boiler_hw`, `boiler_ch`, `ambient_c`, `drawing`, `continuous_flow`, `tanktemp_online` |
+| `hot_water_tank` | `device_id` | the tank's `timestamp` | `state`, `heat_source` (strings), `stored_kwh`, `mean_c`, `top_c` (from the outlet probe corrected for its heat sink, not its low reading at rest; WIRE.md, Tank), `hot_l`, `usable_l40`, `usable_l40_low`, `power_kw`, `ua_w_per_k`, `probes_ok` (probes washhouse uses: not tanktemp's `ok`, since a suspect 85 °C reading is left out), `probes_total` , `blind` (1 while it has a `fault`), `fault_reason` |
+| `hot_water_system` | | the state's `timestamp` | `stored_kwh`, `usable_l40`, `usable_l40_low`, `low_hot_water`, `boiler_hw`, `boiler_ch`, `ambient_c`, `drawing`, `continuous_flow`, `tanktemp_online`, `tanks_missing` (cylinders whose estimate is unknown); while one is blind, `partial_stored_kwh`, `partial_usable_l40`, `partial_usable_l40_low` (lower bounds, kept apart from the totals) |
 | `hot_water_draw` | | the draw's `ended_at` | from `draw_ended`: `draw_id`, `kind`, `litres`, `duration_s`, `flow_l_min`; from `draw_balanced`, minutes later, into the same row: `energy_kwh`, `heat_balance_l`, `heat_balance_reliable`, `masked_by_reheat`, `reasons` (comma-separated), `outlet_peak_c`, `inlet_drop_c` |
 | `hot_water_draw_tank` | `device_id` | the draw's `ended_at` | from `draw_balanced`: `draw_id`, `share`, `litres` (both absent when withheld), `outlet_peak_c`, `inlet_drop_c` |
 | `hot_water_continuous_flow` | | the run's `since` | from `continuous_flow_ended`: `litres`, `flow_l_min`, `duration_s` |

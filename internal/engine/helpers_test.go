@@ -46,6 +46,8 @@ const (
 //     the config block that carries it. BoilerMissedHeartbeats 2.5:
 //     tanktemp's review of PR #2.
 //   - RecentDraws 50: this package's choice; a day is a few dozen draws.
+//   - TankFaultAfter 5 min, TankRestoreAfter 2 min: sweeney/washhouse#17
+//     (a blip of a few failed sweeps is no loss; a restore must hold).
 func planConfig() Config {
 	probes := func(upper profile.Role) []tank.ProbeConfig {
 		return []tank.ProbeConfig{
@@ -117,6 +119,8 @@ func planConfig() Config {
 		BoilerHeartbeat:        15 * time.Minute,
 		BoilerMissedHeartbeats: 2.5,
 		RecentDraws:            50,
+		TankFaultAfter:         5 * time.Minute,
+		TankRestoreAfter:       2 * time.Minute,
 	}
 }
 

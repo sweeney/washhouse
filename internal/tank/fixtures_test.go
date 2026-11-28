@@ -65,10 +65,15 @@ func TestEveryFixtureStateSweeps(t *testing.T) {
 			}
 			sw, err := tanks[st.DeviceID].Sweep(st)
 			if err != nil {
+				if allFailed(st) {
+					continue // a whole bus failing (right-bus-lost): refused, as it must be
+				}
 				t.Fatalf("%s %s: %v", filepath.Base(p), st.Timestamp, err)
 			}
 			e := sw.Estimate
-			if e.KWh < 0 || e.KWh > 13 || e.MeanC < 10 || e.MeanC > 75 || e.UsableL40 < 0 || e.UsableL40 > 400 {
+			// 200 L at the 75 °C mean bound, above the 10 °C cold feed, is
+			// 15.1 kWh (the left tank at a 66 °C mean holds 13.07).
+			if e.KWh < 0 || e.KWh > 15.2 || e.MeanC < 10 || e.MeanC > 75 || e.UsableL40 < 0 || e.UsableL40 > 400 {
 				t.Errorf("%s %s %s: implausible estimate %+v", filepath.Base(p), st.DeviceID, st.Timestamp, e)
 			}
 			n++
@@ -79,4 +84,14 @@ func TestEveryFixtureStateSweeps(t *testing.T) {
 		t.Errorf("only %d tank states in the fixtures", n)
 	}
 	t.Logf("%d tank states swept", n)
+}
+
+// allFailed says whether every probe in st failed to read.
+func allFailed(st tanktemp.State) bool {
+	for _, s := range st.Sensors {
+		if s.TempC != nil {
+			return false
+		}
+	}
+	return len(st.Sensors) > 0
 }

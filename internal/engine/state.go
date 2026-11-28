@@ -25,6 +25,13 @@ type State struct {
 	// in between. Judged for the system, never one tank; unknown when the
 	// total is (the held value is kept for when it is known again).
 	LowHotWater *bool
+	// Partial: while one or more tanks are blind (their estimate unknown)
+	// and at least one isn't, the known ones' totals, a lower bound on the
+	// system's; nil otherwise. The totals above stay nil while any is
+	// blind. LowHotWater is false from it when its UsableL40Low clears
+	// LowHotWaterL + LowHotWaterMarginL (the blind can only add to it),
+	// else unknown; never true.
+	Partial *Partial
 	// SweepPending: the latest input is part of a tanktemp sweep that is
 	// still arriving (its meter reading, or one tank's state while another
 	// that isn't stale hasn't swept at that time yet). Not on the wire: the
@@ -70,6 +77,38 @@ type TankState struct {
 	// ProbesTotal; nil before the first sweep.
 	ProbesOK    *int
 	ProbesTotal *int
+	// Fault is why the tank is blind (not estimated), nil while it is
+	// estimated.
+	Fault *Fault
+	// LostSince: while the tank is lost (blind for TankFaultAfter, and not
+	// yet estimated again for TankRestoreAfter), when its blind spell
+	// began; nil otherwise. Not on the wire: /healthz reports it.
+	LostSince *time.Time
+}
+
+// Partial is the known tanks' totals while some are blind.
+type Partial struct {
+	Missing                            []string // the blind tanks, in config order
+	StoredKWh, UsableL40, UsableL40Low float64
+}
+
+// FaultReason is why a tank is blind.
+type FaultReason string
+
+// The fault reasons (docs/WIRE.md, Faults).
+const (
+	FaultProbes          FaultReason = "probes"           // its latest sweep had too few usable probes
+	FaultStale           FaultReason = "stale"            // no sweep for Thermal.StaleAfter
+	FaultTanktempOffline FaultReason = "tanktemp_offline" // stale, with tanktemp's status offline
+)
+
+// Fault is a blind tank's: since when (event time), why, and tanktemp's
+// error codes in its latest sweep, counted. Lost: blind for TankFaultAfter.
+type Fault struct {
+	Since  time.Time
+	Reason FaultReason
+	Errors map[string]int
+	Lost   bool
 }
 
 // Boiler is the programmer: true on, false off, nil unknown.
@@ -181,10 +220,12 @@ const (
 	EventHeatingStarted        EventType = "heating_started"
 	EventHeatingEnded          EventType = "heating_ended"
 	EventTankStateChanged      EventType = "tank_state_changed"
+	EventTankLost              EventType = "tank_lost"
+	EventTankRestored          EventType = "tank_restored"
 )
 
 // Event is one thing the engine decided, at its event time. Exactly one
-// of Draw, Ended, Balanced, Flow and Tank is set, by Type.
+// of Draw, Ended, Balanced, Flow, Tank, Lost and Restored is set, by Type.
 type Event struct {
 	Type     EventType
 	At       time.Time
@@ -193,6 +234,25 @@ type Event struct {
 	Balanced *DrawBalanced // draw_balanced
 	Flow     *Flow         // continuous_flow_*
 	Tank     *TankEvent    // heating_*, tank_state_changed
+	Lost     *TankLost     // tank_lost
+	Restored *TankRestored // tank_restored
+}
+
+// TankLost is a tank blind for TankFaultAfter: its fault then.
+type TankLost struct {
+	DeviceID string
+	Reason   FaultReason
+	Errors   map[string]int
+	Since    time.Time
+}
+
+// TankRestored is a lost tank estimated again for TankRestoreAfter.
+// Duration runs from LostSince to the first estimated sweep of the run
+// that restored it: how long it was blind.
+type TankRestored struct {
+	DeviceID  string
+	LostSince time.Time
+	Duration  time.Duration
 }
 
 // TankEvent is a thermal change in one tank.

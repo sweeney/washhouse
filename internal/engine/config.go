@@ -51,6 +51,11 @@ type Config struct {
 	BoilerMissedHeartbeats float64
 	// RecentDraws: how many ended draws Recent keeps.
 	RecentDraws int
+	// TankFaultAfter: a tank blind (not estimated) for this long is lost
+	// (tank_lost). TankRestoreAfter: a lost tank estimated again for this
+	// long is restored (tank_restored). Both above 0.
+	TankFaultAfter   time.Duration
+	TankRestoreAfter time.Duration
 }
 
 // deviceID is a device id: its key in devices_<site>, and a segment of
@@ -66,6 +71,9 @@ func (c Config) Validate() error {
 		}
 	}
 	add(c.Meter.Validate())
+	if c.TankFaultAfter <= 0 || c.TankRestoreAfter <= 0 {
+		add(fmt.Errorf("engine: tank fault after %v and restore after %v must both be above 0", c.TankFaultAfter, c.TankRestoreAfter))
+	}
 	add(c.Vessel.Validate())
 	add(c.Estimate.Validate())
 	if len(c.Tanks) == 0 {

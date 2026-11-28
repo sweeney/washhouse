@@ -193,6 +193,239 @@
   ],
   "litres": 3
  },
+ "right-bus-lost": {
+  "draws": [
+   {
+    "duration_s": 0.0,
+    "litres": 1,
+    "median_flow_l_min": null,
+    "start": "2001-01-01T00:20:21.408Z"
+   },
+   {
+    "duration_s": 118.0,
+    "litres": 7,
+    "median_flow_l_min": 4.3,
+    "start": "2001-01-01T00:46:19.718Z"
+   },
+   {
+    "duration_s": 44.4,
+    "litres": 4,
+    "median_flow_l_min": 4.1,
+    "start": "2001-01-01T00:50:11.398Z"
+   },
+   {
+    "duration_s": 36.5,
+    "litres": 2,
+    "median_flow_l_min": 1.6,
+    "start": "2001-01-01T00:52:00.648Z"
+   },
+   {
+    "duration_s": 0.0,
+    "litres": 1,
+    "median_flow_l_min": null,
+    "start": "2001-01-01T00:53:44.488Z"
+   },
+   {
+    "duration_s": 0.0,
+    "litres": 1,
+    "median_flow_l_min": null,
+    "start": "2001-01-01T02:42:55.098Z"
+   },
+   {
+    "duration_s": 474.6,
+    "litres": 56,
+    "median_flow_l_min": 6.8,
+    "start": "2001-01-01T05:42:18.218Z"
+   },
+   {
+    "duration_s": 248.3,
+    "litres": 21,
+    "median_flow_l_min": 4.7,
+    "start": "2001-01-01T13:15:49.008Z"
+   },
+   {
+    "duration_s": 0.0,
+    "litres": 1,
+    "median_flow_l_min": null,
+    "start": "2001-01-01T18:18:32.038Z"
+   },
+   {
+    "duration_s": 140.0,
+    "litres": 10,
+    "median_flow_l_min": 3.9,
+    "start": "2001-01-01T18:21:23.528Z"
+   },
+   {
+    "duration_s": 0.0,
+    "litres": 1,
+    "median_flow_l_min": null,
+    "start": "2001-01-01T19:07:51.818Z"
+   },
+   {
+    "duration_s": 61.1,
+    "litres": 5,
+    "median_flow_l_min": 4.0,
+    "start": "2001-01-01T19:28:45.248Z"
+   },
+   {
+    "duration_s": 0.0,
+    "litres": 1,
+    "median_flow_l_min": null,
+    "start": "2001-01-01T19:39:00.478Z"
+   },
+   {
+    "duration_s": 0.0,
+    "litres": 1,
+    "median_flow_l_min": null,
+    "start": "2001-01-01T22:34:37.198Z"
+   },
+   {
+    "duration_s": 0.0,
+    "litres": 1,
+    "median_flow_l_min": null,
+    "start": "2001-01-01T22:35:57.608Z"
+   },
+   {
+    "duration_s": 15.7,
+    "litres": 2,
+    "median_flow_l_min": 3.8,
+    "start": "2001-01-01T22:59:46.939Z"
+   },
+   {
+    "duration_s": 350.3,
+    "litres": 97,
+    "median_flow_l_min": 21.2,
+    "start": "2001-01-02T00:27:53.708Z"
+   },
+   {
+    "duration_s": 0.0,
+    "litres": 1,
+    "median_flow_l_min": null,
+    "start": "2001-01-02T00:35:13.208Z"
+   },
+   {
+    "duration_s": 0.0,
+    "litres": 1,
+    "median_flow_l_min": null,
+    "start": "2001-01-02T00:57:25.338Z"
+   },
+   {
+    "duration_s": 5.1,
+    "litres": 2,
+    "median_flow_l_min": 11.8,
+    "start": "2001-01-02T01:08:02.728Z"
+   },
+   {
+    "duration_s": 46.8,
+    "litres": 8,
+    "median_flow_l_min": 7.9,
+    "start": "2001-01-02T01:23:15.638Z"
+   },
+   {
+    "duration_s": 63.0,
+    "litres": 7,
+    "median_flow_l_min": 5.6,
+    "start": "2001-01-02T01:27:53.118Z"
+   },
+   {
+    "duration_s": 0.0,
+    "litres": 1,
+    "median_flow_l_min": null,
+    "start": "2001-01-02T02:03:17.738Z"
+   },
+   {
+    "duration_s": 358.5,
+    "litres": 16,
+    "median_flow_l_min": 3.2,
+    "start": "2001-01-02T03:22:12.528Z"
+   },
+   {
+    "duration_s": 101.9,
+    "litres": 5,
+    "median_flow_l_min": 3.2,
+    "start": "2001-01-02T03:29:48.168Z"
+   },
+   {
+    "duration_s": 0.0,
+    "litres": 1,
+    "median_flow_l_min": null,
+    "start": "2001-01-02T12:58:47.338Z"
+   },
+   {
+    "duration_s": 18.0,
+    "litres": 2,
+    "median_flow_l_min": 3.3,
+    "start": "2001-01-02T13:23:29.158Z"
+   },
+   {
+    "duration_s": 434.0,
+    "litres": 48,
+    "median_flow_l_min": 6.6,
+    "start": "2001-01-02T13:38:57.058Z"
+   },
+   {
+    "duration_s": 54.9,
+    "litres": 5,
+    "median_flow_l_min": 4.3,
+    "start": "2001-01-02T13:47:31.638Z"
+   },
+   {
+    "duration_s": 125.7,
+    "litres": 13,
+    "median_flow_l_min": 5.8,
+    "start": "2001-01-02T14:11:44.248Z"
+   },
+   {
+    "duration_s": 13.4,
+    "litres": 2,
+    "median_flow_l_min": 4.5,
+    "start": "2001-01-02T14:37:14.128Z"
+   },
+   {
+    "duration_s": 244.1,
+    "litres": 20,
+    "median_flow_l_min": 4.7,
+    "start": "2001-01-02T14:39:31.698Z"
+   },
+   {
+    "duration_s": 0.0,
+    "litres": 1,
+    "median_flow_l_min": null,
+    "start": "2001-01-02T15:23:56.538Z"
+   },
+   {
+    "duration_s": 0.0,
+    "litres": 1,
+    "median_flow_l_min": null,
+    "start": "2001-01-02T15:45:27.518Z"
+   },
+   {
+    "duration_s": 0.0,
+    "litres": 1,
+    "median_flow_l_min": null,
+    "start": "2001-01-02T15:58:36.528Z"
+   },
+   {
+    "duration_s": 0.0,
+    "litres": 1,
+    "median_flow_l_min": null,
+    "start": "2001-01-02T16:09:11.198Z"
+   },
+   {
+    "duration_s": 118.1,
+    "litres": 9,
+    "median_flow_l_min": 4.0,
+    "start": "2001-01-02T23:07:53.518Z"
+   },
+   {
+    "duration_s": 78.2,
+    "litres": 6,
+    "median_flow_l_min": 3.8,
+    "start": "2001-01-02T23:13:28.918Z"
+   }
+  ],
+  "litres": 363
+ },
  "shower-layered": {
   "draws": [
    {

@@ -85,12 +85,18 @@
           meaning: {STARTUP: "washhouse started.", HEARTBEAT: "washhouse's regular I'm-alive.", SHUTDOWN: "washhouse stopped cleanly.",
             LWT: "washhouse vanished: the broker sent its last will."}[m.event] || ""};
       case "w-state": {
-        const ad = m.active_draw;
+        const ad = m.active_draw, p = m.partial;
+        if (p) return {kind: "PARTIAL",
+          summary: `plan on at least ${num(p.usable_l40_low, 0)} L · ${p.missing.map(short).join(", ")} blind${m.low_hot_water === false ? " · not low" : ""}${ad ? ` · drawing ${ad.litres} L` : ""}`,
+          meaning: `A cylinder is blind (its probes can't be read), so the house's totals are unknown. washhouse gives what the others hold instead: a lower bound, since the blind ${p.missing.length === 1 ? "one" : "ones"} can only add to it.`};
         return {kind: m.low_hot_water ? "LOW" : "WSTATE",
           summary: `plan on ${num(m.usable_l40_low, 0)} L (up to ${num(m.usable_l40, 0)}) · ${num(m.stored_kwh, 2)} kWh${m.low_hot_water ? " · LOW" : ""}${ad ? ` · drawing ${ad.litres} L` : ""}`,
           meaning: ad ? "The house's state, mid-draw: published with every litre." : "The house's state, published when anything in it changes: about every sweep."};
       }
       case "w-tank":
+        if (m.fault) return {kind: "FAULT",
+          summary: `${short(m.device_id)} BLIND since ${String(m.fault.since).slice(11, 19)} · ${m.fault.reason}${errorsText(m.fault.errors)}`,
+          meaning: `washhouse can't read the ${short(m.device_id)} cylinder: ${FAULT_WHY[m.fault.reason] || m.fault.reason}. Its figures are unknown until it reads again.`};
         return {kind: "WTANK",
           summary: `${short(m.device_id)} ${m.state}${m.heat_source ? " (" + m.heat_source + ")" : ""} · mean ${num(m.mean_c)} °C · ${m.power_kw == null ? "power unknown" : num(m.power_kw, 2) + " kW"}`,
           meaning: `washhouse's reading of the ${short(m.device_id)} cylinder: ${STATE_WHY[m.state] || m.state}.`};
@@ -128,9 +134,31 @@
       return {kind: e.startsWith("heating") ? "HEAT" : "TANKEV",
         summary: `${e} · ${short(t.device_id)}: ${t.prev} → ${t.state}${t.heat_source ? " (" + t.heat_source + ")" : ""}`,
         meaning: e === "heating_started" ? `${who} is heating${t.heat_source ? ", put down to the " + String(t.heat_source).toUpperCase() + " channel" : ""}.` :
-          e === "heating_ended" ? `${who} has stopped heating.` : `${who} is now ${t.state}: ${STATE_WHY[t.state] || ""}.`};
+          e === "heating_ended" ? (t.state === "unknown" ? `${who}'s readings were lost (it went blind or stale), so washhouse can no longer say it is heating; not that the heating was seen to stop.` : `${who} has stopped heating.`) : `${who} is now ${t.state}: ${STATE_WHY[t.state] || ""}.`};
+    }
+    if (e === "tank_lost") {
+      const x = m.tank_lost || {};
+      return {kind: "FAULT", summary: `tank_lost · ${short(x.device_id)}: ${x.reason}${errorsText(x.errors).replace(/^: (.*)$/, " ($1)")}`,
+        meaning: `The ${short(x.device_id)} cylinder has been blind for five minutes: ${FAULT_WHY[x.reason] || x.reason}. washhouse's health is now degraded, and the house's figure is the other cylinder's, as a lower bound.`};
+    }
+    if (e === "tank_restored") {
+      const x = m.tank_restored || {};
+      return {kind: "RESTORED", summary: `tank_restored · ${short(x.device_id)} · blind for ${fmtDur(x.duration_s)}`,
+        meaning: `The ${short(x.device_id)} cylinder has been read normally for two minutes, so it is back: the house's totals are whole again.`};
     }
     return {kind: "EVENT", summary: String(e), meaning: "An event this page doesn't know (new ones are additive)."};
+  }
+
+  // Why a cylinder is blind (WIRE.md, Faults).
+  const FAULT_WHY = {
+    probes: "its latest sweep came with too few readable probes. Every probe going bus_low, then not_present, is one whole bus failing at once (a connection or wiring fault), not five probes",
+    stale: "no sweep has come from it for two minutes",
+    tanktemp_offline: "tanktemp, the probe reader, is offline",
+  };
+  // errorsText: ": bus_low ×5", or "" when there are none.
+  function errorsText(errs) {
+    const ks = Object.keys(errs || {}).sort();
+    return ks.length ? ": " + ks.map(k => `${k} ×${errs[k]}`).join(", ") : "";
   }
 
   // shareText: "left 11% · right 89%", or "" when the split wasn't measured.
@@ -157,7 +185,12 @@
 
   // lowWhy explains low_hot_water against the threshold, when the page was
   // given it (it isn't on the wire): which side of the band the water is.
-  function lowWhy(u, flag, low, margin) {
+  function lowWhy(u, flag, low, margin, partial) {
+    if (u == null && partial) {
+      const at = num(partial.usable_l40_low, 0), who = partial.missing.map(short).join(", ");
+      if (flag === false) return `The ${who} cylinder is blind, but the others alone hold <b>at least ${at} L</b> to plan on, above the threshold and its margin, so low hot water is off whatever the blind one holds.`;
+      return `The ${who} cylinder is blind and the others hold at least ${at} L, which isn't enough to be sure, so washhouse can't say whether hot water is low.`;
+    }
     if (u == null) return "washhouse can't estimate the water yet: it needs a recent sweep from every cylinder.";
     if (low == null) return `washhouse says low hot water is <b>${onoff(flag)}</b>. Open the page with the namespace's threshold (live.sh --low and --margin) to see why.`;
     const clear = low + (margin || 0);
@@ -177,6 +210,6 @@
     return {dup: false, restarted: false, skipped: Math.max(0, m.seq - prev.seq - 1)};
   }
 
-  const api = {num, short, onoff, fmtDur, fmtMs, REASONS, STATE_WHY, classify, group, describe, shareText, crossing40, lowWhy, meterNews};
+  const api = {num, short, onoff, fmtDur, fmtMs, REASONS, STATE_WHY, FAULT_WHY, errorsText, classify, group, describe, shareText, crossing40, lowWhy, meterNews};
   if (typeof module === "object" && module.exports) module.exports = api; else root.LiveCore = api;
 })(typeof window !== "undefined" ? window : globalThis);

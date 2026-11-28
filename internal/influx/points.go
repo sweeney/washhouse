@@ -4,8 +4,11 @@
 //
 // The measurements (README, Influx), each tagged site, at event time:
 //
-//   - hot_water_tank {device_id}: each tank's retained message.
-//   - hot_water_system: the state's totals and inputs.
+//   - hot_water_tank {device_id}: each tank's retained message; blind is 1
+//     while it has a fault, with fault_reason.
+//   - hot_water_system: the state's totals and inputs; while a tank is
+//     blind, tanks_missing and the partial_* lower bounds (the totals are
+//     then absent).
 //   - hot_water_draw: a row per draw at its ended_at; draw_ended writes the
 //     metered fields and draw_balanced, minutes later, the cross-check, into
 //     the same row (same series, same time, kind a field for that reason).
@@ -125,6 +128,10 @@ func (m Mapper) tank(t washhouse.Tank) Point {
 	f.num("ua_w_per_k", t.UAWPerK)
 	f.count("probes_ok", t.ProbesOK)
 	f.count("probes_total", t.ProbesTotal)
+	f["blind"] = bit(t.Fault != nil)
+	if t.Fault != nil {
+		f["fault_reason"] = string(t.Fault.Reason)
+	}
 	return Point{"hot_water_tank", m.tags("device_id", t.DeviceID), f, t.Timestamp.Time}
 }
 
@@ -140,6 +147,20 @@ func (m Mapper) system(s washhouse.State) Point {
 	f.flag("boiler_ch", s.Boiler.CH)
 	f.num("ambient_c", s.AmbientC)
 	f.flag("tanktemp_online", s.Tanktemp.Online)
+	// A partial is written apart from the totals, so a chart never draws a
+	// lower bound as the real figure.
+	missing := int64(0)
+	for _, t := range s.Tanks {
+		if t.StoredKWh == nil {
+			missing++
+		}
+	}
+	f["tanks_missing"] = missing
+	if p := s.Partial; p != nil {
+		f["partial_stored_kwh"] = float64(p.StoredKWh)
+		f["partial_usable_l40"] = float64(p.UsableL40)
+		f["partial_usable_l40_low"] = float64(p.UsableL40Low)
+	}
 	return Point{"hot_water_system", m.tags(), f, s.Timestamp.Time}
 }
 

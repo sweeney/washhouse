@@ -187,7 +187,7 @@ func TestInfluxSink(t *testing.T) {
 	}
 	s.write(stateAt(1))
 	waitFor(t, "the point", func() bool { return len(f.delivered()) == 1 })
-	if got := f.delivered(); got[0] != `hot_water_system,site=home boiler_hw=1i,continuous_flow=0i,drawing=0i 978307200000000000` {
+	if got := f.delivered(); got[0] != `hot_water_system,site=home boiler_hw=1i,continuous_flow=0i,drawing=0i,tanks_missing=0i 978307200000000000` {
 		t.Errorf("delivered %q", got)
 	}
 	if st := s.status(); st.Queued != 1 || st.LastQueuedAt == nil || !st.LastQueuedAt.Equal(now) || st.Failed != 0 {

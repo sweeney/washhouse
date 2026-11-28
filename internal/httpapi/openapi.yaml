@@ -39,8 +39,11 @@ paths:
       description: |
         ok, starting or degraded, with the broker connection, each input's
         age and counts, the behaviour namespace's last fetch, when the
-        running behaviour was applied, and the Influx writer's counts
-        (null when it is off; a failure doesn't degrade the status).
+        running behaviour was applied, the Influx writer's counts
+        (null when it is off; a failure doesn't degrade the status), and
+        each cylinder (`tanks`): its probes, its fault and when it was lost.
+        Degraded while a cylinder is lost (blind for tank_fault_after),
+        naming it, since when, and why.
       security: []
       responses:
         "200":
@@ -253,8 +256,8 @@ components:
     State:
       type: object
       additionalProperties: false
-      required: [schema, timestamp, stored_kwh, usable_l40, usable_l40_low, low_hot_water, boiler, ambient_c,
-        active_draw, meter, tanktemp, tanks]
+      required: [schema, timestamp, stored_kwh, usable_l40, usable_l40_low, low_hot_water, partial, boiler,
+        ambient_c, active_draw, meter, tanktemp, tanks]
       properties:
         schema:
           type: string
@@ -269,6 +272,32 @@ components:
           type: [number, "null"]
         low_hot_water:
           type: [boolean, "null"]
+          description: >-
+            Below low_hot_water_l, with hysteresis. With a cylinder blind,
+            false when partial's usable_l40_low alone clears the level and
+            margin, else null; never true from a partial.
+        partial:
+          description: >-
+            While one or more cylinders are blind and at least one isn't, the
+            others' totals: lower bounds (docs/WIRE.md, State). Null
+            otherwise; the totals above stay null while any is blind.
+          oneOf:
+            - type: "null"
+            - type: object
+              additionalProperties: false
+              required: [missing, stored_kwh, usable_l40, usable_l40_low]
+              properties:
+                missing:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: string
+                stored_kwh:
+                  type: number
+                usable_l40:
+                  type: number
+                usable_l40_low:
+                  type: number
         boiler:
           type: object
           additionalProperties: false
@@ -370,7 +399,7 @@ components:
       type: object
       additionalProperties: false
       required: [schema, device_id, timestamp, sweep_at, state, heat_source, stored_kwh, mean_c, top_c, hot_l,
-        usable_l40, usable_l40_low, power_kw, ua_w_per_k, probes_ok, probes_total]
+        usable_l40, usable_l40_low, power_kw, ua_w_per_k, probes_ok, probes_total, fault]
       properties:
         schema:
           type: string
@@ -406,6 +435,24 @@ components:
           type: [integer, "null"]
         probes_total:
           type: [integer, "null"]
+        fault:
+          description: >-
+            Why the cylinder is blind (docs/WIRE.md, Faults); null while it is
+            estimated. reason is open: probes, stale, tanktemp_offline.
+          oneOf:
+            - type: "null"
+            - type: object
+              additionalProperties: false
+              required: [since, reason, errors]
+              properties:
+                since:
+                  $ref: "#/components/schemas/Time"
+                reason:
+                  type: string
+                errors:
+                  type: object
+                  additionalProperties:
+                    type: integer
     Draws:
       type: object
       additionalProperties: false

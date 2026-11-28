@@ -61,6 +61,7 @@ meter_audit's segments (a draw ends after a minute with no litre).
 | `ch-only-right-reheat` | 64 min | 8 KB | no meter | CH-only spell heating the right tank (probe-only) |
 | `ch-only-no-heat` | 2 h 3.5 min | 24 KB | 8 L | A CH-only spell that heats neither tank |
 | `night-loop-stopped` | 7 h 15 min | 51 KB | 0 L | A metered night with no draws while air had stopped the right tank's return loop (its loss about 5 W/K, like the left); ends at the morning HW_ON |
+| `right-bus-lost` | 46 h 54 min | 410 KB | 363 L | The right tank's whole probe bus failing (a jumper lead worked loose on the Pi) and, 46 h later, reseated: one cylinder blind |
 
 ### shower-layered
 
@@ -196,3 +197,23 @@ of the 350–800 W on loop nights (compare `quiet-night`, the night after the
 loop restarted). No litres; the audit's one 1 L "draw" is the retained litre
 from before the start. Expect no draws, and an online UA fit for the right
 tank near the left's.
+
+### right-bus-lost
+
+The right tank's 1-Wire bus failed at once: its last good sweep is at
+0:29:47; from 0:30:17 all five probes read `bus_low` (a 13.7 s sweep), and
+from 0:32:47 `not_present`. tanktemp kept sweeping both tanks throughout.
+The cause was a jumper lead that had worked loose on the Pi (an HW_OFF 15 s
+before it was a coincidence). The lead was reseated at 46:53:23: all five
+back, the tank cold (about 15–29 °C), with a 22 s sweep as the bus
+re-enumerated; about 35 minutes of recovery follow. The left tank and the
+meter run normally throughout: 38 audited draws, 363 L. The owner asked for
+the whole spell, so it is the largest fixture by far.
+
+Expect (sweeney/washhouse#17): the right tank `unknown`, with a `fault`, from
+0:30:17; the system totals `null` and `partial` the left tank's while it is
+blind, `low_hot_water` false throughout (the left alone always clears its
+level); one `tank_lost` 5 minutes in and one `tank_restored` 2 minutes after
+46:53:23. The draws in the spell carry `tank_missing` with both tanks'
+shares `null`; the left tank's own share is a follow-up.
+
