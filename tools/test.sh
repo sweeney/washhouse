@@ -19,7 +19,11 @@ python3 fixture_draws.py --check
 ./smoke_sh_test.sh
 # The live page: its launcher, and its pure logic against the wire goldens.
 ./live_test.sh
-node live_core_test.js "$(cd .. && go list -m -f '{{.Dir}}' github.com/sweeney/common/wire)"
+# common/wire's goldens: download it first, since go list -m gives no
+# directory for a module not yet in the cache (CI, after a version bump).
+WIRE_DIR=$(cd .. && go mod download github.com/sweeney/common/wire && go list -m -f '{{.Dir}}' github.com/sweeney/common/wire)
+[ -n "$WIRE_DIR" ] || { echo "test.sh: no directory for github.com/sweeney/common/wire" >&2; exit 1; }
+node live_core_test.js "$WIRE_DIR"
 ./live_page_check.sh
 # The config explorer's logic, against its sample and definitions (the Go
 # side, internal/behaviour, holds the definitions to the decoder).
