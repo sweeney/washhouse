@@ -17,7 +17,7 @@
   With no broker it plays a made-up demo you can drive.
 
   Open it with ./tools/live.sh, which reads deploy/config.local.yaml.
-  Parameters (in the URL hash): ws=ws://host:9001  base=test/water/hot
+  Parameters (in the URL hash): ws=ws://host:9001  base=water/hot
   tt=water/hot/tanktemp  low=30  margin=10  demo=1
   low and margin are the namespace's low_hot_water_l and
   low_hot_water_margin_l, which aren't on the wire: they only draw the
@@ -156,7 +156,7 @@ details.guide ol { margin: 10px 0 0; padding-left: 20px; display: grid; gap: 6px
       <label class="label" for="ws">Broker</label>
       <input type="text" id="ws" placeholder="ws://broker:9001" spellcheck="false" autocomplete="off">
       <label class="label" for="base">washhouse</label>
-      <input type="text" id="base" value="test/water/hot" spellcheck="false" autocomplete="off">
+      <input type="text" id="base" value="water/hot" spellcheck="false" autocomplete="off">
       <label class="label" for="tt">tanktemp</label>
       <input type="text" id="tt" value="water/hot/tanktemp" spellcheck="false" autocomplete="off">
       <button class="primary" id="go" type="submit">Connect</button>
@@ -365,7 +365,10 @@ function params() {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem("washhouse-live") || "{}") } catch {}
   const n = k => { const v = parseFloat(p.get(k)); return Number.isFinite(v) && v >= 0 ? v : null; };
-  return { ws: p.get("ws") || saved.ws || "", base: p.get("base") || saved.base || "test/water/hot",
+  // The shadow's topic, remembered from before washhouse went live on
+  // water/hot (28 Nov 2026), counts as no preference.
+  if (saved.base === "test/water/hot") delete saved.base;
+  return { ws: p.get("ws") || saved.ws || "", base: p.get("base") || saved.base || "water/hot",
     tt: p.get("tt") || saved.tt || "water/hot/tanktemp", low: n("low"), margin: n("margin"), demo: p.get("demo") === "1",
     // For tools/live_page_check.sh: press the demo's buttons after so many
     // seconds (blind, then fix; or a blip).
@@ -903,7 +906,7 @@ setInterval(() => {
   if (!client || S.state || S.wstatus) return;
   const heardTT = S.events.some(e => e.group === "tt");
   if (heardTT && Date.now() - connectedAt > 5000)
-    $("lowWhy").innerHTML = `tanktemp is coming through, but nothing from washhouse on <code>${esc(base)}/state</code>. Is the washhouse topic right? The live shadow publishes under <code>test/water/hot</code>, the live tree under <code>water/hot</code>.`;
+    $("lowWhy").innerHTML = `tanktemp is coming through, but nothing from washhouse on <code>${esc(base)}/state</code>. Is the washhouse topic right? washhouse publishes under <code>water/hot</code> (it was <code>test/water/hot</code> while it ran as a shadow).`;
 }, 1000);
 setInterval(drawCharts, 2000);
 addEventListener("resize", () => { drawFlow(); drawCharts(); });
