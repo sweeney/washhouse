@@ -37,8 +37,8 @@ github.com/sweeney/common/remoteconfig v0.2.0 h1:g4UIT5dM2rXAi2US72CwaUGmcGKNgou
 github.com/sweeney/common/remoteconfig v0.2.0/go.mod h1:3dPRbqk07XHF+GboSSM/k+cynJ3DS/H5YnMqLrMXfaQ=
 github.com/sweeney/common/web v0.3.0 h1:bD+zrSWpcRASPUdwLujZGkwLjVPVYGCJM01PPOfgou4=
 github.com/sweeney/common/web v0.3.0/go.mod h1:Eol05LCMORsBfLsIXh7QX2tRtgGa8NsMHg+8wbPe/HU=
-github.com/sweeney/common/wire v0.1.0 h1:ynqdtX8nNoNOEY8YlZmiGgTGZwM4oUEcbv29QLuzokc=
-github.com/sweeney/common/wire v0.1.0/go.mod h1:TkFi8RpOwckTZTqbJasGG75mcJ2I0H3GLtgiA+oz0+g=
+github.com/sweeney/common/wire v0.2.0 h1:0hBYzAJiWxqiBe5S4I7bAfQe90mCn1wDOVngV12xk+k=
+github.com/sweeney/common/wire v0.2.0/go.mod h1:TkFi8RpOwckTZTqbJasGG75mcJ2I0H3GLtgiA+oz0+g=
 github.com/sweeney/identity/common v0.7.0 h1:jPHgEtsXFaNWZMWbzdwXATkEPR8YzvgXsC0bg1Tqf0Y=
 github.com/sweeney/identity/common v0.7.0/go.mod h1:SBqRGwkatgvnPY91G4CdFzIqYCMogi7PDySYbGIn7FA=
 golang.org/x/net v0.23.0 h1:7EYJ93RZ9vYSZAIb2x3lnuvqO5zneoD6IvWjuhfxjTs=

@@ -10,7 +10,7 @@ require (
 	github.com/sweeney/common/mqttpub v0.2.0
 	github.com/sweeney/common/remoteconfig v0.2.0
 	github.com/sweeney/common/web v0.3.0
-	github.com/sweeney/common/wire v0.1.0
+	github.com/sweeney/common/wire v0.2.0
 	github.com/sweeney/identity/common v0.7.0
 	gopkg.in/yaml.v3 v3.0.1
 )
