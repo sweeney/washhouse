@@ -239,8 +239,9 @@ func TestBlindTankMapping(t *testing.T) {
 	since := t0.Add(-5 * time.Minute)
 	s := engine.State{At: t0, LowHotWater: bp(false),
 		Partial: &engine.Partial{Missing: []string{right}, StoredKWh: 11.275, UsableL40: 307.3111, UsableL40Low: 261.2144},
-		Tanks: []engine.TankState{{DeviceID: right, State: thermal.StateUnknown, UAWPerK: f(17), ProbesOK: ip(0), ProbesTotal: ip(5),
-			Fault: &engine.Fault{Since: since, Reason: engine.FaultProbes, Errors: map[string]int{"not_present": 5}, Lost: true}}}}
+		Tanks: []engine.TankState{{DeviceID: left, State: thermal.StateCooling, StoredKWh: f(11.275), UsableL40: f(307.3111), TopC: f(63.875)},
+			{DeviceID: right, State: thermal.StateUnknown, UAWPerK: f(17), ProbesOK: ip(0), ProbesTotal: ip(5),
+				Fault: &engine.Fault{Since: since, Reason: engine.FaultProbes, Errors: map[string]int{"not_present": 5}, Lost: true, LostAt: &t0}}}}
 	got, err := State(s)
 	if err != nil {
 		t.Fatal(err)
@@ -248,11 +249,11 @@ func TestBlindTankMapping(t *testing.T) {
 	if want := `"low_hot_water":false,"partial":{"missing":["hot_water_cylinder_right"],"stored_kwh":11.275,"usable_l40":307.311,"usable_l40_low":261.214},`; !strings.Contains(string(got), want) {
 		t.Errorf("state %s\nwant it to contain %s", got, want)
 	}
-	tk, err := Tank(s, s.Tanks[0])
+	tk, err := Tank(s, s.Tanks[1])
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := `"probes_ok":0,"probes_total":5,"fault":{"since":"2000-12-31T23:55:00.000Z","reason":"probes","errors":{"not_present":5}}}`; !strings.HasSuffix(string(tk), want) {
+	if want := `"probes_ok":0,"probes_total":5,"fault":{"since":"2000-12-31T23:55:00.000Z","reason":"probes","errors":{"not_present":5},"lost_at":"2001-01-01T00:00:00.000Z"}}`; !strings.HasSuffix(string(tk), want) {
 		t.Errorf("tank %s\nwant it to end %s", tk, want)
 	}
 	for _, c := range []struct {

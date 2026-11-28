@@ -169,13 +169,19 @@ func TestLostAndRestored(t *testing.T) {
 		t.Errorf("tank_lost %+v at %v, want right since %v, at the first input from %v", x.Lost, x.At, t1, t1.Add(5*time.Minute))
 	}
 	r := e.State().Tanks[1].Fault
-	if r == nil || !r.Lost || !r.Since.Equal(t1) {
-		t.Errorf("right's fault %+v, want lost since %v", r, t1)
+	if r == nil || !r.Lost || !r.Since.Equal(t1) || r.LostAt == nil || !r.LostAt.Equal(lost[0].At) {
+		t.Errorf("right's fault %+v, want lost since %v, lost_at %v", r, t1, lost[0].At)
 	}
 	t2 := t1.Add(10*time.Minute + 30*time.Second)
 	ev = sweepEvery(t, e, t2, t2, 60, hot)
-	if s := e.State(); s.Tanks[1].Fault != nil || s.Partial != nil || s.UsableL40 == nil {
-		t.Errorf("first good sweep: fault %+v, partial %+v, usable %v", s.Tanks[1].Fault, s.Partial, fm(s.UsableL40, "%.1f"))
+	// Read again but not yet restored: its figures are back, so no
+	// partial, but its fault holds, lost_at and all, until tank_restored
+	// (statehouse's review of sweeney/common#18: a consumer mustn't see
+	// the fault flap during the restore's wait).
+	if s := e.State(); s.Partial != nil || s.UsableL40 == nil || s.Tanks[1].UsableL40 == nil {
+		t.Errorf("first good sweep: partial %+v, usable %v", s.Partial, fm(s.UsableL40, "%.1f"))
+	} else if f := s.Tanks[1].Fault; f == nil || f.LostAt == nil || !f.Since.Equal(t1) {
+		t.Errorf("first good sweep: fault %+v, want it held, lost since %v", f, t1)
 	}
 	ev = append(ev, sweepEvery(t, e, t2.Add(30*time.Second), t2.Add(5*time.Minute), 60, hot)...)
 	restored := ofType(ev, EventTankRestored)
@@ -188,6 +194,9 @@ func TestLostAndRestored(t *testing.T) {
 	}
 	if n := len(ofType(ev, EventTankLost)); n != 0 {
 		t.Errorf("%d more tank_lost", n)
+	}
+	if f := e.State().Tanks[1].Fault; f != nil {
+		t.Errorf("after tank_restored: fault %+v, want none", f)
 	}
 }
 
@@ -406,9 +415,9 @@ func TestFixtureRightBusLost(t *testing.T) {
 		case !seenBack:
 			// 11: the first state with the right tank back.
 			seenBack = true
-			if s.Partial != nil || rt.Fault != nil || s.UsableL40 == nil || math.Abs(*s.UsableL40-239.3) > 0.5 ||
+			if s.Partial != nil || rt.Fault == nil || rt.Fault.LostAt == nil || s.UsableL40 == nil || math.Abs(*s.UsableL40-239.3) > 0.5 ||
 				s.LowHotWater == nil || *s.LowHotWater {
-				t.Errorf("+%v (state %d): back: partial %+v, fault %+v, usable %s, low %v; want 239.3 L, not low",
+				t.Errorf("+%v (state %d): back: partial %+v, fault %+v, usable %s, low %v; want 239.3 L, not low, the fault held until restored",
 					r.ofs(s.At), i, s.Partial, rt.Fault, fm(s.UsableL40, "%.1f"), s.LowHotWater)
 			}
 		}

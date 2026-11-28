@@ -71,6 +71,10 @@ check_not "fixed: no uncaught error" '<title>ERROR'
 check "fixed: tank_restored" 'tank_restored · right · blind for'
 check "fixed: the banner is gone" 'id="blindBanner"[^>]*hidden'
 DOM=$("$CHROME" --headless=new --disable-gpu --no-sandbox --no-first-run --disable-extensions \
+    --virtual-time-budget=55000 --dump-dom "file://$WORK/live.html#demo=1&blind=5&fix=50" 2>/dev/null)
+check "reading again: its card says so" 'class="pill warn">reading again<'
+check "reading again: the banner says so" 'cylinder is reading again</b>'
+DOM=$("$CHROME" --headless=new --disable-gpu --no-sandbox --no-first-run --disable-extensions \
     --virtual-time-budget=60000 --dump-dom "file://$WORK/live.html#demo=1&blip=5" 2>/dev/null)
 check_not "blip: no uncaught error" '<title>ERROR'
 check "blip: the probes failed" 'bus_low'

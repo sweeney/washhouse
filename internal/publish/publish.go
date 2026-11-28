@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -94,23 +95,29 @@ func (p *Publisher) After(s engine.State, ev []engine.Event) ([]Message, error) 
 	return append(out, m...), nil
 }
 
-// retained publishes topic if its content, encoded with a zero timestamp,
-// differs from the last published.
+// retained publishes topic if its content, apart from its timestamp,
+// differs from the last published. The payload is encoded once, at its
+// real time (a zero time would contradict a fault's own times, which
+// common/wire checks), and its top-level timestamp, the first key after
+// schema, dropped for the comparison.
 func (p *Publisher) retained(topic string, at time.Time, enc func(time.Time) ([]byte, error)) ([]Message, error) {
-	key, err := enc(time.Time{})
-	if err != nil {
-		return nil, fmt.Errorf("publish: %s: %w", topic, err)
-	}
-	if last, ok := p.last[topic]; ok && bytes.Equal(last, key) {
-		return nil, nil
-	}
 	b, err := enc(at)
 	if err != nil {
 		return nil, fmt.Errorf("publish: %s: %w", topic, err)
 	}
+	key := b
+	if loc := timestampKey.FindIndex(b); loc != nil { // the first: the message's own
+		key = append(append([]byte{}, b[:loc[0]]...), b[loc[1]:]...)
+	}
+	if last, ok := p.last[topic]; ok && bytes.Equal(last, key) {
+		return nil, nil
+	}
 	p.last[topic] = key
 	return []Message{{Topic: topic, Payload: b, Retained: true}}, nil
 }
+
+// timestampKey is a payload's "timestamp" key and value.
+var timestampKey = regexp.MustCompile(`"timestamp":"[^"]*"`)
 
 func n(x *float64) *washhouse.Num {
 	if x == nil {
@@ -194,7 +201,8 @@ func fault(f *engine.Fault) *washhouse.Fault {
 	if f == nil {
 		return nil
 	}
-	return &washhouse.Fault{Since: washhouse.Time{Time: f.Since}, Reason: washhouse.FaultReason(f.Reason), Errors: f.Errors}
+	return &washhouse.Fault{Since: washhouse.Time{Time: f.Since}, Reason: washhouse.FaultReason(f.Reason), Errors: f.Errors,
+		LostAt: tm(f.LostAt)}
 }
 
 // Event is e's {base}/events message.

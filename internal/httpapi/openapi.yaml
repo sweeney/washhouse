@@ -437,16 +437,22 @@ components:
           type: [integer, "null"]
         fault:
           description: >-
-            Why the cylinder is blind (docs/WIRE.md, Faults); null while it is
-            estimated. reason is open: probes, stale, tanktemp_offline.
+            Why the cylinder is or was blind (docs/WIRE.md, Faults): set while
+            it is blind, and while it is lost until tank_restored; null
+            otherwise. reason is open: probes, stale, tanktemp_offline.
           oneOf:
             - type: "null"
             - type: object
               additionalProperties: false
-              required: [since, reason, errors]
+              required: [since, reason, errors, lost_at]
               properties:
                 since:
                   $ref: "#/components/schemas/Time"
+                lost_at:
+                  description: When tank_lost declared it lost; null until then.
+                  oneOf:
+                    - type: "null"
+                    - $ref: "#/components/schemas/Time"
                 reason:
                   type: string
                 errors:

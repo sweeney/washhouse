@@ -77,8 +77,8 @@ type TankState struct {
 	// ProbesTotal; nil before the first sweep.
 	ProbesOK    *int
 	ProbesTotal *int
-	// Fault is why the tank is blind (not estimated), nil while it is
-	// estimated.
+	// Fault is why the tank is blind (not estimated), held while it is
+	// lost and not yet restored; nil otherwise.
 	Fault *Fault
 	// LostSince: while the tank is lost (blind for TankFaultAfter, and not
 	// yet estimated again for TankRestoreAfter), when its blind spell
@@ -102,13 +102,16 @@ const (
 	FaultTanktempOffline FaultReason = "tanktemp_offline" // stale, with tanktemp's status offline
 )
 
-// Fault is a blind tank's: since when (event time), why, and tanktemp's
-// error codes in its latest sweep, counted. Lost: blind for TankFaultAfter.
+// Fault is a blind tank's, or a lost one's until it is restored: since
+// when (event time), why, and tanktemp's error codes in its latest sweep,
+// counted. Lost: blind for TankFaultAfter, at LostAt (nil until then); a
+// lost tank keeps its fault, with its figures back, until tank_restored.
 type Fault struct {
 	Since  time.Time
 	Reason FaultReason
 	Errors map[string]int
 	Lost   bool
+	LostAt *time.Time
 }
 
 // Boiler is the programmer: true on, false off, nil unknown.

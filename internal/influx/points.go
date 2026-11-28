@@ -5,7 +5,8 @@
 // The measurements (README, Influx), each tagged site, at event time:
 //
 //   - hot_water_tank {device_id}: each tank's retained message; blind is 1
-//     while it has a fault, with fault_reason.
+//     while it has no estimate for a fault, lost 1 from tank_lost to
+//     tank_restored, with fault_reason.
 //   - hot_water_system: the state's totals and inputs; while a tank is
 //     blind, tanks_missing and the partial_* lower bounds (the totals are
 //     then absent).
@@ -128,7 +129,10 @@ func (m Mapper) tank(t washhouse.Tank) Point {
 	f.num("ua_w_per_k", t.UAWPerK)
 	f.count("probes_ok", t.ProbesOK)
 	f.count("probes_total", t.ProbesTotal)
-	f["blind"] = bit(t.Fault != nil)
+	// blind: no estimate for a fault; lost: declared lost and not yet
+	// restored (the fault holds, with the figures back, until restored).
+	f["blind"] = bit(t.Fault != nil && t.StoredKWh == nil)
+	f["lost"] = bit(t.Fault != nil && t.Fault.LostAt != nil)
 	if t.Fault != nil {
 		f["fault_reason"] = string(t.Fault.Reason)
 	}

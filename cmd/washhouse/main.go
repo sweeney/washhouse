@@ -457,14 +457,14 @@ func lostTanks(tanks []engine.TankState, at time.Time) []string {
 		}
 		since := t.LostSince.UTC().Format(time.RFC3339)
 		var why string
-		if f := t.Fault; f != nil {
-			if f.Reason == engine.FaultTanktempOffline {
-				offline = append(offline, t.DeviceID)
-				continue
-			}
-			why = fmt.Sprintf(" (%s%s)", f.Reason, errorsText(f.Errors))
-		} else {
+		switch f := t.Fault; {
+		case t.StoredKWh != nil:
 			why = " (being read again; restored after tank_restore_after)"
+		case f != nil && f.Reason == engine.FaultTanktempOffline:
+			offline = append(offline, t.DeviceID)
+			continue
+		case f != nil:
+			why = fmt.Sprintf(" (%s%s)", f.Reason, errorsText(f.Errors))
 		}
 		out = append(out, fmt.Sprintf("%s: blind since %s, for %v%s", t.DeviceID, since, at.Sub(*t.LostSince).Round(time.Second), why))
 	}

@@ -27,6 +27,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -100,7 +101,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		for _, m := range msgs {
 			ev, err := feed(e, m)
-			if err != nil {
+			if err != nil && !errors.Is(err, engine.ErrBlindSweep) { // a blind tank's fault says it, once
 				fmt.Fprintf(stderr, "washreplay: %s %s: %v\n", m.Received.Format(time.RFC3339), m.Topic, err)
 			}
 			if p.pub != nil {

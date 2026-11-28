@@ -83,6 +83,7 @@ type tankSlot struct {
 	blindSince time.Time
 	reason     FaultReason
 	lost       bool
+	lostAt     time.Time
 	goodSince  time.Time
 }
 
@@ -249,7 +250,7 @@ func (e *Engine) judgeFaults(out []Event) []Event {
 				slot.blindSince = since
 			}
 			if !slot.lost && e.now.Sub(slot.blindSince) >= e.cfg.TankFaultAfter {
-				slot.lost = true
+				slot.lost, slot.lostAt = true, e.now
 				out = append(out, Event{Type: EventTankLost, At: e.now, Lost: &TankLost{DeviceID: id, Reason: reason,
 					Errors: maps.Clone(slot.errs), Since: slot.blindSince}})
 				if out[len(out)-1].Lost.Errors == nil {
@@ -268,7 +269,7 @@ func (e *Engine) judgeFaults(out []Event) []Event {
 			if e.now.Sub(slot.goodSince) >= e.cfg.TankRestoreAfter {
 				out = append(out, Event{Type: EventTankRestored, At: e.now, Restored: &TankRestored{DeviceID: id,
 					LostSince: slot.blindSince, Duration: slot.goodSince.Sub(slot.blindSince)}})
-				slot.lost, slot.blindSince, slot.goodSince = false, time.Time{}, time.Time{}
+				slot.lost, slot.lostAt, slot.blindSince, slot.goodSince = false, time.Time{}, time.Time{}, time.Time{}
 			}
 		}
 	}
@@ -284,7 +285,7 @@ func (e *Engine) TakeFaults(old *Engine) {
 	}
 	for id, slot := range e.tanks {
 		if o := old.tanks[id]; o != nil {
-			slot.blindSince, slot.reason, slot.lost, slot.goodSince = o.blindSince, o.reason, o.lost, o.goodSince
+			slot.blindSince, slot.reason, slot.lost, slot.lostAt, slot.goodSince = o.blindSince, o.reason, o.lost, o.lostAt, o.goodSince
 		}
 	}
 }
@@ -803,12 +804,20 @@ func (e *Engine) tankState(id string) TankState {
 		ua := st.UA.WPerK
 		ts.UAWPerK = &ua
 	}
-	if _, reason, blind := e.blindNow(slot); blind && !slot.blindSince.IsZero() {
+	_, reason, blind := e.blindNow(slot)
+	if !blind {
+		reason = slot.reason // a lost tank read again: why it was lost
+	}
+	if (blind || slot.lost) && !slot.blindSince.IsZero() {
 		errs := maps.Clone(slot.errs)
 		if errs == nil {
 			errs = map[string]int{}
 		}
 		ts.Fault = &Fault{Since: slot.blindSince, Reason: reason, Errors: errs, Lost: slot.lost}
+		if slot.lost {
+			at := slot.lostAt
+			ts.Fault.LostAt = &at
+		}
 	}
 	if slot.lost {
 		since := slot.blindSince

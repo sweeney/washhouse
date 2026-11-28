@@ -179,3 +179,18 @@ func TestUsageErrors(t *testing.T) {
 		})
 	}
 }
+
+// A blind tank's refused sweeps aren't printed one by one (right-bus-lost:
+// 7,439 of them); its fault and tank_lost say it, as in the service.
+func TestBlindSweepsAreQuiet(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run([]string{"-config", examplePath, "-wire", "../../testdata/fixtures/right-bus-lost.log.gz"}, &out, &errOut); code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	if n := strings.Count(errOut.String(), "\n"); n != 0 {
+		t.Errorf("%d lines on stderr, want none:\n%.400s", n, errOut.String())
+	}
+	if !strings.Contains(out.String(), `"event":"tank_lost"`) {
+		t.Error("no tank_lost on the wire")
+	}
+}

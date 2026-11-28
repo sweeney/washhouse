@@ -45,7 +45,7 @@ func TestPoints(t *testing.T) {
 			Tags:        map[string]string{"site": "home", "device_id": "hot_water_cylinder_right"},
 			Fields: map[string]any{"state": "cooling", "stored_kwh": 8.315, "mean_c": 47.906, "top_c": 61.375,
 				"hot_l": 140.214, "usable_l40": 184.331, "usable_l40_low": 156.681, "power_kw": -1.33,
-				"ua_w_per_k": 17.0, "probes_ok": int64(5), "probes_total": int64(5), "blind": int64(0)},
+				"ua_w_per_k": 17.0, "probes_ok": int64(5), "probes_total": int64(5), "blind": int64(0), "lost": int64(0)},
 			Time: at("2001-01-01T00:36:32Z"),
 		}}},
 		{"a heating tank: its source", publish.Message{Topic: "water/hot/tank/hot_water_cylinder_left", Payload: []byte(tankHeating)}, []Point{{
@@ -53,20 +53,20 @@ func TestPoints(t *testing.T) {
 			Tags:        map[string]string{"site": "home", "device_id": "hot_water_cylinder_left"},
 			Fields: map[string]any{"state": "heating", "heat_source": "hw", "stored_kwh": 5.0, "mean_c": 40.0, "top_c": 50.0,
 				"hot_l": 90.0, "usable_l40": 100.0, "usable_l40_low": 85.0, "power_kw": 12.1,
-				"ua_w_per_k": 4.0, "probes_ok": int64(4), "probes_total": int64(5), "blind": int64(0)},
+				"ua_w_per_k": 4.0, "probes_ok": int64(4), "probes_total": int64(5), "blind": int64(0), "lost": int64(0)},
 			Time: at("2001-01-01T00:00:30Z"),
 		}}},
 		{"an unknown tank: its nulls left out", publish.Message{Topic: "water/hot/tank/hot_water_cylinder_left", Payload: []byte(tankUnknown)}, []Point{{
 			Measurement: "hot_water_tank",
 			Tags:        map[string]string{"site": "home", "device_id": "hot_water_cylinder_left"},
-			Fields:      map[string]any{"state": "unknown", "ua_w_per_k": 4.0, "blind": int64(0)},
+			Fields:      map[string]any{"state": "unknown", "ua_w_per_k": 4.0, "blind": int64(0), "lost": int64(0)},
 			Time:        at("2001-01-01T00:00:00Z"),
 		}}},
 		{"a blind tank", publish.Message{Topic: "water/hot/tank/hot_water_cylinder_right", Payload: []byte(tankBlind)}, []Point{{
 			Measurement: "hot_water_tank",
 			Tags:        map[string]string{"site": "home", "device_id": "hot_water_cylinder_right"},
 			Fields: map[string]any{"state": "unknown", "ua_w_per_k": 17.0, "probes_ok": int64(0), "probes_total": int64(5),
-				"blind": int64(1), "fault_reason": "probes"},
+				"blind": int64(1), "lost": int64(1), "fault_reason": "probes"},
 			Time: at("2001-01-01T00:35:17Z"),
 		}}},
 		{"the state with a tank blind: the partial, apart", publish.Message{Topic: "water/hot/state", Payload: []byte(statePartial)}, []Point{{
@@ -199,6 +199,6 @@ func TestPointsRefuse(t *testing.T) {
 
 // WIRE.md's blind-cylinder examples (common/wire's tank-fault and
 // state-partial goldens).
-const tankBlind = `{"schema":"net.swee.washhouse.tank.v1","device_id":"hot_water_cylinder_right","timestamp":"2001-01-01T00:35:17.000Z","sweep_at":"2001-01-01T00:35:17.000Z","state":"unknown","heat_source":null,"stored_kwh":null,"mean_c":null,"top_c":null,"hot_l":null,"usable_l40":null,"usable_l40_low":null,"power_kw":null,"ua_w_per_k":17,"probes_ok":0,"probes_total":5,"fault":{"since":"2001-01-01T00:30:17.000Z","reason":"probes","errors":{"not_present":5}}}`
+const tankBlind = `{"schema":"net.swee.washhouse.tank.v1","device_id":"hot_water_cylinder_right","timestamp":"2001-01-01T00:35:17.000Z","sweep_at":"2001-01-01T00:35:17.000Z","state":"unknown","heat_source":null,"stored_kwh":null,"mean_c":null,"top_c":null,"hot_l":null,"usable_l40":null,"usable_l40_low":null,"power_kw":null,"ua_w_per_k":17,"probes_ok":0,"probes_total":5,"fault":{"since":"2001-01-01T00:30:17.000Z","reason":"probes","errors":{"not_present":5},"lost_at":"2001-01-01T00:35:17.000Z"}}`
 
 const statePartial = `{"schema":"net.swee.washhouse.state.v1","timestamp":"2001-01-01T00:30:47.000Z","stored_kwh":null,"usable_l40":null,"usable_l40_low":null,"low_hot_water":false,"partial":{"missing":["hot_water_cylinder_right"],"stored_kwh":11.275,"usable_l40":307.311,"usable_l40_low":261.214},"boiler":{"hw":false,"ch":true},"ambient_c":19.4,"active_draw":null,"meter":{"timestamp":"2001-01-01T00:30:47.000Z","counting_since":"2000-12-31T23:54:43.000Z","count":54,"litres_since_start":54,"continuous_flow":null},"tanktemp":{"timestamp":"2001-01-01T00:09:43.000Z","online":true,"version":"4aba4d5"},"tanks":[{"device_id":"hot_water_cylinder_left","state":"cooling","heat_source":null,"stored_kwh":11.275,"usable_l40":307.311,"top_c":63.875},{"device_id":"hot_water_cylinder_right","state":"unknown","heat_source":null,"stored_kwh":null,"usable_l40":null,"top_c":null}]}`

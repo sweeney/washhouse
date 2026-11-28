@@ -181,10 +181,17 @@ test("a blind tank reads as blind, with tanktemp's errors", () => {
   assert.match(d.summary, /right BLIND/);
   assert.match(d.summary, /not_present ×5/);
 });
+test("a lost tank read again, before tank_restored, says so", () => {
+  const m = Object.assign({}, golden("tank-fault.golden"), {state: "unknown", stored_kwh: 2.8, mean_c: 22, usable_l40: 0, probes_ok: 5});
+  const d = C.describe("w-tank", m);
+  assert.equal(d.kind, "RESTORING");
+  assert.match(d.summary, /right reading again/);
+  assert.match(d.meaning, /restored/);
+});
 test("tank_lost and tank_restored are explained", () => {
   const lost = C.describe("w-event", golden("event-tank-lost.golden"));
   assert.equal(lost.kind, "FAULT");
-  assert.match(lost.summary, /tank_lost · right: probes \(bus_low ×5\)/);
+  assert.match(lost.summary, /tank_lost · right: probes \(not_present ×5\)/);
   assert.match(lost.meaning, /whole bus/);
   const back = C.describe("w-event", golden("event-tank-restored.golden"));
   assert.equal(back.kind, "RESTORED");

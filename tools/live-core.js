@@ -94,6 +94,9 @@
           meaning: ad ? "The house's state, mid-draw: published with every litre." : "The house's state, published when anything in it changes: about every sweep."};
       }
       case "w-tank":
+        if (m.fault && m.stored_kwh != null) return {kind: "RESTORING",
+          summary: `${short(m.device_id)} reading again · lost since ${String(m.fault.since).slice(11, 19)} · mean ${num(m.mean_c)} °C`,
+          meaning: `The ${short(m.device_id)} cylinder reads normally again, but washhouse calls it restored only once it has for two minutes (tank_restored), so a flickering connection doesn't come and go. Its figures are back already.`};
         if (m.fault) return {kind: "FAULT",
           summary: `${short(m.device_id)} BLIND since ${String(m.fault.since).slice(11, 19)} · ${m.fault.reason}${errorsText(m.fault.errors)}`,
           meaning: `washhouse can't read the ${short(m.device_id)} cylinder: ${FAULT_WHY[m.fault.reason] || m.fault.reason}. Its figures are unknown until it reads again.`};

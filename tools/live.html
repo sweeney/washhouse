@@ -467,7 +467,9 @@ function renderHero() {
   $("stored").textContent = p ? "≥ " + num(p.stored_kwh, 2) : num(m.stored_kwh, 2);
   const blind = [...S.wtanks.values()].filter(w => w.fault);
   $("blindBanner").hidden = !blind.length && !p;
-  $("blindBanner").innerHTML = blind.map(w => `<b>The ${esc(short(w.device_id))} cylinder is blind</b> since ${esc(String(w.fault.since).slice(11, 19))} (${esc(w.fault.reason)}${esc(errorsText(w.fault.errors))}): ${esc(FAULT_WHY[w.fault.reason] || "")}.`).join("<br>") +
+  $("blindBanner").innerHTML = blind.map(w => w.stored_kwh != null
+    ? `<b>The ${esc(short(w.device_id))} cylinder is reading again</b>, blind from ${esc(String(w.fault.since).slice(11, 19))}: washhouse calls it restored once it has read normally for 2 minutes.`
+    : `<b>The ${esc(short(w.device_id))} cylinder is blind</b> since ${esc(String(w.fault.since).slice(11, 19))} (${esc(w.fault.reason)}${esc(errorsText(w.fault.errors))}): ${esc(FAULT_WHY[w.fault.reason] || "")}.`).join("<br>") +
     (p ? `<br>So the figures below are <b>at least</b> what the house has: the ${esc(p.missing.map(short).join(", "))} cylinder${p.missing.length > 1 ? "s" : ""} can only add to them. washhouse sends <code>tank_lost</code> once one has been blind for 5 minutes, and <code>tank_restored</code> once it has read normally for 2.` : "");
   $("ambient").textContent = m.ambient_c == null ? "unknown" : num(m.ambient_c) + " °C";
   const lp = $("lowPill");
@@ -654,7 +656,7 @@ function renderTanks() {
     let el = document.getElementById("tank-" + id);
     if (!el) { el = document.createElement("div"); el.className = "panel tank"; el.id = "tank-" + id; $("tanks").appendChild(el); }
     const p = S.probes.get(id), w = S.wtanks.get(id);
-    const stCls = w?.fault ? "bad" : {heating: "copper", drawing: "warn", cooling: "info", unknown: "off"}[w?.state] || "off";
+    const stCls = w?.fault && w.stored_kwh == null ? "bad" : w?.fault ? "warn" : {heating: "copper", drawing: "warn", cooling: "info", unknown: "off"}[w?.state] || "off";
     const pw = w?.power_kw;
     const flags = [];
     if (p) {
@@ -666,10 +668,10 @@ function renderTanks() {
     const stat = (v, n, t) => `<div class="stat" title="${esc(t || "")}"><div class="v">${v}</div><div class="n">${n}</div></div>`;
     el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
         <h2>${esc(short(id))} cylinder</h2>
-        <span class="pill ${stCls}">${w?.fault ? "blind" : esc(w?.state || "no washhouse reading")}${w?.heat_source ? " · " + esc(w.heat_source) : ""}</span></div>
+        <span class="pill ${stCls}">${w?.fault ? (w.stored_kwh == null ? "blind" : "reading again") : esc(w?.state || "no washhouse reading")}${w?.heat_source ? " · " + esc(w.heat_source) : ""}</span></div>
       <div class="meta"><span>${esc(id)}</span>${p ? `<span>${cadence(p)}</span><span data-age="${p.at}"></span>` : ""}</div>
       ${p ? cylinderSVG(id, p.msg, w) : `<div class="empty">No tanktemp sweep yet.</div>`}
-      <p class="why" style="margin-top:2px">${w?.fault ? `<b>Blind</b> since ${esc(String(w.fault.since).slice(11, 19))}: ${esc(FAULT_WHY[w.fault.reason] || w.fault.reason)}${esc(errorsText(w.fault.errors))}.` : w ? esc(STATE_WHY[w.state] || "") : "washhouse hasn't published this cylinder yet."}</p>
+      <p class="why" style="margin-top:2px">${w?.fault && w.stored_kwh != null ? `<b>Reading again</b> after being blind from ${esc(String(w.fault.since).slice(11, 19))}; restored once it has for 2 minutes.` : w?.fault ? `<b>Blind</b> since ${esc(String(w.fault.since).slice(11, 19))}: ${esc(FAULT_WHY[w.fault.reason] || w.fault.reason)}${esc(errorsText(w.fault.errors))}.` : w ? esc(STATE_WHY[w.state] || "") : "washhouse hasn't published this cylinder yet."}</p>
       <div class="stats">
         ${stat(w?.usable_l40 == null ? "—" : num(w.usable_l40, 0) + " L", "40 °C water, alone", "this cylinder's usable water as if it were the only one: for display, not the house's")}
         ${stat(w?.hot_l == null ? "—" : num(w.hot_l, 0) + " L", "at 40 °C or more", "litres in the cylinder at or above 40 °C")}
@@ -982,10 +984,12 @@ function startDemo() {
   pub(base + "/status", statusMsg("HEARTBEAT"), true, 1);
   const blindTankMsg = (id, t, at) => ({schema: "net.swee.washhouse.tank.v1", device_id: id, timestamp: at, sweep_at: at, state: "unknown", heat_source: null,
     stored_kwh: null, mean_c: null, top_c: null, hot_l: null, usable_l40: null, usable_l40_low: null, power_kw: null, ua_w_per_k: t.ua, probes_ok: 0, probes_total: 5,
-    fault: {since: iso(D.blind.since), reason: "probes", errors: {[D.blind.code]: 5}}});
+    fault: {since: iso(D.blind.since), reason: "probes", errors: {[D.blind.code]: 5}, lost_at: D.blind.lostAt ? iso(D.blind.lostAt) : null}});
   const tankMsg = (id, t, at) => isBlind(id) ? blindTankMsg(id, t, at) : ({schema: "net.swee.washhouse.tank.v1", device_id: id, timestamp: at, sweep_at: at, state: t.state, heat_source: t.state === "heating" ? "hw" : null,
     stored_kwh: +energy(t).toFixed(3), mean_c: +(t.t.reduce((a, b) => a + b) / 5).toFixed(3), top_c: +Math.max(...t.t).toFixed(3), hot_l: +usableAlone(t).toFixed(1) * 0.7,
-    usable_l40: +usableAlone(t).toFixed(3), usable_l40_low: +(usableAlone(t) * 0.85).toFixed(3), power_kw: t.power, ua_w_per_k: t.ua, probes_ok: 5, probes_total: 5, fault: null});
+    usable_l40: +usableAlone(t).toFixed(3), usable_l40_low: +(usableAlone(t) * 0.85).toFixed(3), power_kw: t.power, ua_w_per_k: t.ua, probes_ok: 5, probes_total: 5,
+    // a lost cylinder read again keeps its fault until tank_restored
+    fault: D.blind && D.blind.id === id && D.blind.lost ? {since: iso(D.blind.since), reason: "probes", errors: {}, lost_at: iso(D.blind.lostAt)} : null});
   const stateMsg = at => {
     const ids = Object.keys(D.tanks), L = D.tanks[ids[0]], R = D.tanks[ids[1]];
     const known = ids.filter(id => !isBlind(id));
@@ -1039,7 +1043,7 @@ function startDemo() {
       b.sweeps++;
       if (b.blip && b.sweeps >= 3) return D.fix();
       if (!b.lost && now - b.since >= FAULT_AFTER) {
-        b.lost = true;
+        b.lost = true; b.lostAt = now;
         ev("tank_lost", {tank_lost: {device_id: b.id, reason: "probes", errors: {[b.code]: 5}, since: iso(b.since)}});
       }
       return;

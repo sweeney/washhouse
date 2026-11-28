@@ -178,8 +178,8 @@ totals are `null` and `partial` gives what the others hold:
 | `stored_kwh` | heat stored above the cold-feed temperature, the tanks summed. `null` unless every tank's is known |
 | `usable_l40` | litres of 40 °C water the taps could get now, mixing with cold: the tanks' own `usable_l40` summed. The cylinders feed one outlet in parallel, and the split between them moves with their temperatures (a hot tank supplies the tap while the other is cold), so no fixed split limits it. An upper bound. `null` unless every tank is known |
 | `usable_l40_low` | `usable_l40` × a configured factor (0.85) for mixing in real tanks: the figure to plan on |
-| `low_hot_water` | `true` when `usable_l40_low` is below a configured level (`low_hot_water_l` in the behaviour document), with hysteresis: it clears only above that level plus a margin (10 L), and holds in between. Judged for the system, never one tank. `null` while `usable_l40_low` is unknown, with one exception: with a cylinder blind, it is `false` when the others' `partial.usable_l40_low` alone is above the level plus the margin (the blind one can only add to it), and the held value clears. It is never `true` from a partial figure. When the total is known again, the earlier value still holds inside the margin |
-| `partial` | while one or more cylinders are blind (their own `stored_kwh` is `null`) and at least one isn't: `missing`, the blind ones' `device_id`s in config order, and `stored_kwh`, `usable_l40` and `usable_l40_low` summed over the others. **Lower bounds**: the house has at least this much, and the blind cylinders an unknown amount more. `null` when every cylinder is known (the totals are then set) and when none is. Never mistake it for the total: the totals stay `null` while any cylinder is missing |
+| `low_hot_water` | `true` when `usable_l40_low` is below a configured level (`low_hot_water_l` in the behaviour document), with hysteresis: it clears only above that level plus a margin (10 L), and holds in between. Judged for the system, never one tank. `null` while `usable_l40_low` is unknown, with one exception: with a cylinder blind, it is `false` when the others' `partial.usable_l40_low` alone is above the level plus the margin (the blind one can only add to it), and the held value clears. Otherwise it is `null`, even if it was `true` before the cylinder went blind: it is never `true` from a partial figure. The held value is kept, so when the total is known again it still holds inside the margin |
+| `partial` | while one or more cylinders are blind (each with a `fault` and its own `stored_kwh` `null`) and at least one is known: `missing`, the blind ones' `device_id`s in config order, and `stored_kwh`, `usable_l40` and `usable_l40_low` summed over the others. **Lower bounds**: the house has at least this much, and the blind cylinders an unknown amount more. `null` when every cylinder is known (the totals are then set), when none is, and at a start before every cylinder has been heard from. When it is set, the three totals are `null`. Never mistake it for the total |
 | `boiler` | the programmer's `hw` and `ch`: `true` on, `false` off, `null` unknown. These are the programmer's switches only, not the stats or valves: `hw: true` means the HW timer is on, not that a tank is heating. Unknown before boiler-sensor's first heartbeat or event (its retained heartbeat gives them at once when washhouse starts), after its SHUTDOWN, and after 2.5 heartbeat intervals with nothing heard |
 | `ambient_c` | the boiler room's temperature, `null` once its last reading is older than a configured limit |
 | `active_draw` | the running draw, or `null` (Draws, below). It is also the draw the meter has just ended whose `draw_ended` isn't out yet, so `active_draw` goes to `null` in the same publish that follows `draw_ended`, never before. If the next draw starts first (a tap turned on again about a minute after the last litre), `active_draw` goes straight to the next draw, never `null`, and the last one's `draw_ended` comes in the same batch, just after the next one's `draw_started`: key on `draw_id`. Across a washhouse restart, a draw can leave `active_draw` with no `draw_ended` (Delivery). A consumer that starts mid-draw (events aren't retained) recovers it from here, with the same `draw_id` and `started_at` as its `draw_started` |
@@ -233,7 +233,8 @@ A blind cylinder (Faults, below):
   "ua_w_per_k": 17,
   "probes_ok": 0,
   "probes_total": 5,
-  "fault": {"since": "2001-01-01T00:30:17.000Z", "reason": "probes", "errors": {"not_present": 5}}
+  "fault": {"since": "2001-01-01T00:30:17.000Z", "reason": "probes", "errors": {"not_present": 5},
+            "lost_at": "2001-01-01T00:35:17.000Z"}
 }
 ```
 
@@ -247,7 +248,7 @@ A blind cylinder (Faults, below):
 | `power_kw` | the smoothed rate of change of stored heat: positive heating, negative losing. `null` while unknown: at start until enough sweeps have come, and during a draw until about 17 min after the meter ends it (the inlet plume and the probes settle for 12 min, then the power needs fresh sweeps). The first value after a big draw can still carry some of that settling (−1.33 kW, 18 min after a 50 L shower, on a tank losing about 0.4 kW), so treat a value soon after a draw as indicative; the settle time is provisional |
 | `ua_w_per_k` | the tank's heat loss per kelvin against the boiler room, fitted online over quiet stretches; the configured prior until the fit has evidence. It is measured against the room, but most of the right tank's loss is its secondary loop shedding heat into the house's pipework, so it reads well above a bare cylinder's |
 | `probes_ok`, `probes_total` | probes the latest sweep's profile used, of those tanktemp reported. A suspect 85 °C reading is not used unless the config trusts suspects. `null` before a sweep |
-| `fault` | `null` while the cylinder is estimated; otherwise why it is blind (Faults, below): `since`, when it stopped being estimated; `reason`; and `errors`, tanktemp's error codes in the latest sweep, counted (`{}` when there are none) |
+| `fault` | why the cylinder is or was blind (Faults, below): `since`, when it stopped being estimated; `reason`; `errors`, tanktemp's error codes in the latest sweep, counted (`{}` when there are none); and `lost_at`, when it was declared lost (`tank_lost`), `null` until then. Set while the cylinder is blind, and while it is lost but not yet restored (its figures are back then, but `tank_restored` hasn't come), so it clears exactly at `tank_restored`. A blind spell too short to be lost clears at the first good sweep. `null` otherwise. Retained, unlike the events: a consumer that starts mid-fault reads from `lost_at` whether the cylinder was declared lost |
 
 **Faults.** A cylinder is blind while its estimate is `null`, for one of
 these `reason`s (an open vocabulary):
@@ -267,9 +268,11 @@ spell (`heating_ended`, with `state` `unknown`: the data was lost, not the
 heating seen to stop). Once it has been blind for a configured time (5 min:
 `tank_fault_after`) washhouse sends `tank_lost`; once it has been estimated
 again for another (2 min: `tank_restore_after`), `tank_restored` (Tank
-events). A blind spell shorter than the first sends neither, and a
-cylinder that is lost stays lost until it has been good for the whole of
-the second, so a flickering bus sends one pair, not many.
+events), and its `fault` clears then. A blind spell shorter than the
+first sends neither (its `fault` clears at the first good sweep, with
+`lost_at` never set), and a cylinder that is lost stays lost, `fault` and
+all, until it has been good for the whole of the second, so a flickering
+bus sends one pair, not many.
 
 **States.** `drawing` from a metered draw's first litre until a configured
 time (60 s) after the meter ends it, so about two minutes after the last
@@ -506,7 +509,7 @@ A cylinder lost (Faults, above), `tank_fault_after` into its blind spell:
   "tank_lost": {
     "device_id": "hot_water_cylinder_right",
     "reason": "probes",
-    "errors": {"bus_low": 5},
+    "errors": {"not_present": 5},
     "since": "2001-01-01T00:30:17.000Z"
   }
 }
@@ -613,7 +616,9 @@ or vanished.
 - **2026-11-28, v1, additive:** a blind cylinder. The state's `partial`
   (the known cylinders' totals, a lower bound, while one is blind) and the
   tank's `fault` (why it is blind, since when), both `null` otherwise;
-  the events `tank_lost` and `tank_restored`. `low_hot_water` can be
+  the events `tank_lost` and `tank_restored`. `fault.lost_at` is the
+  retained record of `tank_lost` (statehouse's review of
+  sweeney/common#18), and `fault` holds until `tank_restored`. `low_hot_water` can be
   `false`, rather than `null`, from a partial figure that clears its
   level (never `true`). A blind cylinder's `state` is `unknown` from its
   first unreadable sweep, not 2 min later. A v1 decoder ignores the new
