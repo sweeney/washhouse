@@ -164,6 +164,16 @@
     return ks.length ? ": " + ks.map(k => `${k} ×${errs[k]}`).join(", ") : "";
   }
 
+  // resolveBase is washhouse's topic for the page: the URL's base=, else
+  // the one remembered in the browser, else water/hot. A remembered
+  // test/water/hot, the shadow's before washhouse went live (28 Nov 2026),
+  // counts as none; asked for in the URL, it is honoured.
+  function resolveBase(urlBase, savedBase) {
+    if (urlBase) return urlBase;
+    if (savedBase && savedBase !== "test/water/hot") return savedBase;
+    return "water/hot";
+  }
+
   // shareText: "left 11% · right 89%", or "" when the split wasn't measured.
   function shareText(b) {
     const tk = (b && b.tanks) || [];
@@ -213,6 +223,6 @@
     return {dup: false, restarted: false, skipped: Math.max(0, m.seq - prev.seq - 1)};
   }
 
-  const api = {num, short, onoff, fmtDur, fmtMs, REASONS, STATE_WHY, FAULT_WHY, errorsText, classify, group, describe, shareText, crossing40, lowWhy, meterNews};
+  const api = {num, short, onoff, fmtDur, fmtMs, REASONS, STATE_WHY, FAULT_WHY, errorsText, resolveBase, classify, group, describe, shareText, crossing40, lowWhy, meterNews};
   if (typeof module === "object" && module.exports) module.exports = api; else root.LiveCore = api;
 })(typeof window !== "undefined" ? window : globalThis);

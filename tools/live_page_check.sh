@@ -39,7 +39,6 @@ check_not() { if grep -qE -- "$2" <<<"$DOM"; then fail=$((fail + 1)); echo "FAIL
 
 check_not "no uncaught error" '<title>ERROR'
 check "the demo is on" 'id="link"[^>]*>demo<'
-check "washhouse's topic defaults to the live one" 'id="base" value="water/hot"'
 check "the water to plan on is a number" 'id="uLow">[0-9]+<small>'
 check "the low-water explanation is filled" 'id="lowWhy"><b>(Above|Below|Between)'
 check "the threshold is drawn" 'low below 30 L'

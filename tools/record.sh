@@ -19,8 +19,7 @@
 set -euo pipefail
 
 TOPICS=(
-    'water/hot/#'                                   # tanktemp (probes, status, meter); washhouse once live there
-    'test/water/hot/#'                              # washhouse's live shadow (its state, tanks, events, status)
+    'water/hot/#'                                   # tanktemp (probes, status, meter) and washhouse (state, tanks, events, status)
     'energy/boiler/#'                               # programmer HW/CH: events + system heartbeat
     'zigbee2mqtt/climate_groundfloor_boiler-room'   # ambient for UA
     'house/state/devices/climate_groundfloor_boiler-room'

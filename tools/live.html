@@ -365,10 +365,7 @@ function params() {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem("washhouse-live") || "{}") } catch {}
   const n = k => { const v = parseFloat(p.get(k)); return Number.isFinite(v) && v >= 0 ? v : null; };
-  // The shadow's topic, remembered from before washhouse went live on
-  // water/hot (28 Nov 2026), counts as no preference.
-  if (saved.base === "test/water/hot") delete saved.base;
-  return { ws: p.get("ws") || saved.ws || "", base: p.get("base") || saved.base || "water/hot",
+  return { ws: p.get("ws") || saved.ws || "", base: LiveCore.resolveBase(p.get("base"), saved.base),
     tt: p.get("tt") || saved.tt || "water/hot/tanktemp", low: n("low"), margin: n("margin"), demo: p.get("demo") === "1",
     // For tools/live_page_check.sh: press the demo's buttons after so many
     // seconds (blind, then fix; or a blip).

@@ -166,6 +166,16 @@ test("the page's script parses", () => {
   new Function(body);   // a syntax error throws here
 });
 
+// washhouse's topic: the URL's, else the one remembered (but not the
+// old shadow's), else water/hot (tanktemp's review of #20).
+test("resolveBase: the URL, the remembered one, never the old shadow, else water/hot", () => {
+  assert.equal(C.resolveBase("demo/x", "mine/hot"), "demo/x");
+  assert.equal(C.resolveBase(null, "mine/hot"), "mine/hot");
+  assert.equal(C.resolveBase(null, "test/water/hot"), "water/hot");
+  assert.equal(C.resolveBase(null, undefined), "water/hot");
+  assert.equal(C.resolveBase("test/water/hot", undefined), "test/water/hot");   // asked for in the URL: honoured
+});
+
 // A blind cylinder (WIRE.md, Faults; sweeney/washhouse#17).
 const golden = name => (goldens.find(g => g.service === "washhouse" && g.name === name) || {}).msg;
 test("a partial state reads as at least the known water, naming the blind cylinder", () => {
